@@ -21,8 +21,15 @@ import (
 // baseline at y=0, a glyph that rises above the baseline (nearly all
 // of them) has a negative bearingY.
 func (f *Font) rasterGlyph(gi sfnt.GlyphIndex, sizePx float32, pad int) (mask *image.Alpha, bearingX, bearingY float32, err error) {
+	// LoadGlyph's returned Segments alias f.buf's backing array and
+	// become invalid once the buffer is reused by another call, so we
+	// must copy them out before releasing the lock.
 	f.mu.Lock()
-	segs, err := f.sf.LoadGlyph(&f.buf, gi, ppem(sizePx), nil)
+	raw, err := f.sf.LoadGlyph(&f.buf, gi, ppem(sizePx), nil)
+	var segs sfnt.Segments
+	if err == nil {
+		segs = append(sfnt.Segments(nil), raw...)
+	}
 	f.mu.Unlock()
 	if err != nil {
 		return nil, 0, 0, err
