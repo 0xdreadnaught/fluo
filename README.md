@@ -23,6 +23,14 @@ Opens a window exercising the current primitives: rounded rects, stroke,
 drop shadow, and SDF text, plus a hand-rolled hover/press-reactive button.
 Close the window to exit.
 
+```sh
+go run ./cmd/fluo-gallery
+```
+
+Opens the widget gallery: a resizable window laid out entirely by the
+layout engine (DockPanel title bar + nav sidebar + WrapPanel content area).
+Grows a page per control as later phases land.
+
 ## Golden-image tests
 
 Rendering correctness is checked against golden PNGs in `render/gl/testdata`

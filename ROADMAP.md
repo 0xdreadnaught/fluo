@@ -21,13 +21,13 @@ before its dependencies. Check items off as they land. Design spec:
 - [x] **Minimal demo host**: glfw window + frame loop + input pump (polish waits for Phase 8)
 
 ## Phase 2 · Layout engine  *(pure Go, headless-testable)*
-- [ ] `Widget` interface + base element (margin/padding/alignment/size/visibility)
-- [ ] Two-pass Measure → Arrange
-- [ ] Invalidation + reactive `Property[T]`
-- [ ] First widgets: `Border`, `TextBlock`, `StackPanel` (exercise the engine)
-- [ ] `Grid`, `DockPanel`, `WrapPanel`, `Canvas`
-- [ ] Headless layout-geometry tests
-- [ ] Gallery example app skeleton (grows a page per control from here on)
+- [x] `Widget` interface + base element (margin/padding/alignment/size/visibility)
+- [x] Two-pass Measure → Arrange
+- [x] Invalidation + reactive `Property[T]`
+- [x] First widgets: `Border`, `TextBlock`, `StackPanel` (exercise the engine)
+- [x] `Grid`, `DockPanel`, `WrapPanel`, `Canvas`
+- [x] Headless layout-geometry tests
+- [x] Gallery example app skeleton (grows a page per control from here on)
 
 ## Phase 3 · Input & events  *(pure Go core + thin glfw pump)*
 - [ ] Event types; mouse/keyboard/wheel from glfw
