@@ -4,10 +4,12 @@ import (
 	"testing"
 
 	"github.com/go-gl/gl/v3.3-core/gl"
+	"golang.org/x/image/font/gofont/goregular"
 
 	"github.com/0xdreadnaught/fluo/render"
 	glr "github.com/0xdreadnaught/fluo/render/gl"
 	"github.com/0xdreadnaught/fluo/render/gl/gltest"
+	"github.com/0xdreadnaught/fluo/text"
 )
 
 func testFrame(t *testing.T, name string, w, h int, draw func(r *glr.Renderer)) {
@@ -36,7 +38,7 @@ func TestClip(t *testing.T) {
 	testFrame(t, "clip", 128, 96, func(r *glr.Renderer) {
 		r.PushClip(render.Rect{X: 20, Y: 20, W: 50, H: 30})
 		r.FillRect(render.Rect{X: 0, Y: 0, W: 128, H: 96}, render.RGB(0, 120, 215)) // fills only the clip
-		r.PushClip(render.Rect{X: 0, Y: 0, W: 40, H: 96})                            // nested: intersects
+		r.PushClip(render.Rect{X: 0, Y: 0, W: 40, H: 96})                           // nested: intersects
 		r.FillRect(render.Rect{X: 0, Y: 0, W: 128, H: 96}, render.RGB(255, 185, 0))
 		r.PopClip()
 		r.PopClip()
@@ -81,5 +83,16 @@ func TestTexture(t *testing.T) {
 		id := r.CreateTexture(8, 8, px)
 		r.DrawQuad(render.Rect{X: 8, Y: 8, W: 48, H: 48}, render.Rect{X: 0, Y: 0, W: 1, H: 1}, id, render.RGB(255, 255, 255))
 		r.DrawQuad(render.Rect{X: 64, Y: 8, W: 48, H: 48}, render.Rect{X: 0, Y: 0, W: 0.5, H: 0.5}, id, render.RGB(0, 120, 215)) // sub-rect + tint
+	})
+}
+
+func TestText(t *testing.T) {
+	testFrame(t, "text", 256, 96, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text.NewFace(f, 14).Draw(r, render.Point{X: 8, Y: 8}, "Hello, fluo!", render.RGB(255, 255, 255))
+		text.NewFace(f, 28).Draw(r, render.Point{X: 8, Y: 40}, "SDF text 0123", render.RGB(0, 120, 215))
 	})
 }

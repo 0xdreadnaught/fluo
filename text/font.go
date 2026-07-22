@@ -19,6 +19,17 @@ type Font struct {
 	sf  *sfnt.Font
 	buf sfnt.Buffer
 	mu  sync.Mutex
+
+	// atlas is the shared SDF glyph atlas for this font: every Face
+	// built from NewFace(f, ...) draws from the same Atlas, since
+	// glyph SDFs are rasterized once at sdfRasterPx and reused at any
+	// draw size. It is guarded by atlasMu rather than mu: fetching a
+	// glyph (Atlas.glyph) calls back into Font.rasterGlyph, which
+	// locks mu itself, so guarding the atlas pointer with mu would
+	// deadlock any caller that held mu across that call. atlasMu only
+	// ever protects the pointer/init, never a rasterGlyph call.
+	atlas   *Atlas
+	atlasMu sync.Mutex
 }
 
 // Load parses raw TrueType/OpenType font bytes into a Font.
@@ -28,6 +39,17 @@ func Load(ttf []byte) (*Font, error) {
 		return nil, err
 	}
 	return &Font{sf: sf}, nil
+}
+
+// sharedAtlas returns f's shared SDF glyph atlas, creating it on first
+// call. Every Face built for f reuses this same Atlas.
+func (f *Font) sharedAtlas() *Atlas {
+	f.atlasMu.Lock()
+	defer f.atlasMu.Unlock()
+	if f.atlas == nil {
+		f.atlas = NewAtlas(f)
+	}
+	return f.atlas
 }
 
 // ppem converts a logical pixel size into the fixed-point units-per-em
