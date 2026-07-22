@@ -136,3 +136,14 @@ func TestInvalidationBubbles(t *testing.T) {
 		t.Fatal("invalidation must bubble to parent")
 	}
 }
+
+func TestIsVisible(t *testing.T) {
+	s := &stub{contentW: 50, contentH: 20}
+	if !IsVisible(s) {
+		t.Fatal("widget should be visible by default")
+	}
+	s.SetVisible(false)
+	if IsVisible(s) {
+		t.Fatal("widget should be hidden after SetVisible(false)")
+	}
+}

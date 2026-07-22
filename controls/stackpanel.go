@@ -85,8 +85,8 @@ func (s *StackPanel) measureVertical(available render.Size) render.Size {
 			maxW = desired.W
 		}
 
-		// Only count children with non-zero height (visible children).
-		if desired.H > 0 {
+		// Only count visible children for gap/extent contribution.
+		if core.IsVisible(child) {
 			// Add gap before this child if there was a previous visible child.
 			if lastContributedIdx >= 0 {
 				totalH += s.gap
@@ -116,8 +116,8 @@ func (s *StackPanel) measureHorizontal(available render.Size) render.Size {
 			maxH = desired.H
 		}
 
-		// Only count children with non-zero width (visible children).
-		if desired.W > 0 {
+		// Only count visible children for gap/extent contribution.
+		if core.IsVisible(child) {
 			// Add gap before this child if there was a previous visible child.
 			if lastContributedIdx >= 0 {
 				totalW += s.gap
@@ -149,17 +149,17 @@ func (s *StackPanel) arrangeVertical(bounds render.Rect) {
 	for i, child := range s.children {
 		desired := core.DesiredSizeOf(child)
 
-		// Only arrange children with non-zero height (visible children).
-		if desired.H > 0 {
-			// Add gap before this child if there was a previous visible child.
-			if lastContributedIdx >= 0 {
-				y += s.gap
-			}
+		// Add gap before this child if there was a previous visible child and this child is visible.
+		if core.IsVisible(child) && lastContributedIdx >= 0 {
+			y += s.gap
+		}
 
-			// Arrange the child with full width of bounds and its desired height.
-			slot := render.Rect{X: bounds.X, Y: y, W: bounds.W, H: desired.H}
-			core.ArrangeWidget(child, slot)
+		// Arrange all children; hidden children short-circuit cheaply inside ArrangeWidget.
+		slot := render.Rect{X: bounds.X, Y: y, W: bounds.W, H: desired.H}
+		core.ArrangeWidget(child, slot)
 
+		// Track y position and last visible child for gap calculation.
+		if core.IsVisible(child) {
 			y += desired.H
 			lastContributedIdx = i
 		}
@@ -173,17 +173,17 @@ func (s *StackPanel) arrangeHorizontal(bounds render.Rect) {
 	for i, child := range s.children {
 		desired := core.DesiredSizeOf(child)
 
-		// Only arrange children with non-zero width (visible children).
-		if desired.W > 0 {
-			// Add gap before this child if there was a previous visible child.
-			if lastContributedIdx >= 0 {
-				x += s.gap
-			}
+		// Add gap before this child if there was a previous visible child and this child is visible.
+		if core.IsVisible(child) && lastContributedIdx >= 0 {
+			x += s.gap
+		}
 
-			// Arrange the child with its desired width and full height of bounds.
-			slot := render.Rect{X: x, Y: bounds.Y, W: desired.W, H: bounds.H}
-			core.ArrangeWidget(child, slot)
+		// Arrange all children; hidden children short-circuit cheaply inside ArrangeWidget.
+		slot := render.Rect{X: x, Y: bounds.Y, W: desired.W, H: bounds.H}
+		core.ArrangeWidget(child, slot)
 
+		// Track x position and last visible child for gap calculation.
+		if core.IsVisible(child) {
 			x += desired.W
 			lastContributedIdx = i
 		}

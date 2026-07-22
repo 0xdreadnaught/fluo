@@ -42,6 +42,12 @@ func DesiredSizeOf(w Widget) render.Size {
 	return w.element().desired
 }
 
+// IsVisible reports whether w participates in layout and rendering.
+// Parents use it to decide gap/extent contribution for hidden children.
+func IsVisible(w Widget) bool {
+	return !w.element().hidden
+}
+
 // clampAxis clamps v into [min, max]. max <= 0 means "no maximum" (+Inf).
 // Note: min/max are always finite (set via SetMinSize/SetMaxSize), and v may
 // be +Inf; Inf compared against a finite max simply clamps down to that max,

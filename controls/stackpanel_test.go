@@ -65,3 +65,19 @@ func TestStackSkipsHiddenChildren(t *testing.T) {
 	// hidden child contributes 0 size AND no gap: 10+10 + one 10 gap = 30
 	if got := sp.DesiredSize().H; got != 30 { t.Fatalf("H=%v", got) }
 }
+
+func TestStackVisibleZeroExtentChildKeepsGap(t *testing.T) {
+	// Visible zero-extent child should keep its gaps but contribute no height.
+	zeroExtent := NewFixed(10, 0, render.RGB(1, 2, 3))
+	sp := vstack(10, NewFixed(10, 10, render.RGB(1, 2, 3)), zeroExtent, NewFixed(10, 10, render.RGB(1, 2, 3)))
+	core.MeasureWidget(sp, render.Size{W: 200, H: 200})
+	// Expected: 10 + gap(10) + 0 + gap(10) + 10 = 40
+	if got := sp.DesiredSize().H; got != 40 { t.Fatalf("H=%v, want 40", got) }
+
+	// Arrange and verify the middle child's Bounds() is updated (not stale).
+	core.ArrangeWidget(sp, render.Rect{X: 0, Y: 0, W: 100, H: 100})
+	kids := sp.Children()
+	if got := kids[1].(*Fixed).Bounds(); got != (render.Rect{X: 0, Y: 20, W: 100, H: 0}) {
+		t.Fatalf("middle child bounds=%v, want {X:0 Y:20 W:100 H:0}", got)
+	}
+}
