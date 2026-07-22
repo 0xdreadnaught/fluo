@@ -6,6 +6,8 @@ import (
 	"github.com/go-gl/gl/v3.3-core/gl"
 	"golang.org/x/image/font/gofont/goregular"
 
+	"github.com/0xdreadnaught/fluo/controls"
+	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/render"
 	glr "github.com/0xdreadnaught/fluo/render/gl"
 	"github.com/0xdreadnaught/fluo/render/gl/gltest"
@@ -94,5 +96,31 @@ func TestText(t *testing.T) {
 		}
 		text.NewFace(f, 14).Draw(r, render.Point{X: 8, Y: 8}, "Hello, fluo!", render.RGB(255, 255, 255))
 		text.NewFace(f, 28).Draw(r, render.Point{X: 8, Y: 40}, "SDF text 0123", render.RGB(0, 120, 215))
+	})
+}
+
+func TestLayoutRender(t *testing.T) {
+	testFrame(t, "layout", 220, 150, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, 14)
+		root := controls.NewBorder().
+			SetBackground(render.RGB(32, 32, 36)).
+			SetRadius(8).
+			SetPadding(render.Uniform(12)).
+			SetChild(controls.NewStackPanel(controls.Vertical).SetGap(8).Add(
+				controls.NewTextBlock(face, "fluo layout").SetColor(render.RGB(255, 255, 255)),
+				controls.NewFixed(0, 24, render.RGB(0, 120, 215)), // stretches full width
+				func() core.Widget {
+					y := controls.NewFixed(60, 18, render.RGB(255, 185, 0))
+					y.SetAlign(core.End, core.Start)
+					return y
+				}(),
+			))
+		core.MeasureWidget(root, render.Size{W: 220, H: 150})
+		core.ArrangeWidget(root, render.Rect{X: 10, Y: 10, W: 200, H: 130})
+		core.RenderWidget(root, r)
 	})
 }
