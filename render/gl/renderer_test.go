@@ -124,3 +124,26 @@ func TestLayoutRender(t *testing.T) {
 		core.RenderWidget(root, r)
 	})
 }
+
+func TestScrollClipRender(t *testing.T) {
+	testFrame(t, "scroll", 160, 120, func(r *glr.Renderer) {
+		stack := controls.NewStackPanel(controls.Vertical)
+		for i := 0; i < 8; i++ {
+			c := render.RGB(0, 120, 215)
+			if i%2 == 1 {
+				c = render.RGB(255, 185, 0)
+			}
+			stack.Add(controls.NewFixed(120, 30, c))
+		}
+
+		sv := controls.NewScrollViewer().SetChild(stack)
+		sv.SetWidth(120)
+		sv.SetHeight(100)
+		sv.ScrollTo(45)
+
+		root := controls.NewCanvas().Add(sv, 10, 10)
+		core.MeasureWidget(root, render.Size{W: 160, H: 120})
+		core.ArrangeWidget(root, render.Rect{X: 0, Y: 0, W: 160, H: 120})
+		core.RenderWidget(root, r)
+	})
+}
