@@ -2,6 +2,7 @@ package theme
 
 import "github.com/0xdreadnaught/fluo/render"
 
+// ColorTokens holds the semantic color values for a theme.
 type ColorTokens struct {
 	WindowBackground, LayerBackground, CardBackground render.Color
 	TextPrimary, TextSecondary, TextDisabled          render.Color
@@ -12,6 +13,7 @@ type ColorTokens struct {
 	Shadow                                            render.Color
 }
 
+// MetricTokens holds the layout and sizing values for a theme.
 type MetricTokens struct {
 	CornerRadius, ControlCornerRadius float32 // cards vs buttons/inputs
 	StrokeWidth, FocusStrokeWidth     float32
@@ -20,10 +22,12 @@ type MetricTokens struct {
 	ShadowBlur                        float32
 }
 
+// TypeTokens holds the typography sizes for a theme.
 type TypeTokens struct {
 	CaptionSize, BodySize, SubtitleSize, TitleSize float32 // px
 }
 
+// Theme represents a complete color, metric, and typography design system.
 type Theme struct {
 	Name   string // "fluent-light" | "fluent-dark"
 	Color  ColorTokens
