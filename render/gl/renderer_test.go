@@ -64,3 +64,22 @@ func TestShadow(t *testing.T) {
 		r.FillRoundedRect(card, 8, render.RGB(243, 243, 243))
 	})
 }
+
+func TestTexture(t *testing.T) {
+	testFrame(t, "texture", 128, 96, func(r *glr.Renderer) {
+		px := make([]byte, 8*8*4)
+		for y := 0; y < 8; y++ {
+			for x := 0; x < 8; x++ {
+				v := byte(255)
+				if (x+y)%2 == 0 {
+					v = 40
+				}
+				i := (y*8 + x) * 4
+				px[i], px[i+1], px[i+2], px[i+3] = v, v, v, 255
+			}
+		}
+		id := r.CreateTexture(8, 8, px)
+		r.DrawQuad(render.Rect{X: 8, Y: 8, W: 48, H: 48}, render.Rect{X: 0, Y: 0, W: 1, H: 1}, id, render.RGB(255, 255, 255))
+		r.DrawQuad(render.Rect{X: 64, Y: 8, W: 48, H: 48}, render.Rect{X: 0, Y: 0, W: 0.5, H: 0.5}, id, render.RGB(0, 120, 215)) // sub-rect + tint
+	})
+}

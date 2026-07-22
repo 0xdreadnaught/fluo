@@ -6,6 +6,7 @@ package gl
 import (
 	"fmt"
 	"math"
+	"unsafe"
 
 	"github.com/go-gl/gl/v3.3-core/gl"
 
@@ -144,22 +145,40 @@ func (rd *Renderer) DrawShadow(r render.Rect, radius, blur float32, c render.Col
 
 // CreateTexture creates a new texture from RGBA8 data.
 func (rd *Renderer) CreateTexture(w, h int, rgba []byte) render.TextureID {
-	panic("gl: CreateTexture not implemented (Task 6)")
+	var id uint32
+	gl.GenTextures(1, &id)
+	gl.BindTexture(gl.TEXTURE_2D, id)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+	var ptr unsafe.Pointer
+	if rgba != nil {
+		ptr = gl.Ptr(rgba)
+	}
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, int32(w), int32(h), 0, gl.RGBA, gl.UNSIGNED_BYTE, ptr)
+	gl.BindTexture(gl.TEXTURE_2D, rd.curTex) // restore batch binding
+	return render.TextureID(id)
 }
 
 // UpdateTexture updates a region of an existing texture.
 func (rd *Renderer) UpdateTexture(id render.TextureID, x, y, w, h int, rgba []byte) {
-	panic("gl: UpdateTexture not implemented (Task 6)")
+	rd.flush()
+	gl.BindTexture(gl.TEXTURE_2D, uint32(id))
+	gl.TexSubImage2D(gl.TEXTURE_2D, 0, int32(x), int32(y), int32(w), int32(h), gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(rgba))
+	gl.BindTexture(gl.TEXTURE_2D, rd.curTex)
 }
 
 // DrawQuad draws a textured quad with a tint color.
 func (rd *Renderer) DrawQuad(dst, src render.Rect, tex render.TextureID, tint render.Color) {
-	panic("gl: DrawQuad not implemented (Task 6)")
+	rd.quad(1, dst, src, tint, [4]float32{}, [2]float32{}, uint32(tex))
 }
 
 // DrawSDFQuads draws glyphs from an SDF alpha atlas with the given color.
 func (rd *Renderer) DrawSDFQuads(quads []render.GlyphQuad, tex render.TextureID, c render.Color) {
-	panic("gl: DrawSDFQuads not implemented (Task 7)")
+	for _, q := range quads {
+		rd.quad(2, q.Dst, q.Src, c, [4]float32{}, [2]float32{}, uint32(tex))
+	}
 }
 
 // PushClip pushes a new clip rectangle that intersects with the current clip.
