@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-22
 **Status:** Approved design, pre-implementation
-**Name:** `fluo` is a working placeholder; final name TBD before first publish (one-line change until then).
+**Name:** `fluo` — confirmed 2026-07-22.
 
 ## Purpose
 
@@ -97,6 +97,5 @@ repo root (checkboxes, kept current as work lands). Summary of ordering rational
 
 ## Open items
 
-- Final library name (placeholder `fluo`).
 - IME input: known gap, explicit stretch item (Phase 8), not silently forgotten.
 - Accessibility hooks: stretch (Phase 8).
