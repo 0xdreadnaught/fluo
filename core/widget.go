@@ -67,6 +67,14 @@ func IsVisible(w Widget) bool {
 	return !w.element().hidden
 }
 
+// ParentOf returns w's layout parent, as last recorded by SetParent, or nil
+// if w has none — either because it was never added to a container (a root)
+// or because it was explicitly detached via SetParent(w, nil). Used by
+// input.Router to walk the ancestor chain for keyboard-event bubbling.
+func ParentOf(w Widget) Widget {
+	return w.element().parent
+}
+
 // clampAxis clamps v into [min, max]. max <= 0 means "no maximum" (+Inf).
 // Note: min/max are always finite (set via SetMinSize/SetMaxSize), and v may
 // be +Inf; Inf compared against a finite max simply clamps down to that max,

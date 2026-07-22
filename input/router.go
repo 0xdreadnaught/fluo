@@ -21,6 +21,11 @@ type Router struct {
 	// nil if none. While set, all pointer events skip hit-testing and go
 	// straight to this widget via deliverDirect (see Capture/Release).
 	captured core.Widget
+
+	// focused is the widget currently holding keyboard focus, or nil if none.
+	// Set by Focus (directly, or indirectly via press-to-focus in
+	// PointerButton and Tab handling in KeyDown).
+	focused core.Widget
 }
 
 // NewRouter creates an empty Router. Call SetRoot before dispatching events.
@@ -170,6 +175,9 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 	}
 
 	path := HitPath(r.root, p)
+	if press {
+		r.focusFromPath(path)
+	}
 	dispatchBubble(path, &PointerEvent{Action: action, Pos: p, Button: b, Mods: mods, Router: r})
 }
 
@@ -185,4 +193,174 @@ func (r *Router) PointerWheel(delta render.Point, p render.Point, mods Modifiers
 
 	path := HitPath(r.root, p)
 	dispatchBubble(path, &PointerEvent{Action: Wheel, Pos: p, Delta: delta, Mods: mods, Router: r})
+}
+
+// focusFromPath implements press-to-focus: given the hit-test path (root→
+// leaf) of an uncaptured press, it walks leaf→root and focuses the first
+// widget that implements Focusable with AcceptsFocus() == true. If no widget
+// on the path qualifies — including an empty path, i.e. a press that hit
+// nothing — focus is cleared. Focus itself is a no-op when the target is
+// already focused.
+func (r *Router) focusFromPath(path []core.Widget) {
+	for i := len(path) - 1; i >= 0; i-- {
+		if f, ok := path[i].(Focusable); ok && f.AcceptsFocus() {
+			r.Focus(path[i])
+			return
+		}
+	}
+	r.Focus(nil)
+}
+
+// Focus sets w as the focused widget, or clears focus entirely when w is
+// nil. A no-op if w is already focused. Otherwise fires OnFocusChanged(false)
+// on the previously focused widget (if it implements FocusHandler), then
+// OnFocusChanged(true) on w (likewise), in that order.
+func (r *Router) Focus(w core.Widget) {
+	if r.focused == w {
+		return
+	}
+	old := r.focused
+	r.focused = w
+	if old != nil {
+		if fh, ok := old.(FocusHandler); ok {
+			fh.OnFocusChanged(false)
+		}
+	}
+	if w != nil {
+		if fh, ok := w.(FocusHandler); ok {
+			fh.OnFocusChanged(true)
+		}
+	}
+}
+
+// Focused returns the widget currently holding keyboard focus, or nil.
+func (r *Router) Focused() core.Widget {
+	return r.focused
+}
+
+// focusableList returns the widgets under (and including) w that are both
+// visible (core.IsVisible) and implement Focusable with AcceptsFocus() ==
+// true, in DFS document order (a widget before its children, children in
+// Children() order). A hidden widget's entire subtree is skipped, matching
+// HitPath's and RenderWidget's treatment of hidden subtrees.
+func focusableList(w core.Widget) []core.Widget {
+	if w == nil || !core.IsVisible(w) {
+		return nil
+	}
+	var out []core.Widget
+	if f, ok := w.(Focusable); ok && f.AcceptsFocus() {
+		out = append(out, w)
+	}
+	for _, c := range w.Children() {
+		out = append(out, focusableList(c)...)
+	}
+	return out
+}
+
+// indexOfIdentity returns the index of w in list (compared by identity, ==),
+// or -1 if absent.
+func indexOfIdentity(list []core.Widget, w core.Widget) int {
+	for i, x := range list {
+		if x == w {
+			return i
+		}
+	}
+	return -1
+}
+
+// FocusNext moves focus to the next focusable+visible widget in document
+// order (DFS from the root), wrapping from the last back to the first. If
+// nothing is currently focused (or the focused widget is no longer in the
+// list), it focuses the first entry. A no-op if there are no focusable
+// widgets at all.
+func (r *Router) FocusNext() {
+	list := focusableList(r.root)
+	if len(list) == 0 {
+		return
+	}
+	idx := indexOfIdentity(list, r.focused)
+	if idx == -1 {
+		r.Focus(list[0])
+		return
+	}
+	r.Focus(list[(idx+1)%len(list)])
+}
+
+// FocusPrev moves focus to the previous focusable+visible widget in document
+// order, wrapping from the first back to the last. If nothing is currently
+// focused (or the focused widget is no longer in the list), it focuses the
+// last entry. A no-op if there are no focusable widgets at all.
+func (r *Router) FocusPrev() {
+	list := focusableList(r.root)
+	if len(list) == 0 {
+		return
+	}
+	idx := indexOfIdentity(list, r.focused)
+	if idx == -1 {
+		r.Focus(list[len(list)-1])
+		return
+	}
+	r.Focus(list[(idx-1+len(list))%len(list)])
+}
+
+// keyChain returns the widget chain leaf→root, starting at w (inclusive) and
+// following core.ParentOf links up to (and including) the root. Used to
+// bubble key events along the ANCESTOR chain, unlike pointer events which
+// bubble along a hit-test path — the focused widget need not be under the
+// pointer at all.
+func keyChain(w core.Widget) []core.Widget {
+	var chain []core.Widget
+	for w != nil {
+		chain = append(chain, w)
+		w = core.ParentOf(w)
+	}
+	return chain
+}
+
+// dispatchKey delivers e to the focused widget and bubbles it up the parent
+// chain (core.ParentOf), stopping as soon as e.Handled is set. With no
+// focused widget, delivery is to the root only (if it implements KeyHandler
+// and a root is set).
+func (r *Router) dispatchKey(e *KeyEvent) {
+	var chain []core.Widget
+	if r.focused != nil {
+		chain = keyChain(r.focused)
+	} else if r.root != nil {
+		chain = []core.Widget{r.root}
+	}
+	for _, w := range chain {
+		if h, ok := w.(KeyHandler); ok {
+			h.OnKey(e)
+			if e.Handled {
+				return
+			}
+		}
+	}
+}
+
+// KeyDown routes a key-press. rn is the produced character for char-input
+// events, else 0. The event bubbles from the focused widget up through its
+// parent chain (see dispatchKey). If, after that, KeyTab remains unhandled,
+// the router itself consumes it: ModShift moves focus to the previous
+// focusable widget, otherwise to the next, and the event is marked handled
+// (no re-dispatch — this is router-internal bookkeeping, not delivered to
+// any widget).
+func (r *Router) KeyDown(k Key, rn rune, mods Modifiers) {
+	e := &KeyEvent{Action: Press, Key: k, Rune: rn, Mods: mods, Router: r}
+	r.dispatchKey(e)
+	if !e.Handled && k == KeyTab {
+		if mods&ModShift != 0 {
+			r.FocusPrev()
+		} else {
+			r.FocusNext()
+		}
+		e.Handled = true
+	}
+}
+
+// KeyUp routes a key-release the same way KeyDown does (focused widget,
+// bubbling up the parent chain), with no Tab handling.
+func (r *Router) KeyUp(k Key, mods Modifiers) {
+	e := &KeyEvent{Action: Release, Key: k, Mods: mods, Router: r}
+	r.dispatchKey(e)
 }

@@ -159,6 +159,18 @@ func TestSetParentRejectsDoubleParent(t *testing.T) {
 	SetParent(child, parentB)
 }
 
+func TestParentOf(t *testing.T) {
+	parent := &stub{}
+	child := &stub{}
+	SetParent(child, parent)
+	if got := ParentOf(child); got != Widget(parent) {
+		t.Fatalf("ParentOf(child) = %v, want parent", got)
+	}
+	if got := ParentOf(parent); got != nil {
+		t.Fatalf("ParentOf(parent) = %v, want nil (root has no parent)", got)
+	}
+}
+
 func TestIsVisible(t *testing.T) {
 	s := &stub{contentW: 50, contentH: 20}
 	if !IsVisible(s) {

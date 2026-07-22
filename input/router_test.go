@@ -19,6 +19,7 @@ type probe struct {
 	name      string
 	events    []string // e.g. "press", "enter", "leave", "wheel", "key:9", "focus:true"
 	handlePtr bool     // mark pointer events handled
+	handleKey bool     // mark key events handled (OnKey's Handled, mirrors handlePtr)
 	focusable bool
 	cursor    input.Cursor
 	router    *input.Router // captured on press when capturing==true
@@ -61,6 +62,15 @@ func (p *probe) OnPointer(e *input.PointerEvent) {
 	}
 }
 func (p *probe) OnFocusChanged(f bool) { p.events = append(p.events, fmt.Sprintf("focus:%v", f)) }
+
+// OnKey records "key" for every key event delivered to this probe, marking
+// it Handled when handleKey is set (mirrors handlePtr's role for OnPointer).
+func (p *probe) OnKey(e *input.KeyEvent) {
+	p.events = append(p.events, "key")
+	if p.handleKey {
+		e.Handled = true
+	}
+}
 
 // setChild makes p a single-child pass-through container: its child is
 // measured with whatever space p is given, then arranged to fill p's own
@@ -253,5 +263,124 @@ func TestWheelBubbles(t *testing.T) {
 
 	if got := leaf.events; len(got) != 1 || got[0] != "wheel" {
 		t.Fatalf("leaf.events = %v, want [wheel]", got)
+	}
+}
+
+func TestClickFocusesAndDefocuses(t *testing.T) {
+	p := &probe{name: "p", focusable: true}
+	p.SetWidth(50)
+	p.SetHeight(50)
+	root := controls.NewCanvas().Add(p, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // press on p
+	if r.Focused() != core.Widget(p) {
+		t.Fatalf("Focused() = %v, want p", r.Focused())
+	}
+	if got := p.events; len(got) != 2 || got[0] != "focus:true" || got[1] != "press" {
+		t.Fatalf("p.events = %v, want [focus:true press]", got)
+	}
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 90, Y: 90}, 0) // press on empty canvas
+	if r.Focused() != nil {
+		t.Fatalf("Focused() after empty-space click = %v, want nil", r.Focused())
+	}
+	if got := p.events; len(got) != 3 || got[2] != "focus:false" {
+		t.Fatalf("p.events = %v, want [focus:true press focus:false]", got)
+	}
+}
+
+func TestKeyGoesToFocused(t *testing.T) {
+	a := &probe{name: "a", focusable: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	b := &probe{name: "b", focusable: true}
+	b.SetWidth(50)
+	b.SetHeight(50)
+	root := controls.NewCanvas().Add(a, 0, 0).Add(b, 60, 0)
+	layout(root, 200, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // focus a via click
+	r.KeyDown(input.KeyEnter, 0, 0)
+
+	if got := a.events; len(got) != 3 || got[2] != "key" {
+		t.Fatalf("a.events = %v, want [focus:true press key]", got)
+	}
+	if got := b.events; len(got) != 0 {
+		t.Fatalf("b.events = %v, want none (b is not focused)", got)
+	}
+}
+
+func TestTabCycles(t *testing.T) {
+	a := &probe{name: "a", focusable: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	b := &probe{name: "b", focusable: true}
+	b.SetWidth(50)
+	b.SetHeight(50)
+	c := &probe{name: "c", focusable: true}
+	c.SetWidth(50)
+	c.SetHeight(50)
+	root := controls.NewCanvas().Add(a, 0, 0).Add(b, 60, 0).Add(c, 120, 0)
+	layout(root, 200, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // click a
+	if r.Focused() != core.Widget(a) {
+		t.Fatalf("Focused() = %v, want a", r.Focused())
+	}
+
+	r.KeyDown(input.KeyTab, 0, 0)
+	if r.Focused() != core.Widget(b) {
+		t.Fatalf("Focused() after Tab = %v, want b", r.Focused())
+	}
+
+	r.KeyDown(input.KeyTab, 0, 0)
+	if r.Focused() != core.Widget(c) {
+		t.Fatalf("Focused() after Tab = %v, want c", r.Focused())
+	}
+
+	r.KeyDown(input.KeyTab, 0, 0) // wraps
+	if r.Focused() != core.Widget(a) {
+		t.Fatalf("Focused() after wrapping Tab = %v, want a", r.Focused())
+	}
+
+	r.KeyDown(input.KeyTab, 0, input.ModShift) // shift+tab steps backward
+	if r.Focused() != core.Widget(c) {
+		t.Fatalf("Focused() after Shift+Tab = %v, want c", r.Focused())
+	}
+}
+
+func TestKeyBubbles(t *testing.T) {
+	leaf := &probe{name: "leaf", focusable: true}                      // accepts focus, doesn't handle keys
+	parent := (&probe{name: "parent", handleKey: true}).setChild(leaf) // handles keys, doesn't accept focus
+	parent.SetWidth(50)
+	parent.SetHeight(50)
+	root := controls.NewCanvas().Add(parent, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // focuses leaf (only focusable on path)
+	if r.Focused() != core.Widget(leaf) {
+		t.Fatalf("Focused() = %v, want leaf", r.Focused())
+	}
+
+	r.KeyDown(input.KeyEnter, 0, 0)
+
+	if got := leaf.events; len(got) != 3 || got[2] != "key" {
+		t.Fatalf("leaf.events = %v, want [focus:true press key]", got)
+	}
+	if got := parent.events; len(got) != 2 || got[0] != "press" || got[1] != "key" {
+		t.Fatalf("parent.events = %v, want [press key] (leaf didn't handle, so it bubbled to parent)", got)
 	}
 }
