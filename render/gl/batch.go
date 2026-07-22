@@ -39,9 +39,10 @@ func (rd *Renderer) vert(pos, uv [2]float32, c render.Color, rect [4]float32, ex
 	)
 }
 
-// quad emits two CCW triangles (TL,BL,BR + TL,BR,TR) covering dst in
-// position space and src in UV space, flushing first if the texture is
-// changing or the buffer is full.
+// quad emits two triangles (TL,BL,BR + TL,BR,TR) covering dst in position
+// space and src in UV space, flushing first if the texture is changing or
+// the buffer is full. Winding order is unspecified and irrelevant: face
+// culling is never enabled.
 func (rd *Renderer) quad(mode float32, dst, src render.Rect, c render.Color, rc [4]float32, ex [2]float32, tex uint32) {
 	if tex != rd.curTex {
 		rd.flush()

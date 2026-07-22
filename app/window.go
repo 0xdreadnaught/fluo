@@ -55,20 +55,22 @@ func Run(cfg Config, frame func(*Ctx)) error {
 
 	win, err := glfw.CreateWindow(cfg.Width, cfg.Height, cfg.Title, nil, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("glfw window: %w", err)
 	}
 	defer win.Destroy()
 
 	win.MakeContextCurrent()
 	if err := gl.Init(); err != nil {
-		return err
+		return fmt.Errorf("gl init: %w", err)
 	}
 	glfw.SwapInterval(1)
 
 	r, err := glr.New()
 	if err != nil {
-		return err
+		return fmt.Errorf("renderer: %w", err)
 	}
+
+	closeFn := func() { win.SetShouldClose(true) }
 
 	for !win.ShouldClose() {
 		glfw.PollEvents()
@@ -89,7 +91,7 @@ func Run(cfg Config, frame func(*Ctx)) error {
 				Pos:  render.Point{X: float32(mx), Y: float32(my)}, // glfw cursor pos is logical on Windows
 				Down: win.GetMouseButton(glfw.MouseButtonLeft) == glfw.Press,
 			},
-			Close: func() { win.SetShouldClose(true) },
+			Close: closeFn,
 		}
 
 		r.Begin(fbW, fbH, sx)

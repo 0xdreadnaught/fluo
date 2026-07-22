@@ -5,7 +5,6 @@ package gl
 
 import (
 	"fmt"
-	"math"
 	"unsafe"
 
 	"github.com/go-gl/gl/v3.3-core/gl"
@@ -124,27 +123,41 @@ func rectParams(r render.Rect) [4]float32 {
 	return [4]float32{r.X + r.W/2, r.Y + r.H/2, r.W / 2, r.H / 2}
 }
 
+// clampRadius clamps radius so a rounded shape derived from r never exceeds
+// half its width or height.
+func clampRadius(r render.Rect, radius float32) float32 {
+	if half := r.W / 2; radius > half {
+		radius = half
+	}
+	if half := r.H / 2; radius > half {
+		radius = half
+	}
+	return radius
+}
+
 // FillRoundedRect fills a rectangle with rounded corners with a solid color.
 func (rd *Renderer) FillRoundedRect(r render.Rect, radius float32, c render.Color) {
-	// Clamp radius to not exceed half the rectangle dimensions
-	radius = float32(math.Min(float64(radius), math.Min(float64(r.W/2), float64(r.H/2))))
+	radius = clampRadius(r, radius)
 	rd.quad(3, r, render.Rect{}, c, rectParams(r), [2]float32{radius, 0}, rd.whiteTex)
 }
 
 // StrokeRoundedRect draws the stroke of a rectangle with rounded corners.
 func (rd *Renderer) StrokeRoundedRect(r render.Rect, radius, width float32, c render.Color) {
-	// Clamp radius to not exceed half the rectangle dimensions
-	radius = float32(math.Min(float64(radius), math.Min(float64(r.W/2), float64(r.H/2))))
+	radius = clampRadius(r, radius)
 	rd.quad(4, r, render.Rect{}, c, rectParams(r), [2]float32{radius, width}, rd.whiteTex)
 }
 
 // DrawShadow draws a soft shadow of a rounded rectangle.
 func (rd *Renderer) DrawShadow(r render.Rect, radius, blur float32, c render.Color) {
+	radius = clampRadius(r, radius)
 	rd.quad(5, r.Inflate(blur), render.Rect{}, c, rectParams(r), [2]float32{radius, blur}, rd.whiteTex)
 }
 
 // CreateTexture creates a new texture from RGBA8 data.
 func (rd *Renderer) CreateTexture(w, h int, rgba []byte) render.TextureID {
+	if rgba != nil && len(rgba) < w*h*4 {
+		panic("render/gl: rgba too short for w*h*4")
+	}
 	var id uint32
 	gl.GenTextures(1, &id)
 	gl.BindTexture(gl.TEXTURE_2D, id)
@@ -163,10 +176,28 @@ func (rd *Renderer) CreateTexture(w, h int, rgba []byte) render.TextureID {
 
 // UpdateTexture updates a region of an existing texture.
 func (rd *Renderer) UpdateTexture(id render.TextureID, x, y, w, h int, rgba []byte) {
+	if len(rgba) < w*h*4 {
+		panic("render/gl: rgba too short for w*h*4")
+	}
 	rd.flush()
 	gl.BindTexture(gl.TEXTURE_2D, uint32(id))
 	gl.TexSubImage2D(gl.TEXTURE_2D, 0, int32(x), int32(y), int32(w), int32(h), gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(rgba))
 	gl.BindTexture(gl.TEXTURE_2D, rd.curTex)
+}
+
+// DeleteTexture frees a texture created by CreateTexture; NoTexture is a
+// no-op.
+func (rd *Renderer) DeleteTexture(id render.TextureID) {
+	if id == render.NoTexture {
+		return
+	}
+	rd.flush() // pending quads may reference this texture
+	tex := uint32(id)
+	gl.DeleteTextures(1, &tex)
+	if tex == rd.curTex {
+		rd.curTex = rd.whiteTex
+		gl.BindTexture(gl.TEXTURE_2D, rd.curTex)
+	}
 }
 
 // DrawQuad draws a textured quad with a tint color.

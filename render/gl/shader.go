@@ -2,7 +2,6 @@ package gl
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/go-gl/gl/v3.3-core/gl"
 )
@@ -69,10 +68,13 @@ func compile(src string, kind uint32) (uint32, error) {
 	if status == gl.FALSE {
 		var logLen int32
 		gl.GetShaderiv(shader, gl.INFO_LOG_LENGTH, &logLen)
-		log := strings.Repeat("\x00", int(logLen+1))
-		gl.GetShaderInfoLog(shader, logLen, nil, gl.Str(log))
 		gl.DeleteShader(shader)
-		return 0, fmt.Errorf("gl: shader compile failed: %s", log)
+		if logLen == 0 {
+			return 0, fmt.Errorf("gl: shader compile failed: no info log")
+		}
+		buf := make([]byte, logLen+1)
+		gl.GetShaderInfoLog(shader, logLen, nil, &buf[0])
+		return 0, fmt.Errorf("gl: shader compile failed: %s", string(buf[:logLen]))
 	}
 	return shader, nil
 }
@@ -93,10 +95,13 @@ func link(vs, fs uint32) (uint32, error) {
 	if status == gl.FALSE {
 		var logLen int32
 		gl.GetProgramiv(prog, gl.INFO_LOG_LENGTH, &logLen)
-		log := strings.Repeat("\x00", int(logLen+1))
-		gl.GetProgramInfoLog(prog, logLen, nil, gl.Str(log))
 		gl.DeleteProgram(prog)
-		return 0, fmt.Errorf("gl: program link failed: %s", log)
+		if logLen == 0 {
+			return 0, fmt.Errorf("gl: program link failed: no info log")
+		}
+		buf := make([]byte, logLen+1)
+		gl.GetProgramInfoLog(prog, logLen, nil, &buf[0])
+		return 0, fmt.Errorf("gl: program link failed: %s", string(buf[:logLen]))
 	}
 	return prog, nil
 }

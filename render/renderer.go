@@ -32,11 +32,19 @@ type Renderer interface {
 	DrawShadow(r Rect, radius, blur float32, c Color)
 
 	// CreateTexture creates a new texture from RGBA8 data.
-	// The rgba slice must have length w*h*4.
+	// The rgba slice must have length w*h*4; if rgba is non-nil and shorter
+	// than that, implementations panic. A nil rgba allocates storage without
+	// uploading pixels.
 	CreateTexture(w, h int, rgba []byte) TextureID
 
 	// UpdateTexture updates a region of an existing texture.
+	// The rgba slice must have length w*h*4; implementations panic if it is
+	// shorter (rgba must not be nil here, unlike CreateTexture).
 	UpdateTexture(id TextureID, x, y, w, h int, rgba []byte)
+
+	// DeleteTexture frees a texture created by CreateTexture; NoTexture is a
+	// no-op.
+	DeleteTexture(id TextureID)
 
 	// DrawQuad draws a textured quad with the source rectangle in UV coordinates (0..1) and a tint color.
 	DrawQuad(dst, src Rect, tex TextureID, tint Color)
