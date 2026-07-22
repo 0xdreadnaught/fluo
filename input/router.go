@@ -23,10 +23,17 @@ type Router struct {
 	// while a capture is active (see Capture).
 	hover []core.Widget
 
-	// captured is the widget currently holding an exclusive pointer grab, or
-	// nil if none. While set, all pointer events skip hit-testing and go
-	// straight to this widget via deliverDirect (see Capture/Release).
-	captured core.Widget
+	// captureStack is the NESTED pointer-capture stack: the last element (if
+	// any) is the widget currently holding the exclusive pointer grab, and
+	// every element before it is a captor that was itself active when a
+	// later Capture call pushed over it. While non-empty, all pointer events
+	// skip hit-testing and go straight to the top widget via deliverDirect
+	// (see Capture/Release). Nesting exists so a widget that captures WHILE
+	// already inside someone else's capture (e.g. a ScrollViewer thumb drag
+	// started from a pointer event an OverlayHost forwarded into an open
+	// popup while the host itself holds a modal capture) restores the outer
+	// capture on Release rather than clearing it outright.
+	captureStack []core.Widget
 
 	// focused is the widget currently holding keyboard focus, or nil if none.
 	// Set by Focus (directly, or indirectly via press-to-focus in
@@ -59,7 +66,7 @@ func NewRouter() *Router {
 func (r *Router) SetRoot(w core.Widget) {
 	r.root = w
 	r.hover = nil
-	r.captured = nil
+	r.captureStack = nil
 	r.Focus(nil)
 }
 
@@ -81,21 +88,43 @@ func (r *Router) Clipboard() Clipboard {
 }
 
 // Capture routes all subsequent pointer events to w exclusively, bypassing
-// hit-testing and hover, until Release is called.
+// hit-testing and hover, until a matching Release is called.
+//
+// Capture NESTS rather than simply overwriting: calling Capture while
+// another widget already holds the grab pushes w on top, and a later
+// Release pops back to that previous captor (see Release) instead of
+// clearing capture outright. This matters whenever a capture can begin from
+// inside an event that's itself being delivered under someone else's
+// capture — e.g. an OverlayHost holds a modal capture while a popup is open
+// and forwards pointer events into the popup's own subtree (see
+// controls.OverlayHost.OnPointer); if a widget inside that popup (a
+// ScrollViewer thumb, say) captures for its own drag, releasing that drag
+// must restore the host's modal capture, not silently drop it.
 func (r *Router) Capture(w core.Widget) {
-	r.captured = w
+	r.captureStack = append(r.captureStack, w)
 }
 
-// Release ends the active pointer capture, if any. The next PointerMove
-// recomputes the hover path from scratch (hover was left untouched during
-// capture, so it is diffed against whatever it was before capture began).
+// Release ends the CURRENT (topmost) pointer capture, if any, restoring
+// whichever capture (if any) was active before it — see Capture's doc
+// comment on nesting. Calling Release with no capture active is a no-op.
+// Only once the stack is fully unwound (Captured() == nil) does the next
+// PointerMove recompute the hover path from scratch (hover is left
+// untouched for the entire time ANY capture, nested or not, is active, so it
+// is diffed against whatever it was before the outermost capture began).
 func (r *Router) Release() {
-	r.captured = nil
+	if len(r.captureStack) == 0 {
+		return
+	}
+	r.captureStack = r.captureStack[:len(r.captureStack)-1]
 }
 
-// Captured returns the widget currently holding the pointer capture, or nil.
+// Captured returns the widget currently holding the pointer capture (the top
+// of the nested capture stack — see Capture), or nil if none.
 func (r *Router) Captured() core.Widget {
-	return r.captured
+	if len(r.captureStack) == 0 {
+		return nil
+	}
+	return r.captureStack[len(r.captureStack)-1]
 }
 
 // subtreeContainsIdentity reports whether target is w itself, or appears
@@ -126,6 +155,16 @@ func subtreeContainsIdentity(w, target core.Widget) bool {
 // and hover, by contrast, are cleared silently — capture has no
 // release-notification concept, and hover's Enter/Leave pair is meaningless
 // for a widget that's being torn down rather than merely un-hovered.
+//
+// Capture is a STACK (see Capture's doc comment): every entry in it — not
+// just the current top — is checked against w's subtree and filtered out if
+// it falls inside it, so a detach that happens to remove a middle entry
+// (an outer capture whose holder is being torn down while an inner one is
+// still active) doesn't leave a dangling reference behind it either. After
+// filtering, the new top of the surviving stack (if any) becomes the active
+// capture — e.g. if w's subtree held the current (innermost) captor but not
+// an outer one further down the stack, the outer capture is what Captured()
+// reports afterward, exactly as if that widget's own Release had already run.
 func (r *Router) Detach(w core.Widget) {
 	if w == nil {
 		return
@@ -133,8 +172,14 @@ func (r *Router) Detach(w core.Widget) {
 	if r.focused != nil && subtreeContainsIdentity(w, r.focused) {
 		r.Focus(nil)
 	}
-	if r.captured != nil && subtreeContainsIdentity(w, r.captured) {
-		r.captured = nil
+	if len(r.captureStack) > 0 {
+		kept := r.captureStack[:0:0]
+		for _, c := range r.captureStack {
+			if !subtreeContainsIdentity(w, c) {
+				kept = append(kept, c)
+			}
+		}
+		r.captureStack = kept
 	}
 	if len(r.hover) > 0 {
 		kept := r.hover[:0:0]
@@ -159,16 +204,22 @@ func deliverDirect(w core.Widget, e *PointerEvent) {
 
 // deliverCaptured builds a PointerEvent for action (with the given pos,
 // button, delta, and mods — callers pass the zero value for whichever of
-// button/delta don't apply to their action) targeted at r.captured, and
-// delivers it directly (no hit-testing, no bubbling), returning the event so
-// callers that need the captured widget's own cursor (PointerMove) can
-// inspect it afterward. Shared by PointerMove/PointerButton/PointerWheel's
-// captured branch, which is otherwise identical across all three: build an
-// event with Target = r.captured, deliver it direct, done — even when the
-// event's position falls outside the captured widget's bounds.
+// button/delta don't apply to their action) targeted at the CURRENT (top of
+// stack) captured widget, and delivers it directly (no hit-testing, no
+// bubbling), returning the event so callers that need the captured widget's
+// own cursor (PointerMove) can inspect it afterward. Shared by
+// PointerMove/PointerButton/PointerWheel's captured branch, which is
+// otherwise identical across all three: build an event with Target =
+// Captured(), deliver it direct, done — even when the event's position falls
+// outside the captured widget's bounds. Note the captured widget's own
+// OnPointer may itself call Capture/Release during this delivery (nesting or
+// unwinding the stack) — deliverCaptured reads Captured() once, up front, so
+// that mid-call change doesn't retroactively affect which widget THIS event
+// was delivered to.
 func (r *Router) deliverCaptured(action Action, pos render.Point, button Button, delta render.Point, mods Modifiers) *PointerEvent {
-	e := &PointerEvent{Action: action, Pos: pos, Button: button, Delta: delta, Mods: mods, Target: r.captured, Router: r}
-	deliverDirect(r.captured, e)
+	top := r.Captured()
+	e := &PointerEvent{Action: action, Pos: pos, Button: button, Delta: delta, Mods: mods, Target: top, Router: r}
+	deliverDirect(top, e)
 	return e
 }
 
@@ -251,9 +302,9 @@ func (r *Router) updateHover(newPath []core.Widget) {
 // Otherwise it hit-tests, updates hover (Enter/Leave), bubbles a Move event
 // leaf→root, and returns the cursor from the new hover path.
 func (r *Router) PointerMove(p render.Point, mods Modifiers) Cursor {
-	if r.captured != nil {
+	if top := r.Captured(); top != nil {
 		r.deliverCaptured(Move, p, 0, render.Point{}, mods)
-		if cs, ok := r.captured.(CursorShaper); ok {
+		if cs, ok := top.(CursorShaper); ok {
 			return cs.Cursor()
 		}
 		return CursorArrow
@@ -281,7 +332,7 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 		action = Press
 	}
 
-	if r.captured != nil {
+	if r.Captured() != nil {
 		r.deliverCaptured(action, p, b, render.Point{}, mods)
 		return
 	}
@@ -301,7 +352,7 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 // leaf→root like a pointer event (Action: Wheel), or going only to the
 // captured widget if one holds the pointer grab.
 func (r *Router) PointerWheel(delta render.Point, p render.Point, mods Modifiers) {
-	if r.captured != nil {
+	if r.Captured() != nil {
 		r.deliverCaptured(Wheel, p, 0, delta, mods)
 		return
 	}

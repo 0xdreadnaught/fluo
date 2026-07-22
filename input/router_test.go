@@ -333,6 +333,64 @@ func TestWheelUnderCapture(t *testing.T) {
 	}
 }
 
+// TestNestedCaptureRestores is the primary regression for Capture/Release's
+// nesting contract: capturing while another widget already holds the grab
+// pushes over it, and Release pops back to that previous captor rather than
+// clearing capture outright. This is what lets a popup-internal drag (e.g.
+// a ScrollViewer thumb) release cleanly back into an OverlayHost's own modal
+// capture instead of dropping it.
+func TestNestedCaptureRestores(t *testing.T) {
+	a := &probe{name: "a"}
+	b := &probe{name: "b"}
+
+	r := input.NewRouter()
+
+	r.Capture(a)
+	if r.Captured() != core.Widget(a) {
+		t.Fatalf("Captured() after Capture(a) = %v, want a", r.Captured())
+	}
+
+	r.Capture(b)
+	if r.Captured() != core.Widget(b) {
+		t.Fatalf("Captured() after Capture(b) = %v, want b (nested over a)", r.Captured())
+	}
+
+	r.Release()
+	if r.Captured() != core.Widget(a) {
+		t.Fatalf("Captured() after inner Release() = %v, want a (restored, not nil)", r.Captured())
+	}
+
+	r.Release()
+	if r.Captured() != nil {
+		t.Fatalf("Captured() after outer Release() = %v, want nil", r.Captured())
+	}
+}
+
+// TestDetachClearsCaptureStack proves Detach filters the ENTIRE capture
+// stack, not just the top: an outer capture (host) survives the detach of
+// an unrelated inner one, and becomes the active capture again once the
+// inner entry is removed — exactly as if the inner widget's own Release had
+// run, which matters because a torn-down popup can't be trusted to run its
+// own cleanup.
+func TestDetachClearsCaptureStack(t *testing.T) {
+	host := &probe{name: "host"}
+	inner := &probe{name: "inner"}
+
+	r := input.NewRouter()
+	r.Capture(host)
+	r.Capture(inner)
+
+	if r.Captured() != core.Widget(inner) {
+		t.Fatalf("Captured() before Detach = %v, want inner", r.Captured())
+	}
+
+	r.Detach(inner)
+
+	if r.Captured() != core.Widget(host) {
+		t.Fatalf("Captured() after Detach(inner) = %v, want host (surviving outer capture)", r.Captured())
+	}
+}
+
 func TestWheelBubbles(t *testing.T) {
 	leaf := &probe{name: "leaf"}
 	leaf.SetWidth(50)

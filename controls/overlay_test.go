@@ -9,22 +9,34 @@ import (
 )
 
 // ovProbe is a minimal leaf widget for OverlayHost tests: it records every
-// Press it receives (so light-dismiss tests can assert content did or
-// didn't see one) and can optionally accept keyboard focus (so the
-// Detach-on-close test has something router.Focus can point at). Explicit
-// size comes from core.Element's SetWidth/SetHeight (as in the input
-// package's own probe pattern), not a MeasureContent override.
+// Press/Move it receives (so light-dismiss and forwarding tests can assert
+// content or popup internals did or didn't see one), can optionally accept
+// keyboard focus (so the Detach-on-close test has something router.Focus can
+// point at), and can optionally capture-on-press + release-on-release (so
+// TestPopupInternalCaptureRestoresHost can simulate a ScrollViewer-thumb-like
+// drag started from a forwarded event inside an open popup). Explicit size
+// comes from core.Element's SetWidth/SetHeight (as in the input package's
+// own probe pattern), not a MeasureContent override.
 type ovProbe struct {
 	core.Element
 
 	events    []string
 	focusable bool
+	capturing bool
 }
 
 func (p *ovProbe) OnPointer(e *input.PointerEvent) {
 	switch e.Action {
 	case input.Press:
 		p.events = append(p.events, "press")
+		if p.capturing {
+			e.Router.Capture(p)
+		}
+	case input.Release:
+		p.events = append(p.events, "release")
+		if p.capturing {
+			e.Router.Release()
+		}
 	case input.Move:
 		p.events = append(p.events, "move")
 	}
@@ -247,6 +259,49 @@ func TestPopupContentMoveForwarded(t *testing.T) {
 
 	if got := popupProbe.events; len(got) != 1 || got[0] != "move" {
 		t.Fatalf("popupProbe.events = %v, want [move] (forwarded into the popup's subtree)", got)
+	}
+}
+
+// TestPopupInternalCaptureRestoresHost proves the router's NESTED capture
+// stack does its job for OverlayHost specifically: a popup-internal widget
+// (standing in for a ScrollViewer thumb or similar drag) captures on press
+// while the event is being forwarded under the host's own modal capture,
+// then releases on release. Captured() must end up back on the host — not
+// nil — so light dismiss is still armed for whatever happens next.
+func TestPopupInternalCaptureRestoresHost(t *testing.T) {
+	popupProbe := &ovProbe{capturing: true}
+	popupProbe.SetWidth(60)
+	popupProbe.SetHeight(30)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(NewFixed(400, 300, render.RGB(1, 2, 3)))
+	r.SetRoot(host) // BEFORE ShowPopup: SetRoot itself resets any capture
+
+	anchor := render.Rect{X: 300, Y: 50, W: 10, H: 10}
+	host.ShowPopup(popupProbe, anchor, nil)
+	layoutOverlay(host, 400, 300)
+
+	if got := r.Captured(); got != core.Widget(host) {
+		t.Fatalf("Captured() after ShowPopup = %v, want host", got)
+	}
+
+	// Popup bounds are {300,60,60,30}; (310,65) is inside them.
+	pos := render.Point{X: 310, Y: 65}
+	r.PointerButton(input.ButtonLeft, true, pos, 0) // forwarded press -> popupProbe captures (nests over host)
+
+	if got := r.Captured(); got != core.Widget(popupProbe) {
+		t.Fatalf("Captured() mid-drag = %v, want popupProbe (nested over host)", got)
+	}
+
+	r.PointerButton(input.ButtonLeft, false, pos, 0) // popupProbe's own release -> pops back to host
+
+	if got := r.Captured(); got != core.Widget(host) {
+		t.Fatalf("Captured() after inner release = %v, want host (restored, light dismiss still armed)", got)
+	}
+	if got := popupProbe.events; len(got) != 2 || got[0] != "press" || got[1] != "release" {
+		t.Fatalf("popupProbe.events = %v, want [press release]", got)
 	}
 }
 

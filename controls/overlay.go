@@ -277,9 +277,18 @@ func (h *OverlayHost) Children() []core.Widget {
 // widget(s) under the point, and input.Bubble replays the same leaf→root
 // delivery Router's own dispatch would have done had it not been bypassed by
 // the capture — so popup-internal controls (buttons, item rows, ...) receive
-// Press/Release/Move/Wheel exactly as if the router had hit-tested normally.
+// Press/Release/Move/Wheel much as if the router had hit-tested normally.
 // Nothing here is dismissed in this branch, regardless of whether the
 // forwarded delivery itself ends up Handled.
+//
+// One real difference from ordinary (uncaptured) dispatch: this host's own
+// Capture(h) is still the one on top of the router's capture stack for the
+// duration of that forwarded call. If a forwarded widget itself captures —
+// e.g. a ScrollViewer thumb starting a drag inside a popup — that Capture
+// NESTS on top of the host's (see input.Router.Capture), and the widget's
+// own matching Release pops back to the host's capture rather than clearing
+// it: light dismiss stays armed for the rest of the popup's lifetime even
+// after an inner drag completes.
 //
 // When e.Pos falls outside the topmost popup's bounds, only Press matters:
 // it closes that popup (via CloseTopPopup, so its onDismiss fires) and marks
