@@ -6,7 +6,47 @@ import (
 	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/input"
 	"github.com/0xdreadnaught/fluo/render"
+	"github.com/0xdreadnaught/fluo/theme"
 )
+
+// recordingWidget is a leaf widget that records the available size it was
+// last measured with, so tests can observe what a parent (e.g. ScrollViewer)
+// passed down without depending on the child's own layout math.
+type recordingWidget struct {
+	core.Element
+
+	lastAvailable render.Size
+}
+
+func (r *recordingWidget) MeasureContent(available render.Size) render.Size {
+	r.lastAvailable = available
+	return render.Size{W: 10, H: 10}
+}
+
+func (r *recordingWidget) ArrangeContent(bounds render.Rect) {}
+
+func (r *recordingWidget) Render(rr render.Renderer) {}
+
+func (r *recordingWidget) Children() []core.Widget { return nil }
+
+// TestScrollViewerThemeMetrics asserts the gutter reserved for the thumb
+// track comes from the active theme's Metric.ScrollGutter at construction
+// time, under both Light and Dark.
+func TestScrollViewerThemeMetrics(t *testing.T) {
+	defer theme.SetActive(nil)
+
+	for _, th := range []*theme.Theme{theme.FluentLight(), theme.FluentDark()} {
+		theme.SetActive(th)
+		child := &recordingWidget{}
+		s := NewScrollViewer().SetChild(child)
+		core.MeasureWidget(s, render.Size{W: 100, H: 50})
+
+		want := float32(100) - theme.Active().Metric.ScrollGutter
+		if got := child.lastAvailable.W; got != want {
+			t.Fatalf("%s: child available width=%v, want %v (100 - gutter %v)", th.Name, got, want, theme.Active().Metric.ScrollGutter)
+		}
+	}
+}
 
 // layoutScrollViewer measures then arranges s at the given bounds (origin at
 // x,y), the pattern every test below shares.

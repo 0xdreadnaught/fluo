@@ -6,14 +6,12 @@ import (
 	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/input"
 	"github.com/0xdreadnaught/fluo/render"
+	"github.com/0xdreadnaught/fluo/theme"
 )
 
-// scrollThumbGutter is the width reserved on the right edge for the
-// vertical scrollbar track/thumb.
-const scrollThumbGutter float32 = 12
-
 // scrollThumbMinH is the minimum height a drawn thumb is ever shrunk to,
-// regardless of how large the content-to-viewport ratio is.
+// regardless of how large the content-to-viewport ratio is. Structural, not
+// themed.
 const scrollThumbMinH float32 = 24
 
 // scrollWheelStep is the number of logical px scrolled per wheel notch.
@@ -46,11 +44,24 @@ type ScrollViewer struct {
 	// tracks the pointer at a fixed grab point rather than snapping its top
 	// edge to the cursor.
 	dragGrabY float32
+
+	// gutter, thumbColor, and thumbRadius are captured from theme.Active()
+	// at construction (see NewScrollViewer); structural constants (thumb
+	// min height, wheel step) are not themed.
+	gutter      float32
+	thumbColor  render.Color
+	thumbRadius float32
 }
 
-// NewScrollViewer returns an empty ScrollViewer with no child and offset 0.
+// NewScrollViewer returns an empty ScrollViewer with no child and offset 0,
+// styled from theme.Active() at construction; rebuild to re-theme.
 func NewScrollViewer() *ScrollViewer {
-	return &ScrollViewer{}
+	t := theme.Active()
+	return &ScrollViewer{
+		gutter:      t.Metric.ScrollGutter,
+		thumbColor:  t.Color.ScrollThumb,
+		thumbRadius: t.Metric.ControlCornerRadius,
+	}
 }
 
 // SetChild sets (replacing any existing) the single scrolled child,
@@ -106,7 +117,7 @@ func (s *ScrollViewer) Children() []core.Widget {
 // asks its parent for more room than it was offered, even if its content is
 // taller/wider.
 func (s *ScrollViewer) MeasureContent(available render.Size) render.Size {
-	childAvailW := available.W - scrollThumbGutter
+	childAvailW := available.W - s.gutter
 	if childAvailW < 0 {
 		childAvailW = 0
 	}
@@ -119,7 +130,7 @@ func (s *ScrollViewer) MeasureContent(available render.Size) render.Size {
 		childW, childH = d.W, d.H
 	}
 
-	desiredW := childW + scrollThumbGutter
+	desiredW := childW + s.gutter
 	if desiredW > available.W {
 		desiredW = available.W
 	}
@@ -137,7 +148,7 @@ func (s *ScrollViewer) MeasureContent(available render.Size) render.Size {
 // {viewport.X, viewport.Y-offset, viewport.W, childDesiredH} so the clip
 // (see ClipRect) crops whatever scrolls above/below the viewport.
 func (s *ScrollViewer) ArrangeContent(bounds render.Rect) {
-	viewport := bounds.Inset(render.Thickness{Right: scrollThumbGutter})
+	viewport := bounds.Inset(render.Thickness{Right: s.gutter})
 	if viewport.W < 0 {
 		viewport.W = 0
 	}
@@ -192,7 +203,7 @@ func (s *ScrollViewer) thumbGeometry() (track render.Rect, thumbH float32, ok bo
 	track = render.Rect{
 		X: s.viewport.Right(),
 		Y: s.viewport.Y,
-		W: scrollThumbGutter,
+		W: s.gutter,
 		H: s.viewport.H,
 	}
 	thumbH = track.H * track.H / s.childH
@@ -222,14 +233,14 @@ func (s *ScrollViewer) thumbRect() (render.Rect, bool) {
 }
 
 // RenderOverlay implements core.OverlayRenderer, drawing the thumb (a
-// rounded-rect fill in a neutral gray; theme colors arrive in Phase 4) above
-// the clipped child when there is content to scroll to.
+// rounded-rect fill in the theme's ScrollThumb color, captured at
+// construction) above the clipped child when there is content to scroll to.
 func (s *ScrollViewer) RenderOverlay(r render.Renderer) {
 	rect, ok := s.thumbRect()
 	if !ok {
 		return
 	}
-	r.FillRoundedRect(rect, 4, render.RGBA(255, 255, 255, 60))
+	r.FillRoundedRect(rect, s.thumbRadius, s.thumbColor)
 }
 
 // dragTo recomputes rawOffset from a drag's current pointer y-position,

@@ -4,6 +4,7 @@ import (
 	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/render"
 	"github.com/0xdreadnaught/fluo/text"
+	"github.com/0xdreadnaught/fluo/theme"
 )
 
 // TextBlock is a single-line text leaf widget.
@@ -16,9 +17,11 @@ type TextBlock struct {
 }
 
 // NewTextBlock returns a TextBlock that draws s with face. face may be nil,
-// in which case the widget measures to zero and renders nothing.
+// in which case the widget measures to zero and renders nothing. The default
+// color is styled from theme.Active() at construction; rebuild to re-theme.
+// SetColor overrides the theme default.
 func NewTextBlock(face *text.Face, s string) *TextBlock {
-	tb := &TextBlock{face: face}
+	tb := &TextBlock{face: face, color: theme.Active().Color.TextPrimary}
 	tb.text.OnChange(func(_, _ string) { tb.InvalidateMeasure() })
 	tb.text.Set(s)
 	return tb
@@ -40,6 +43,12 @@ func (t *TextBlock) Text() string {
 func (t *TextBlock) SetColor(c render.Color) *TextBlock {
 	t.color = c
 	return t
+}
+
+// Color returns the text's current color, whether the theme default set at
+// construction or a later SetColor override.
+func (t *TextBlock) Color() render.Color {
+	return t.color
 }
 
 // MeasureContent returns the size the text occupies when drawn with face; a

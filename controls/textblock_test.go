@@ -6,9 +6,25 @@ import (
 	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/render"
 	"github.com/0xdreadnaught/fluo/text"
+	"github.com/0xdreadnaught/fluo/theme"
 
 	"golang.org/x/image/font/gofont/goregular"
 )
+
+func TestTextBlockThemeDefault(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	light := NewTextBlock(nil, "x")
+	if got, want := light.Color(), theme.FluentLight().Color.TextPrimary; got != want {
+		t.Fatalf("light default color=%v, want %v", got, want)
+	}
+
+	theme.SetActive(theme.FluentDark())
+	dark := NewTextBlock(nil, "x")
+	if got, want := dark.Color(), theme.FluentDark().Color.TextPrimary; got != want {
+		t.Fatalf("dark default color=%v, want %v", got, want)
+	}
+}
 
 func TestTextBlockMeasuresText(t *testing.T) {
 	f, err := text.Load(goregular.TTF)
