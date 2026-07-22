@@ -34,11 +34,14 @@ type popupEntry struct {
 // To pre-empt that, OverlayHost captures the router (SetRouter must be
 // wired) for as long as at least one popup is open: every pointer event
 // routes directly to OverlayHost.OnPointer while a popup is showing,
-// completely bypassing hit-testing into content. This is a deliberate v0
-// simplification — content (and popup-internal widgets) get no hover/move
-// feedback while a popup is open, only the Press-based dismiss-or-keep-open
-// decision below — revisit if/when popup-internal interactive controls
-// (ComboBox item rows, etc.) need real pointer routing.
+// completely bypassing hit-testing into content. OnPointer re-hit-tests and
+// forwards into the topmost popup's own subtree (input.HitPath + input.Bubble)
+// when the event falls inside it, so popup-internal controls (ComboBox item
+// rows, etc.) still receive Press/Release/Move/Wheel normally. Content (and
+// any popup beneath the topmost one) is the part that stays inert while a
+// popup is open — it gets no hover/move feedback, only the topmost popup's
+// interior and the dismiss-on-outside-Press decision are live. Documented v0
+// simplification, not an oversight.
 type OverlayHost struct {
 	core.Element
 
@@ -261,20 +264,44 @@ func (h *OverlayHost) Children() []core.Widget {
 	return out
 }
 
-// OnPointer implements input.PointerHandler for light dismiss. Only Press
-// matters (see the OverlayHost doc comment for why the router is captured
-// while any popup is open, which is what makes this the exclusive receiver
-// of pointer events during that window): when the press's position falls
-// outside the topmost popup's bounds, that popup is closed (via
-// CloseTopPopup, so its onDismiss fires) and the event is marked Handled,
-// swallowing it. A press inside the topmost popup's bounds is left alone —
-// neither dismissing anything nor doing anything else with it.
+// OnPointer implements input.PointerHandler. See the OverlayHost doc comment
+// for why the router is captured while any popup is open, which is what
+// makes this the exclusive receiver of every pointer event during that
+// window: with no root set (or no popups open), this is never called via
+// capture at all — only ever via ordinary bubbling, if it happens to be on
+// the hit path, in which case there's nothing to do (len(h.popups) == 0
+// short-circuits below).
+//
+// When e.Pos falls inside the topmost popup's bounds, the event is forwarded
+// into that popup's own subtree — input.HitPath(topmost, e.Pos) finds the
+// widget(s) under the point, and input.Bubble replays the same leaf→root
+// delivery Router's own dispatch would have done had it not been bypassed by
+// the capture — so popup-internal controls (buttons, item rows, ...) receive
+// Press/Release/Move/Wheel exactly as if the router had hit-tested normally.
+// Nothing here is dismissed in this branch, regardless of whether the
+// forwarded delivery itself ends up Handled.
+//
+// When e.Pos falls outside the topmost popup's bounds, only Press matters:
+// it closes that popup (via CloseTopPopup, so its onDismiss fires) and marks
+// e.Handled, swallowing it. Every other outside action (Move/Release/Wheel)
+// is swallowed silently with no forwarding — content (and, for now, any
+// popup beneath the topmost one) gets no hover/move feedback while a popup
+// is open; only the topmost popup's own interior and the dismiss-on-Press
+// decision are live. This is a documented v0 simplification, not an
+// oversight.
 func (h *OverlayHost) OnPointer(e *input.PointerEvent) {
-	if e.Action != input.Press || len(h.popups) == 0 {
+	if len(h.popups) == 0 {
 		return
 	}
 	top := h.popups[len(h.popups)-1].w
-	if !core.BoundsOf(top).Contains(e.Pos) {
+
+	if core.BoundsOf(top).Contains(e.Pos) {
+		path := input.HitPath(top, e.Pos)
+		input.Bubble(path, e)
+		return
+	}
+
+	if e.Action == input.Press {
 		h.CloseTopPopup()
 		e.Handled = true
 	}

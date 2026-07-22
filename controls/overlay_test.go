@@ -22,8 +22,11 @@ type ovProbe struct {
 }
 
 func (p *ovProbe) OnPointer(e *input.PointerEvent) {
-	if e.Action == input.Press {
+	switch e.Action {
+	case input.Press:
 		p.events = append(p.events, "press")
+	case input.Move:
+		p.events = append(p.events, "move")
 	}
 }
 
@@ -181,6 +184,69 @@ func TestOverlayLightDismissKeepsOpenOnInsidePress(t *testing.T) {
 
 	if got := host.PopupCount(); got != 1 {
 		t.Fatalf("PopupCount after inside press = %v, want 1 (still open)", got)
+	}
+}
+
+// TestPopupContentReceivesPress proves the forwarding half of OnPointer: a
+// press inside the topmost popup's bounds reaches a probe INSIDE the popup
+// (via input.HitPath + input.Bubble), while a probe under the host's own
+// content — still covering the entire host — sees nothing, and the popup
+// stays open (forwarding, not dismissal).
+func TestPopupContentReceivesPress(t *testing.T) {
+	hostProbe := &ovProbe{}
+	hostProbe.SetWidth(400)
+	hostProbe.SetHeight(300)
+
+	popupProbe := &ovProbe{}
+	popupProbe.SetWidth(60)
+	popupProbe.SetHeight(30)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(hostProbe)
+	r.SetRoot(host) // BEFORE ShowPopup: SetRoot itself resets any capture
+
+	anchor := render.Rect{X: 300, Y: 50, W: 10, H: 10}
+	host.ShowPopup(popupProbe, anchor, nil)
+	layoutOverlay(host, 400, 300)
+
+	// Popup bounds are {300,60,60,30}; (310,65) is inside them.
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 310, Y: 65}, 0)
+
+	if got := popupProbe.events; len(got) != 1 || got[0] != "press" {
+		t.Fatalf("popupProbe.events = %v, want [press] (forwarded into the popup's subtree)", got)
+	}
+	if got := hostProbe.events; len(got) != 0 {
+		t.Fatalf("hostProbe.events = %v, want none (content stays inert while a popup is open)", got)
+	}
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after inside press = %v, want 1 (forwarding, not dismissal)", got)
+	}
+}
+
+// TestPopupContentMoveForwarded proves forwarding isn't Press-only: a Move
+// inside the topmost popup's bounds also reaches the popup's own probe.
+func TestPopupContentMoveForwarded(t *testing.T) {
+	popupProbe := &ovProbe{}
+	popupProbe.SetWidth(60)
+	popupProbe.SetHeight(30)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(NewFixed(400, 300, render.RGB(1, 2, 3)))
+	r.SetRoot(host)
+
+	anchor := render.Rect{X: 300, Y: 50, W: 10, H: 10}
+	host.ShowPopup(popupProbe, anchor, nil)
+	layoutOverlay(host, 400, 300)
+
+	// Popup bounds are {300,60,60,30}; (310,65) is inside them.
+	r.PointerMove(render.Point{X: 310, Y: 65}, 0)
+
+	if got := popupProbe.events; len(got) != 1 || got[0] != "move" {
+		t.Fatalf("popupProbe.events = %v, want [move] (forwarded into the popup's subtree)", got)
 	}
 }
 

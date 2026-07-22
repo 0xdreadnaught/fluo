@@ -172,12 +172,20 @@ func (r *Router) deliverCaptured(action Action, pos render.Point, button Button,
 	return e
 }
 
-// dispatchBubble delivers e leaf→root along path: every widget on path that
+// Bubble delivers e leaf→root along path: every widget on path that
 // implements PointerHandler receives e (Target is pre-set to the leaf, the
 // same *PointerEvent instance is reused for the whole walk so a handler's
 // e.Handled is visible to the loop), stopping as soon as e.Handled is set.
 // A nil/empty path is a no-op.
-func dispatchBubble(path []core.Widget, e *PointerEvent) {
+//
+// Exported so callers outside this package can replay the same leaf→root
+// delivery over a path they compute themselves — e.g. controls.OverlayHost
+// forwards captured pointer events into an open popup's subtree via
+// HitPath(popup, e.Pos) + Bubble, since it can't reach Router's private
+// dispatch while it holds the pointer capture. Router's own dispatch
+// (PointerMove/PointerButton/PointerWheel) uses this same function
+// internally; behavior is unchanged.
+func Bubble(path []core.Widget, e *PointerEvent) {
 	if len(path) == 0 {
 		return
 	}
@@ -258,7 +266,7 @@ func (r *Router) PointerMove(p render.Point, mods Modifiers) Cursor {
 
 	path := HitPath(r.root, p)
 	r.updateHover(path)
-	dispatchBubble(path, &PointerEvent{Action: Move, Pos: p, Mods: mods, Router: r})
+	Bubble(path, &PointerEvent{Action: Move, Pos: p, Mods: mods, Router: r})
 	return cursorForPath(path)
 }
 
@@ -286,7 +294,7 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 	if press {
 		r.focusFromPath(path)
 	}
-	dispatchBubble(path, &PointerEvent{Action: action, Pos: p, Button: b, Mods: mods, Router: r})
+	Bubble(path, &PointerEvent{Action: action, Pos: p, Button: b, Mods: mods, Router: r})
 }
 
 // PointerWheel routes a wheel/scroll event at p (logical px), bubbling
@@ -303,7 +311,7 @@ func (r *Router) PointerWheel(delta render.Point, p render.Point, mods Modifiers
 	}
 
 	path := HitPath(r.root, p)
-	dispatchBubble(path, &PointerEvent{Action: Wheel, Pos: p, Delta: delta, Mods: mods, Router: r})
+	Bubble(path, &PointerEvent{Action: Wheel, Pos: p, Delta: delta, Mods: mods, Router: r})
 }
 
 // focusFromPath implements press-to-focus: given the hit-test path (root→
