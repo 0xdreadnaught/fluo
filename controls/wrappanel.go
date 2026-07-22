@@ -9,7 +9,8 @@ import (
 
 // WrapPanel is a container widget that arranges children horizontally in rows,
 // wrapping to a new row when there is not enough space. Gap specifies spacing
-// between items in a row and between rows.
+// between items in a row and between rows. Hidden children are measured and
+// arranged but excluded from flow (no slot, no gap contribution).
 type WrapPanel struct {
 	core.Element
 
@@ -92,8 +93,17 @@ func (w *WrapPanel) MeasureContent(available render.Size) render.Size {
 
 // ArrangeContent arranges children in rows, recomputing flow against bounds.W.
 // Each child slot = {rowX, rowY, childDesired.W, rowHeight}.
+// Hidden children are arranged with an empty rect; core.ArrangeWidget handles the short-circuit.
 func (w *WrapPanel) ArrangeContent(bounds render.Rect) {
 	rows := w.flowRows(bounds.W)
+
+	// Build a set of visible children for quick lookup
+	visibleSet := make(map[core.Widget]bool)
+	for _, r := range rows {
+		for _, child := range r.children {
+			visibleSet[child] = true
+		}
+	}
 
 	y := bounds.Y
 	for _, r := range rows {
@@ -110,6 +120,13 @@ func (w *WrapPanel) ArrangeContent(bounds render.Rect) {
 			x += desired.W + w.gap
 		}
 		y += r.height + w.gap
+	}
+
+	// Arrange hidden children with empty rect
+	for _, child := range w.children {
+		if !visibleSet[child] {
+			core.ArrangeWidget(child, render.Rect{})
+		}
 	}
 }
 

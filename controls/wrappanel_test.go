@@ -36,3 +36,28 @@ func TestWrapOversizeChildGetsOwnRow(t *testing.T) {
 	core.MeasureWidget(w, render.Size{W: 100, H: 500})
 	if got := w.DesiredSize().H; got != 20 { t.Fatalf("H=%v (two rows)", got) }
 }
+
+func TestWrapHiddenChildBoundsCleared(t *testing.T) {
+	child := NewFixed(60, 20, render.RGB(1, 2, 3))
+	child.SetAlign(core.Start, core.Start)
+	w := NewWrapPanel().Add(child)
+
+	// Measure and arrange when visible
+	core.MeasureWidget(w, render.Size{W: 200, H: 500})
+	core.ArrangeWidget(w, render.Rect{X: 0, Y: 0, W: 200, H: 500})
+	if got := child.Bounds(); got == (render.Rect{}) {
+		t.Fatalf("child bounds should be non-zero when visible, got %v", got)
+	}
+
+	// Hide the child
+	child.SetVisible(false)
+
+	// Re-measure and re-arrange the panel
+	core.MeasureWidget(w, render.Size{W: 200, H: 500})
+	core.ArrangeWidget(w, render.Rect{X: 0, Y: 0, W: 200, H: 500})
+
+	// Hidden child should have empty bounds
+	if got := child.Bounds(); got != (render.Rect{}) {
+		t.Fatalf("child bounds should be empty when hidden, got %v", got)
+	}
+}

@@ -7,6 +7,17 @@ import (
 	"github.com/0xdreadnaught/fluo/render"
 )
 
+// testWidgetRecorder records the available size it receives when measured.
+type testWidgetRecorder struct {
+	core.Element
+	availableReceived render.Size
+}
+
+func (t *testWidgetRecorder) MeasureContent(available render.Size) render.Size {
+	t.availableReceived = available
+	return render.Size{W: 10, H: 10}
+}
+
 func TestDockLayout(t *testing.T) {
 	top := NewFixed(0, 30, render.RGB(1, 2, 3))    // full-width bar (W stretches)
 	left := NewFixed(80, 0, render.RGB(1, 2, 3))   // sidebar
@@ -34,4 +45,16 @@ func TestDockDesired(t *testing.T) {
 		Add(NewFixed(60, 40, render.RGB(1, 2, 3)), DockTop)
 	core.MeasureWidget(d, render.Size{W: 400, H: 300})
 	if got := d.DesiredSize(); got != (render.Size{W: 140, H: 60}) { t.Fatalf("desired=%v", got) }
+}
+
+func TestDockMeasureNarrowsAvailable(t *testing.T) {
+	// First child consumes 100px width on the left; second child should see narrowed available.
+	first := NewFixed(100, 0, render.RGB(1, 2, 3))
+	second := &testWidgetRecorder{}
+	d := NewDockPanel().Add(first, DockLeft).Add(second, DockLeft)
+	core.MeasureWidget(d, render.Size{W: 400, H: 300})
+	// Second child should see available.W = 400 - 100 = 300
+	if got := second.availableReceived.W; got != 300 {
+		t.Fatalf("second child available.W=%v, want 300", got)
+	}
 }

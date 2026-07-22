@@ -66,12 +66,35 @@ func (d *DockPanel) Children() []core.Widget {
 }
 
 // MeasureContent measures all children and computes the desired size using
-// WPF accumulation: for Left/Right items track maxH = max(maxH, usedH+d.H),
-// usedW += d.W; Top/Bottom mirrored; final desired = (max(maxW, usedW), max(maxH, usedH)).
+// WPF final-totals accumulation: each child is measured with the remaining
+// available space (clamped ≥0), then remaining is reduced by the child's desired
+// extent on its docked axis. Final desired uses two-pass accumulation:
+// for Left/Right items track maxH = max(maxH, usedH+d.H), usedW += d.W;
+// Top/Bottom mirrored; final desired = (max(maxW, usedW), max(maxH, usedH)).
+// This two-pass approach correctly handles cases where children in one dock
+// direction depend on the total extent of children in the perpendicular direction.
 func (d *DockPanel) MeasureContent(available render.Size) render.Size {
-	// Measure all children with available space; hidden children short-circuit.
+	// Measure all children, narrowing available per dock direction.
+	remaining := available
 	for _, item := range d.items {
-		core.MeasureWidget(item.child, available)
+		// Clamp remaining to zero on any axis
+		if remaining.W < 0 {
+			remaining.W = 0
+		}
+		if remaining.H < 0 {
+			remaining.H = 0
+		}
+
+		core.MeasureWidget(item.child, remaining)
+
+		// Reduce remaining space based on child's desired extent on its docked axis
+		desired := core.DesiredSizeOf(item.child)
+		switch item.dock {
+		case DockLeft, DockRight:
+			remaining.W -= desired.W
+		case DockTop, DockBottom:
+			remaining.H -= desired.H
+		}
 	}
 
 	// First pass: accumulate total used width and height
