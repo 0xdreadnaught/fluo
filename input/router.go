@@ -38,6 +38,11 @@ type Router struct {
 	// calls Focus/FocusNext/FocusPrev is ignored rather than recursing (see
 	// Focus's doc comment and TestFocusReentrancyIgnored).
 	focusing bool
+
+	// clipboard is the host-provided system clipboard access, or nil if the
+	// host hasn't wired one (e.g. headless/test routers). Set via
+	// SetClipboard; see Clipboard.
+	clipboard Clipboard
 }
 
 // NewRouter creates an empty Router. Call SetRoot before dispatching events.
@@ -63,6 +68,18 @@ func (r *Router) Root() core.Widget {
 	return r.root
 }
 
+// SetClipboard installs the host-provided system clipboard access. Passing
+// nil (the zero value) puts the router back into headless mode.
+func (r *Router) SetClipboard(c Clipboard) {
+	r.clipboard = c
+}
+
+// Clipboard returns the host-provided system clipboard access, or nil if
+// none was set (headless/test routers). Callers must nil-check before use.
+func (r *Router) Clipboard() Clipboard {
+	return r.clipboard
+}
+
 // Capture routes all subsequent pointer events to w exclusively, bypassing
 // hit-testing and hover, until Release is called.
 func (r *Router) Capture(w core.Widget) {
@@ -79,6 +96,55 @@ func (r *Router) Release() {
 // Captured returns the widget currently holding the pointer capture, or nil.
 func (r *Router) Captured() core.Widget {
 	return r.captured
+}
+
+// subtreeContainsIdentity reports whether target is w itself, or appears
+// anywhere within w's subtree, walked via Children() (compared by identity,
+// ==). Used by Detach to determine subtree membership — deliberately a
+// Children() walk rather than core.ParentOf, since a widget being detached
+// (e.g. a closing popup) may already be unparented by the time Detach runs.
+func subtreeContainsIdentity(w, target core.Widget) bool {
+	if w == target {
+		return true
+	}
+	for _, c := range w.Children() {
+		if subtreeContainsIdentity(c, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// Detach clears hover/capture/focus references that point at w OR any
+// widget in w's subtree (walk via Children). Call before removing a subtree
+// (popup close), so the router doesn't keep dispatching to, or holding
+// capture/focus on, widgets that are about to become unreachable.
+//
+// Focus is cleared through Focus(nil) when the focused widget is w or in
+// w's subtree, so OnFocusChanged(false) still fires on it (and Focus's
+// reentrancy guard still applies) exactly as it does for SetRoot. Capture
+// and hover, by contrast, are cleared silently — capture has no
+// release-notification concept, and hover's Enter/Leave pair is meaningless
+// for a widget that's being torn down rather than merely un-hovered.
+func (r *Router) Detach(w core.Widget) {
+	if w == nil {
+		return
+	}
+	if r.focused != nil && subtreeContainsIdentity(w, r.focused) {
+		r.Focus(nil)
+	}
+	if r.captured != nil && subtreeContainsIdentity(w, r.captured) {
+		r.captured = nil
+	}
+	if len(r.hover) > 0 {
+		kept := r.hover[:0:0]
+		for _, h := range r.hover {
+			if !subtreeContainsIdentity(w, h) {
+				kept = append(kept, h)
+			}
+		}
+		r.hover = kept
+	}
 }
 
 // deliverDirect delivers e to w's OnPointer with no bubbling, if w

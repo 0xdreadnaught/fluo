@@ -59,6 +59,29 @@ const (
 // so 'T' == 84. Added for the gallery's Light/Dark theme-toggle shortcut.
 const KeyT Key = 84
 
+// KeySpace, KeyA, KeyC, KeyV, KeyX, KeyY, and KeyZ identify their respective
+// keys. Like KeyT above, GLFW numbers these by ASCII code rather than the
+// 256+ scheme used for the named keys further up (KeyEscape..KeyEnd): Space
+// == 32, and the letters follow their uppercase ASCII values (A == 65, C ==
+// 67, V == 86, X == 88, Y == 89, Z == 90). Added for clipboard shortcuts
+// (Ctrl+C/V/X), undo/redo (Ctrl+Z/Y), select-all (Ctrl+A), and Space-as-
+// activate on focused controls.
+const (
+	KeySpace Key = 32
+	KeyA     Key = 65
+	KeyC     Key = 67
+	KeyV     Key = 86
+	KeyX     Key = 88
+	KeyY     Key = 89
+	KeyZ     Key = 90
+)
+
+// Clipboard is the host-provided system clipboard access.
+type Clipboard interface {
+	Get() string
+	Set(s string)
+}
+
 // Cursor identifies a cursor shape.
 type Cursor uint8
 

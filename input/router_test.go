@@ -567,6 +567,135 @@ func TestFocusReentrancyIgnored(t *testing.T) {
 	}
 }
 
+// TestDetachClearsSubtreeState is the primary regression test for Detach:
+// hover, capture, and focus all point at a leaf buried inside the subtree
+// being detached, and Detach must clear all three. Focus is the one that
+// fires a notification on the way out (OnFocusChanged(false), same as
+// Focus(nil)); capture and hover are cleared silently — proven here by
+// checking that no further events land on leaf beyond that one "focus:false".
+func TestDetachClearsSubtreeState(t *testing.T) {
+	leaf := &probe{name: "leaf", focusable: true, capturing: true}
+	leaf.SetWidth(50)
+	leaf.SetHeight(50)
+	sub := (&probe{name: "sub"}).setChild(leaf)
+	sub.SetWidth(50)
+	sub.SetHeight(50)
+	root := controls.NewCanvas().Add(sub, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerMove(render.Point{X: 10, Y: 10}, 0)                           // hover leaf
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // focus + capture leaf
+
+	if r.Focused() != core.Widget(leaf) {
+		t.Fatalf("Focused() = %v, want leaf", r.Focused())
+	}
+	if r.Captured() != core.Widget(leaf) {
+		t.Fatalf("Captured() = %v, want leaf", r.Captured())
+	}
+
+	before := len(leaf.events)
+
+	r.Detach(sub) // detach the subtree root, not leaf itself
+
+	if r.Focused() != nil {
+		t.Fatalf("Focused() after Detach = %v, want nil", r.Focused())
+	}
+	if r.Captured() != nil {
+		t.Fatalf("Captured() after Detach = %v, want nil", r.Captured())
+	}
+	if got := leaf.events[before:]; len(got) != 1 || got[0] != "focus:false" {
+		t.Fatalf("leaf.events after Detach = %v, want exactly [focus:false]", got)
+	}
+
+	afterDetach := len(leaf.events)
+
+	// Hover was cleared silently (no "leave" fired by Detach itself), and
+	// leaf is no longer tracked as hovered at all, so a move elsewhere must
+	// not produce a spurious "leave" for it.
+	r.PointerMove(render.Point{X: 90, Y: 90}, 0)
+	for _, e := range leaf.events[afterDetach:] {
+		if e == "leave" {
+			t.Fatalf("leaf.events after post-Detach move = %v, want no \"leave\"", leaf.events)
+		}
+	}
+}
+
+// TestDetachUnrelatedUntouched is a regression test for Detach's subtree
+// scoping: state (focus/capture/hover) that points at a widget OUTSIDE the
+// detached subtree must survive untouched — no events, no clearing.
+func TestDetachUnrelatedUntouched(t *testing.T) {
+	other := &probe{name: "other", focusable: true, capturing: true}
+	other.SetWidth(50)
+	other.SetHeight(50)
+	leaf := &probe{name: "leaf"}
+	leaf.SetWidth(50)
+	leaf.SetHeight(50)
+	sub := (&probe{name: "sub"}).setChild(leaf)
+	sub.SetWidth(50)
+	sub.SetHeight(50)
+	root := controls.NewCanvas().Add(other, 0, 0).Add(sub, 60, 0)
+	layout(root, 200, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerMove(render.Point{X: 10, Y: 10}, 0)                           // hover other
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // focus + capture other
+
+	if r.Focused() != core.Widget(other) {
+		t.Fatalf("Focused() = %v, want other", r.Focused())
+	}
+	if r.Captured() != core.Widget(other) {
+		t.Fatalf("Captured() = %v, want other", r.Captured())
+	}
+
+	before := len(other.events)
+
+	r.Detach(sub) // unrelated subtree; other is a sibling, not inside it
+
+	if r.Focused() != core.Widget(other) {
+		t.Fatalf("Focused() after Detach(sub) = %v, want other (untouched)", r.Focused())
+	}
+	if r.Captured() != core.Widget(other) {
+		t.Fatalf("Captured() after Detach(sub) = %v, want other (untouched)", r.Captured())
+	}
+	if got := other.events[before:]; len(got) != 0 {
+		t.Fatalf("other.events after Detach(sub) = %v, want none", got)
+	}
+}
+
+// fakeClipboard is a minimal input.Clipboard for TestClipboardAccessors: a
+// single in-memory string, no host/OS involvement.
+type fakeClipboard struct{ text string }
+
+func (f *fakeClipboard) Get() string  { return f.text }
+func (f *fakeClipboard) Set(s string) { f.text = s }
+
+func TestClipboardAccessors(t *testing.T) {
+	r := input.NewRouter()
+	if r.Clipboard() != nil {
+		t.Fatalf("Clipboard() on fresh router = %v, want nil (headless default)", r.Clipboard())
+	}
+
+	fc := &fakeClipboard{text: "hello"}
+	r.SetClipboard(fc)
+
+	if r.Clipboard() != input.Clipboard(fc) {
+		t.Fatalf("Clipboard() = %v, want fc", r.Clipboard())
+	}
+	if got := r.Clipboard().Get(); got != "hello" {
+		t.Fatalf("Clipboard().Get() = %q, want %q", got, "hello")
+	}
+
+	r.Clipboard().Set("world")
+	if fc.text != "world" {
+		t.Fatalf("fc.text after Clipboard().Set = %q, want %q (roundtrip through the router)", fc.text, "world")
+	}
+}
+
 // TestNilRootSafe is a regression test for a panic found in the live app
 // host: glfw callbacks are wired (and can already fire, e.g. an OS-buffered
 // event replayed on the first PollEvents) before the frame callback ever

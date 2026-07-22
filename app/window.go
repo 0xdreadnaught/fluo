@@ -82,6 +82,16 @@ func (s *standardCursors) get(shape input.Cursor) *glfw.Cursor {
 	return c
 }
 
+// glfwClipboard adapts a *glfw.Window's clipboard string accessors to
+// input.Clipboard. The unexported field means only Run (in this package)
+// can construct one; callers elsewhere just see input.Clipboard.
+type glfwClipboard struct {
+	win *glfw.Window
+}
+
+func (c glfwClipboard) Get() string  { return c.win.GetClipboardString() }
+func (c glfwClipboard) Set(s string) { c.win.SetClipboardString(s) }
+
 // modsFrom translates glfw's modifier bitmask into input.Modifiers. No glfw
 // types appear in any exported app signature — this (and buttonFrom) are the
 // only places glfw's input vocabulary is translated into fluo's.
@@ -166,6 +176,7 @@ func Run(cfg Config, frame func(*Ctx)) error {
 	closeFn := func() { win.SetShouldClose(true) }
 
 	router := input.NewRouter()
+	router.SetClipboard(glfwClipboard{win: win})
 	queue := timers.NewQueue(time.Now())
 	cursors := newStandardCursors()
 	curCursor := input.CursorArrow
