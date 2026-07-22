@@ -30,21 +30,22 @@ before its dependencies. Check items off as they land. Design spec:
 - [x] Gallery example app skeleton (grows a page per control from here on)
 
 ## Phase 3 · Input & events  *(pure Go core + thin glfw pump)*
-- [ ] Event types; mouse/keyboard/wheel from glfw
-- [ ] Hit-testing over the arranged tree
-- [ ] Routed events (bubbling first)
-- [ ] Focus management + pointer capture
-- [ ] Tab navigation / focus traversal order
-- [ ] Cursor shapes (I-beam, hand, resize)
-- [ ] Frame tick / timer service (caret blink, tooltip delay, later animation)
-- [ ] `ScrollViewer` (needs input + clip)
+- [x] Event types; mouse/keyboard/wheel from glfw
+- [x] Hit-testing over the arranged tree
+- [x] Routed events (bubbling first)
+- [x] Focus management + pointer capture
+- [x] Tab navigation / focus traversal order
+- [x] Cursor shapes (I-beam, hand, resize)
+- [x] Frame tick / timer service (caret blink, tooltip delay, later animation)
+- [x] `ScrollViewer` (needs input + clip)
 - [x] **DPI gate (from Phase-1 final review):** verify `Ctx.Mouse.Pos` and `Ctx.Size`
       share the same logical coordinate space on a scale≠1 display before wiring
       hit-testing — the Phase-1 host assumes cursor pos is logical (true at scale 1;
       unverified at 2x). Resolved in Phase 3 Task 5: `Ctx.Size` now comes from
       `win.GetSize()` (GLFW window coordinates) instead of framebuffer/content-scale,
       matching `win.GetCursorPos()`'s coordinate space by construction — see the
-      DPI comment block on `app.Run` in `app/window.go`.
+      DPI comment block on `app.Run` in `app/window.go`. (resolved: logical space =
+      window coords; scale = fb/window)
 
 ## Phase 4 · Theming
 - [ ] Theme resource model (color/metric/typography/effect tokens)

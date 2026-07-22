@@ -29,7 +29,9 @@ go run ./cmd/fluo-gallery
 
 Opens the widget gallery: a resizable window laid out entirely by the
 layout engine (DockPanel title bar + nav sidebar + WrapPanel content area).
-Grows a page per control as later phases land.
+Grows a page per control as later phases land. The color swatches are
+interactive (hover/press/focus/cursor) and the content area scrolls,
+demonstrating fluo's input event API.
 
 ## Golden-image tests
 
