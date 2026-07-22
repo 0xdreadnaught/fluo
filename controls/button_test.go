@@ -302,6 +302,16 @@ func TestToggleButtonCheckedRendersAccent(t *testing.T) {
 	}
 }
 
+func TestToggleButtonOnClickPanics(t *testing.T) {
+	tb := NewToggleButton(nil, "T")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("ToggleButton.OnClick did not panic, want it to (would clobber internal toggle wiring)")
+		}
+	}()
+	tb.OnClick(func() {})
+}
+
 func TestToggleButtonLabelParentSurvivesEmbedding(t *testing.T) {
 	// Regression for the copy-parent trap initButton's doc comment
 	// describes: the label's parent must be &tb.Button (the ToggleButton's

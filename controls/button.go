@@ -251,7 +251,7 @@ func (b *Button) OnKey(e *input.KeyEvent) {
 // flag of its own; checked IS the accent look, achieved by driving the
 // embedded Button's own SetAccent as checked changes.
 //
-// ToggleButton embeds Button BY VALUE and never overrides any of its
+// ToggleButton embeds Button BY VALUE and never overrides most of its
 // methods (OnPointer, Render, RenderOverlay, ...): Go method promotion is
 // static, so a promoted method always runs with a *Button receiver (pointing
 // at the embedded field), never a *ToggleButton one, and cannot itself know
@@ -259,9 +259,9 @@ func (b *Button) OnKey(e *input.KeyEvent) {
 // fight that, ToggleButton hooks its behavior through DATA the promoted
 // code already reads: the embedded ClickBehavior's OnClick function field.
 // NewToggleButton wires click.OnClick to a closure that toggles state, syncs
-// SetAccent, and fires the user's OnChanged — Button.OnClick(fn) (which
-// replaces that field wholesale) is therefore for plain Button use only and
-// must never be called on a ToggleButton.
+// SetAccent, and fires the user's OnChanged. The one method ToggleButton
+// DOES shadow is OnClick itself (see below) — precisely because leaving it
+// promoted would let a caller silently clobber that wiring.
 type ToggleButton struct {
 	Button
 
@@ -283,6 +283,15 @@ func NewToggleButton(face *text.Face, label string) *ToggleButton {
 		}
 	}
 	return t
+}
+
+// OnClick is shadowed (NOT promoted from Button) and panics: a ToggleButton
+// wires its own internal ClickBehavior.OnClick in NewToggleButton to drive
+// toggle+notify, and Button.OnClick's normal "replace the callback"
+// semantics would silently clobber that wiring, permanently breaking
+// Checked/OnChanged with no compile-time signal. Use OnChanged instead.
+func (t *ToggleButton) OnClick(fn func()) *ToggleButton {
+	panic("controls: ToggleButton.OnClick is not supported (it would replace the internal toggle wiring) — use OnChanged instead")
 }
 
 // Checked reports the current toggle state.
