@@ -5,20 +5,20 @@ before its dependencies. Check items off as they land. Design spec:
 [`docs/superpowers/specs/2026-07-22-fluo-gui-toolkit-design.md`](docs/superpowers/specs/2026-07-22-fluo-gui-toolkit-design.md)
 
 ## Phase 0 · Scaffolding
-- [ ] Module layout, LICENSE, README
-- [ ] CI: headless `go test` (GL tests auto-skip without a GPU)
-- [ ] Golden-image test harness (hidden glfw window + offscreen FBO pattern)
+- [x] Module layout, LICENSE, README
+- [x] CI: headless `go test` (GL tests auto-skip without a GPU)
+- [x] Golden-image test harness (hidden glfw window + offscreen FBO pattern)
 
 ## Phase 1 · Renderer + text  *(hardest bottom layer; unblocks everything visual)*
-- [ ] `render.Renderer` interface + primitives (Color/Point/Size/Rect/Thickness)
-- [ ] DPI scale factor plumbed through the renderer from day one
-- [ ] GL backend: batched colored-quad pipeline
-- [ ] SDF text: font load → glyph raster → atlas → `DrawText` (crisp at any scale)
-- [ ] Rounded-rect + anti-aliased fill/stroke shader
-- [ ] Clip stack (scissor/stencil)
-- [ ] Drop shadow + image draw
-- [ ] Golden-image tests for each primitive
-- [ ] **Minimal demo host**: glfw window + frame loop + input pump (polish waits for Phase 8)
+- [x] `render.Renderer` interface + primitives (Color/Point/Size/Rect/Thickness)
+- [x] DPI scale factor plumbed through the renderer from day one
+- [x] GL backend: batched colored-quad pipeline
+- [x] SDF text: font load → glyph raster → atlas → `DrawText` (crisp at any scale)
+- [x] Rounded-rect + anti-aliased fill/stroke shader
+- [x] Clip stack (scissor/stencil)
+- [x] Drop shadow + image draw
+- [x] Golden-image tests for each primitive
+- [x] **Minimal demo host**: glfw window + frame loop + input pump (polish waits for Phase 8)
 
 ## Phase 2 · Layout engine  *(pure Go, headless-testable)*
 - [ ] `Widget` interface + base element (margin/padding/alignment/size/visibility)
