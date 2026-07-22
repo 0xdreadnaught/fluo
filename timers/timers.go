@@ -87,15 +87,25 @@ func (q *Queue) Advance(now time.Time) {
 			tm.fn()
 		}
 
-		// Handle rescheduling or removal
-		if tm.period > 0 && !tm.stopped {
-			// Repeating timer: reschedule for next period
+		// Handle rescheduling or removal (by identity, in case callback stopped/removed tm)
+		// Check if tm is still in the queue (callback might have called Stop())
+		stillPresent := false
+		for _, t := range q.items {
+			if t == tm {
+				stillPresent = true
+				break
+			}
+		}
+
+		if stillPresent && tm.period > 0 && !tm.stopped {
+			// Repeating timer that's still in queue and not stopped: reschedule for next period
 			tm.due = tm.due.Add(tm.period)
 			// Re-sort and continue
-		} else {
-			// One-shot or stopped: remove from queue
-			q.items = append(q.items[:0], q.items[1:]...)
+		} else if stillPresent {
+			// One-shot or stopped timer that's still in queue: remove by identity
+			q.remove(tm)
 		}
+		// If not stillPresent, it was already removed (by Stop() or other means)
 	}
 
 	// Final update to reflect the actual advance time
@@ -119,6 +129,17 @@ func (q *Queue) NextDue() (time.Time, bool) {
 // Len returns the number of pending timers in the queue.
 func (q *Queue) Len() int {
 	return len(q.items)
+}
+
+// remove removes a timer by identity from the queue.
+// If the timer is not found, it does nothing.
+func (q *Queue) remove(tm *Timer) {
+	for i, timer := range q.items {
+		if timer == tm {
+			q.items = append(q.items[:i], q.items[i+1:]...)
+			return
+		}
+	}
 }
 
 // Stop cancels the timer and removes it from the queue immediately. It is idempotent.
