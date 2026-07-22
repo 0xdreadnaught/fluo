@@ -31,3 +31,15 @@ func TestFillRect(t *testing.T) {
 		r.FillRect(render.Rect{X: 40, Y: 30, W: 60, H: 40}, render.RGBA(255, 255, 255, 128)) // blend check
 	})
 }
+
+func TestClip(t *testing.T) {
+	testFrame(t, "clip", 128, 96, func(r *glr.Renderer) {
+		r.PushClip(render.Rect{X: 20, Y: 20, W: 50, H: 30})
+		r.FillRect(render.Rect{X: 0, Y: 0, W: 128, H: 96}, render.RGB(0, 120, 215)) // fills only the clip
+		r.PushClip(render.Rect{X: 0, Y: 0, W: 40, H: 96})                            // nested: intersects
+		r.FillRect(render.Rect{X: 0, Y: 0, W: 128, H: 96}, render.RGB(255, 185, 0))
+		r.PopClip()
+		r.PopClip()
+		r.FillRect(render.Rect{X: 100, Y: 70, W: 40, H: 40}, render.RGB(16, 124, 16)) // unclipped again
+	})
+}

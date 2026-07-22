@@ -154,10 +154,29 @@ func (rd *Renderer) DrawSDFQuads(quads []render.GlyphQuad, tex render.TextureID,
 
 // PushClip pushes a new clip rectangle that intersects with the current clip.
 func (rd *Renderer) PushClip(r render.Rect) {
-	panic("gl: PushClip not implemented (Task 5)")
+	rd.flush()
+	if n := len(rd.clips); n > 0 {
+		r = r.Intersect(rd.clips[n-1])
+	}
+	rd.clips = append(rd.clips, r)
+	rd.applyClip()
 }
 
 // PopClip pops the current clip rectangle.
 func (rd *Renderer) PopClip() {
-	panic("gl: PopClip not implemented (Task 5)")
+	rd.flush()
+	rd.clips = rd.clips[:len(rd.clips)-1]
+	rd.applyClip()
+}
+
+func (rd *Renderer) applyClip() {
+	if len(rd.clips) == 0 {
+		gl.Disable(gl.SCISSOR_TEST)
+		return
+	}
+	c := rd.clips[len(rd.clips)-1]
+	gl.Enable(gl.SCISSOR_TEST)
+	x := int32(c.X * rd.scale)
+	y := int32(float32(rd.fbH) - (c.Y+c.H)*rd.scale) // GL scissor origin = bottom-left
+	gl.Scissor(x, y, int32(c.W*rd.scale), int32(c.H*rd.scale))
 }
