@@ -99,8 +99,8 @@ func (d *DockPanel) MeasureContent(available render.Size) render.Size {
 	}
 
 	// First pass: accumulate total used width and height
-	usedW := float32(0)  // sum of widths of Left/Right items
-	usedH := float32(0)  // sum of heights of Top/Bottom items
+	usedW := float32(0) // sum of widths of Left/Right items
+	usedH := float32(0) // sum of heights of Top/Bottom items
 
 	for _, item := range d.items {
 		if !core.IsVisible(item.child) {
@@ -118,8 +118,8 @@ func (d *DockPanel) MeasureContent(available render.Size) render.Size {
 	}
 
 	// Second pass: compute max dimensions considering both dimensions
-	maxH := float32(0)   // max height needed (considering Left/Right items)
-	maxW := float32(0)   // max width needed (considering Top/Bottom items)
+	maxH := float32(0) // max height needed (considering Left/Right items)
+	maxW := float32(0) // max width needed (considering Top/Bottom items)
 
 	for _, item := range d.items {
 		if !core.IsVisible(item.child) {

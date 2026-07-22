@@ -4,7 +4,10 @@ import "testing"
 
 func TestRectContains(t *testing.T) {
 	r := Rect{10, 10, 20, 20}
-	for _, tc := range []struct{ p Point; want bool }{
+	for _, tc := range []struct {
+		p    Point
+		want bool
+	}{
 		{Point{10, 10}, true}, {Point{29.9, 29.9}, true},
 		{Point{30, 30}, false}, {Point{9, 15}, false},
 	} {

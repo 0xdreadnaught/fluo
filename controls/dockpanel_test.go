@@ -19,15 +19,21 @@ func (t *testWidgetRecorder) MeasureContent(available render.Size) render.Size {
 }
 
 func TestDockLayout(t *testing.T) {
-	top := NewFixed(0, 30, render.RGB(1, 2, 3))    // full-width bar (W stretches)
-	left := NewFixed(80, 0, render.RGB(1, 2, 3))   // sidebar
-	fill := NewFixed(10, 10, render.RGB(1, 2, 3))  // content
+	top := NewFixed(0, 30, render.RGB(1, 2, 3))   // full-width bar (W stretches)
+	left := NewFixed(80, 0, render.RGB(1, 2, 3))  // sidebar
+	fill := NewFixed(10, 10, render.RGB(1, 2, 3)) // content
 	d := NewDockPanel().Add(top, DockTop).Add(left, DockLeft).Add(fill, DockLeft)
 	core.MeasureWidget(d, render.Size{W: 400, H: 300})
 	core.ArrangeWidget(d, render.Rect{X: 0, Y: 0, W: 400, H: 300})
-	if got := top.Bounds(); got != (render.Rect{X: 0, Y: 0, W: 400, H: 30}) { t.Fatalf("top=%v", got) }
-	if got := left.Bounds(); got != (render.Rect{X: 0, Y: 30, W: 80, H: 270}) { t.Fatalf("left=%v", got) }
-	if got := fill.Bounds(); got != (render.Rect{X: 80, Y: 30, W: 320, H: 270}) { t.Fatalf("fill=%v", got) }
+	if got := top.Bounds(); got != (render.Rect{X: 0, Y: 0, W: 400, H: 30}) {
+		t.Fatalf("top=%v", got)
+	}
+	if got := left.Bounds(); got != (render.Rect{X: 0, Y: 30, W: 80, H: 270}) {
+		t.Fatalf("left=%v", got)
+	}
+	if got := fill.Bounds(); got != (render.Rect{X: 80, Y: 30, W: 320, H: 270}) {
+		t.Fatalf("fill=%v", got)
+	}
 }
 
 func TestDockNoFill(t *testing.T) {
@@ -36,7 +42,9 @@ func TestDockNoFill(t *testing.T) {
 	d := NewDockPanel().SetLastChildFill(false).Add(a, DockLeft)
 	core.MeasureWidget(d, render.Size{W: 400, H: 300})
 	core.ArrangeWidget(d, render.Rect{X: 0, Y: 0, W: 400, H: 300})
-	if got := a.Bounds(); got != (render.Rect{X: 0, Y: 0, W: 50, H: 50}) { t.Fatalf("a=%v", got) }
+	if got := a.Bounds(); got != (render.Rect{X: 0, Y: 0, W: 50, H: 50}) {
+		t.Fatalf("a=%v", got)
+	}
 }
 
 func TestDockDesired(t *testing.T) {
@@ -44,7 +52,9 @@ func TestDockDesired(t *testing.T) {
 		Add(NewFixed(80, 20, render.RGB(1, 2, 3)), DockLeft).
 		Add(NewFixed(60, 40, render.RGB(1, 2, 3)), DockTop)
 	core.MeasureWidget(d, render.Size{W: 400, H: 300})
-	if got := d.DesiredSize(); got != (render.Size{W: 140, H: 60}) { t.Fatalf("desired=%v", got) }
+	if got := d.DesiredSize(); got != (render.Size{W: 140, H: 60}) {
+		t.Fatalf("desired=%v", got)
+	}
 }
 
 func TestDockMeasureNarrowsAvailable(t *testing.T) {

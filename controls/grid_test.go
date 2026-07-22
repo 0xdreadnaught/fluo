@@ -35,20 +35,28 @@ func TestGridStarWeights(t *testing.T) {
 	g.Add(b, 0, 1)
 	core.MeasureWidget(g, render.Size{W: 400, H: 100})
 	core.ArrangeWidget(g, render.Rect{X: 0, Y: 0, W: 400, H: 100})
-	if got := a.Bounds().W; got != 100 { t.Fatalf("star1 W=%v", got) }
-	if got := b.Bounds(); got.X != 100 || got.W != 300 { t.Fatalf("star3=%v", got) }
+	if got := a.Bounds().W; got != 100 {
+		t.Fatalf("star1 W=%v", got)
+	}
+	if got := b.Bounds(); got.X != 100 || got.W != 300 {
+		t.Fatalf("star3=%v", got)
+	}
 }
 
 func TestGridDesiredUnconstrained(t *testing.T) {
 	g := NewGrid().Cols(Px(50), AutoTrack()).Rows(AutoTrack())
 	g.Add(NewFixed(40, 25, render.RGB(1, 2, 3)), 0, 1)
 	core.MeasureWidget(g, render.Size{W: 500, H: 500})
-	if got := g.DesiredSize(); got != (render.Size{W: 90, H: 25}) { t.Fatalf("desired=%v", got) }
+	if got := g.DesiredSize(); got != (render.Size{W: 90, H: 25}) {
+		t.Fatalf("desired=%v", got)
+	}
 }
 
 func TestGridAddOutOfRangePanics(t *testing.T) {
 	defer func() {
-		if recover() == nil { t.Fatal("expected panic") }
+		if recover() == nil {
+			t.Fatal("expected panic")
+		}
 	}()
 	NewGrid().Cols(Px(10)).Rows(Px(10)).Add(NewFixed(1, 1, render.Color{}), 0, 5)
 }
@@ -58,7 +66,9 @@ func TestGridShrinkTracksPanics(t *testing.T) {
 	g.Add(NewFixed(1, 1, render.Color{}), 0, 2)
 	func() {
 		defer func() {
-			if recover() == nil { t.Fatal("expected panic") }
+			if recover() == nil {
+				t.Fatal("expected panic")
+			}
 		}()
 		g.Cols(Px(10))
 	}()

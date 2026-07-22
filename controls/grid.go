@@ -175,7 +175,7 @@ func trackChildAvail(t Track) float32 {
 //  1. A Px track resolves to its fixed value.
 //  2. An Auto track resolves to maxDesired(i) (0 if no children).
 //  3. Remaining space (avail minus the sum of Px and Auto tracks, floored at
-//     0) is split across Star tracks proportional to weight/Σweights. If
+//  0. is split across Star tracks proportional to weight/Σweights. If
 //     avail is +Inf, each Star track instead resolves like Auto (maxDesired).
 func resolveTracks(tracks []Track, avail float32, maxDesired func(i int) float32) []float32 {
 	resolved := make([]float32, len(tracks))

@@ -112,4 +112,3 @@ func (r Rect) Inset(t Thickness) Rect {
 		H: r.H - t.Top - t.Bottom,
 	}
 }
-

@@ -17,7 +17,9 @@ func TestVStackMeasure(t *testing.T) {
 		NewFixed(80, 30, render.RGB(1, 2, 3)),
 	)
 	core.MeasureWidget(sp, render.Size{W: 200, H: 200})
-	if got := sp.DesiredSize(); got != (render.Size{W: 80, H: 50}) { t.Fatalf("desired=%v", got) }
+	if got := sp.DesiredSize(); got != (render.Size{W: 80, H: 50}) {
+		t.Fatalf("desired=%v", got)
+	}
 }
 
 func TestVStackGap(t *testing.T) {
@@ -27,7 +29,9 @@ func TestVStackGap(t *testing.T) {
 		NewFixed(10, 10, render.RGB(1, 2, 3)),
 	)
 	core.MeasureWidget(sp, render.Size{W: 200, H: 200})
-	if got := sp.DesiredSize().H; got != 42 { t.Fatalf("H=%v (3*10+2*6)", got) } // 42
+	if got := sp.DesiredSize().H; got != 42 {
+		t.Fatalf("H=%v (3*10+2*6)", got)
+	} // 42
 }
 
 func TestVStackArrangePositionsAndStretch(t *testing.T) {
@@ -51,10 +55,14 @@ func TestHStackMeasureAndArrange(t *testing.T) {
 		NewFixed(30, 40, render.RGB(1, 2, 3)),
 	)
 	core.MeasureWidget(sp, render.Size{W: 200, H: 200})
-	if got := sp.DesiredSize(); got != (render.Size{W: 80, H: 40}) { t.Fatalf("desired=%v", got) }
+	if got := sp.DesiredSize(); got != (render.Size{W: 80, H: 40}) {
+		t.Fatalf("desired=%v", got)
+	}
 	core.ArrangeWidget(sp, render.Rect{X: 0, Y: 0, W: 200, H: 60})
 	kids := sp.Children()
-	if got := kids[1].(*Fixed).Bounds().X; got != 50 { t.Fatalf("second child X=%v", got) }
+	if got := kids[1].(*Fixed).Bounds().X; got != 50 {
+		t.Fatalf("second child X=%v", got)
+	}
 }
 
 func TestStackSkipsHiddenChildren(t *testing.T) {
@@ -63,7 +71,9 @@ func TestStackSkipsHiddenChildren(t *testing.T) {
 	sp := vstack(10, NewFixed(10, 10, render.RGB(1, 2, 3)), hid, NewFixed(10, 10, render.RGB(1, 2, 3)))
 	core.MeasureWidget(sp, render.Size{W: 200, H: 200})
 	// hidden child contributes 0 size AND no gap: 10+10 + one 10 gap = 30
-	if got := sp.DesiredSize().H; got != 30 { t.Fatalf("H=%v", got) }
+	if got := sp.DesiredSize().H; got != 30 {
+		t.Fatalf("H=%v", got)
+	}
 }
 
 func TestStackVisibleZeroExtentChildKeepsGap(t *testing.T) {
@@ -72,7 +82,9 @@ func TestStackVisibleZeroExtentChildKeepsGap(t *testing.T) {
 	sp := vstack(10, NewFixed(10, 10, render.RGB(1, 2, 3)), zeroExtent, NewFixed(10, 10, render.RGB(1, 2, 3)))
 	core.MeasureWidget(sp, render.Size{W: 200, H: 200})
 	// Expected: 10 + gap(10) + 0 + gap(10) + 10 = 40
-	if got := sp.DesiredSize().H; got != 40 { t.Fatalf("H=%v, want 40", got) }
+	if got := sp.DesiredSize().H; got != 40 {
+		t.Fatalf("H=%v, want 40", got)
+	}
 
 	// Arrange and verify the middle child's Bounds() is updated (not stale).
 	core.ArrangeWidget(sp, render.Rect{X: 0, Y: 0, W: 100, H: 100})
