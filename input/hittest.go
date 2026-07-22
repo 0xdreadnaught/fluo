@@ -12,6 +12,13 @@ import (
 // misses. Root need not contain p for children to be tested? NO — the root
 // must contain p (bounds gate applies at every level).
 func HitPath(root core.Widget, p render.Point) []core.Widget {
+	// A nil root (Router used before SetRoot, or an empty tree) hits nothing.
+	// Guard this before touching root at all: core.IsVisible/BoundsOf call
+	// root.element(), which panics on a nil core.Widget interface value.
+	if root == nil {
+		return nil
+	}
+
 	// Check if root is visible and bounds contain the point
 	if !core.IsVisible(root) || !core.BoundsOf(root).Contains(p) {
 		return nil

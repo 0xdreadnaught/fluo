@@ -425,3 +425,30 @@ func TestFocusReentrancyIgnored(t *testing.T) {
 		t.Fatalf("Focused() after reentrant reclaim attempt = %v, want b (reentrant Focus must be ignored)", r.Focused())
 	}
 }
+
+// TestNilRootSafe is a regression test for a panic found in the live app
+// host: glfw callbacks are wired (and can already fire, e.g. an OS-buffered
+// event replayed on the first PollEvents) before the frame callback ever
+// gets a chance to call router.SetRoot(root). Every dispatch entry point
+// must tolerate a Router with no root (and no capture) — and a bare
+// HitPath(nil, ...) call, which any host could make directly — without
+// touching the nil core.Widget interface (calling any method on it, even
+// indirectly via core.IsVisible/BoundsOf, panics).
+func TestNilRootSafe(t *testing.T) {
+	if p := input.HitPath(nil, render.Point{X: 5, Y: 5}); p != nil {
+		t.Fatalf("HitPath(nil, ...) = %v, want nil", p)
+	}
+
+	r := input.NewRouter() // no SetRoot call
+
+	if cur := r.PointerMove(render.Point{X: 1, Y: 1}, 0); cur != input.CursorArrow {
+		t.Fatalf("PointerMove with no root: cursor = %v, want CursorArrow", cur)
+	}
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 1, Y: 1}, 0)
+	r.PointerButton(input.ButtonLeft, false, render.Point{X: 1, Y: 1}, 0)
+	r.PointerWheel(render.Point{X: 0, Y: 1}, render.Point{X: 1, Y: 1}, 0)
+	r.KeyDown(input.KeyEnter, 0, 0)
+	r.KeyUp(input.KeyEnter, 0)
+	// Reaching here without a panic is the assertion; nothing above has an
+	// observable effect on a rootless router beyond the cursor check.
+}

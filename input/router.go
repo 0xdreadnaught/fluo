@@ -162,6 +162,11 @@ func (r *Router) PointerMove(p render.Point, mods Modifiers) Cursor {
 		}
 		return CursorArrow
 	}
+	// No root set yet (e.g. a glfw host wiring callbacks before its first
+	// frame calls SetRoot) and nothing captured: nothing to hit-test.
+	if r.root == nil {
+		return CursorArrow
+	}
 
 	path := HitPath(r.root, p)
 	r.updateHover(path)
@@ -185,6 +190,10 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 		deliverDirect(r.captured, e)
 		return
 	}
+	// No root set yet and nothing captured: nothing to hit-test or focus.
+	if r.root == nil {
+		return
+	}
 
 	path := HitPath(r.root, p)
 	if press {
@@ -200,6 +209,10 @@ func (r *Router) PointerWheel(delta render.Point, p render.Point, mods Modifiers
 	if r.captured != nil {
 		e := &PointerEvent{Action: Wheel, Pos: p, Delta: delta, Mods: mods, Target: r.captured, Router: r}
 		deliverDirect(r.captured, e)
+		return
+	}
+	// No root set yet and nothing captured: nothing to hit-test.
+	if r.root == nil {
 		return
 	}
 
@@ -345,7 +358,10 @@ func keyChain(w core.Widget) []core.Widget {
 // dispatchKey delivers e to the focused widget and bubbles it up the parent
 // chain (core.ParentOf), stopping as soon as e.Handled is set. With no
 // focused widget, delivery is to the root only (if it implements KeyHandler
-// and a root is set).
+// and a root is set). The root==nil branch is deliberately guarded (a Router
+// used before SetRoot, or with an empty tree, must produce an empty chain,
+// not a []core.Widget{nil} that would panic on the KeyHandler type
+// assertion below).
 func (r *Router) dispatchKey(e *KeyEvent) {
 	var chain []core.Widget
 	if r.focused != nil {
