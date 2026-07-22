@@ -48,11 +48,14 @@ before its dependencies. Check items off as they land. Design spec:
       window coords; scale = fb/window)
 
 ## Phase 4 · Theming
-- [ ] Theme resource model (color/metric/typography/effect tokens)
-- [ ] Fluent Light theme
-- [ ] Fluent Dark theme
-- [ ] Wire existing widgets to tokens (no hard-coded styling anywhere)
-- [ ] **MILESTONE: themed, laid-out, clickable Fluent button in a real GL context**
+- [x] Theme resource model (color/metric/typography/effect tokens)
+- [x] Fluent Light theme
+- [x] Fluent Dark theme
+- [x] Wire existing widgets to tokens (no hard-coded styling anywhere)
+- [x] **MILESTONE: themed, laid-out, clickable Fluent button in a real GL context** —
+      `render/gl` golden `TestFluentButton` (composed purely from `theme.FluentLight()`
+      tokens) plus the live `fluo-gallery` demo button (Accent/AccentHover/AccentPressed
+      states, click counter) and its T-key Light/Dark toggle.
 
 ## Phase 5 · Core controls
 - [ ] Overlay/popup layer (prerequisite for several controls)

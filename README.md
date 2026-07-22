@@ -33,6 +33,29 @@ Grows a page per control as later phases land. The color swatches are
 interactive (hover/press/focus/cursor) and the content area scrolls,
 demonstrating fluo's input event API.
 
+## Theming
+
+Every control is styled from `theme.Active()` — a `*theme.Theme` bundling
+color, metric (radius/padding/stroke), and typography tokens — rather than
+hard-coded values. `theme.FluentLight()` and `theme.FluentDark()` are the two
+built-in variants (`theme.SetActive` picks one; `Active()` defaults to
+Dark). Widgets capture the tokens they need at *construction* time (e.g.
+`NewTextBlock`, `NewScrollViewer`), so there is no live re-skinning of an
+existing tree: re-theming means calling `theme.SetActive` and then rebuilding
+the widget tree from scratch (`fluo-gallery`'s `buildUI` is the reference
+example — it is a pure function of `theme.Active()`, called again and swapped
+in via `ctx.Input.SetRoot` on every toggle).
+
+In the gallery, press **T** to toggle Light/Dark live (`SetRoot` intentionally
+resets hover/capture/focus, since the widget tree itself is fresh). For quick
+manual comparisons without a keypress, `FLUO_THEME=light` (or `dark`, the
+default) picks the startup theme — a dev convenience, not a supported runtime
+API:
+
+```sh
+FLUO_THEME=light go run ./cmd/fluo-gallery
+```
+
 ## Golden-image tests
 
 Rendering correctness is checked against golden PNGs in `render/gl/testdata`

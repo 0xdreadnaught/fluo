@@ -12,6 +12,7 @@ import (
 	glr "github.com/0xdreadnaught/fluo/render/gl"
 	"github.com/0xdreadnaught/fluo/render/gl/gltest"
 	"github.com/0xdreadnaught/fluo/text"
+	"github.com/0xdreadnaught/fluo/theme"
 )
 
 func testFrame(t *testing.T, name string, w, h int, draw func(r *glr.Renderer)) {
@@ -145,5 +146,45 @@ func TestScrollClipRender(t *testing.T) {
 		core.MeasureWidget(root, render.Size{W: 160, H: 120})
 		core.ArrangeWidget(root, render.Rect{X: 0, Y: 0, W: 160, H: 120})
 		core.RenderWidget(root, r)
+	})
+}
+
+// TestFluentButton is the Phase 4 milestone golden: a themed, laid-out
+// Fluent button in a real GL context, composed ONLY from theme.FluentLight
+// tokens (no literal colors/metrics) — a card-colored Border filling the
+// frame (inset 8px) with an accent button composite centered inside it.
+func TestFluentButton(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "fluent_button", 200, 80, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		label := controls.NewTextBlock(face, "Accept").SetColor(th.Color.AccentText)
+
+		button := controls.NewBorder().
+			SetBackground(th.Color.Accent).
+			SetRadius(th.Metric.ControlCornerRadius).
+			SetPadding(render.Thickness{
+				Left: th.Metric.PaddingL, Right: th.Metric.PaddingL,
+				Top: th.Metric.PaddingM, Bottom: th.Metric.PaddingM,
+			}).
+			SetChild(label)
+		button.SetAlign(core.Center, core.Center)
+
+		card := controls.NewBorder().
+			SetBackground(th.Color.CardBackground).
+			SetRadius(th.Metric.CornerRadius).
+			SetChild(button)
+
+		inset := render.Rect{X: 8, Y: 8, W: 200 - 16, H: 80 - 16}
+		core.MeasureWidget(card, render.Size{W: inset.W, H: inset.H})
+		core.ArrangeWidget(card, inset)
+		core.RenderWidget(card, r)
 	})
 }

@@ -54,6 +54,11 @@ const (
 	KeyEnd       Key = 269
 )
 
+// KeyT identifies the T key. Unlike the named keys above (which GLFW numbers
+// starting at 256), GLFW numbers printable/letter keys by their ASCII code,
+// so 'T' == 84. Added for the gallery's Light/Dark theme-toggle shortcut.
+const KeyT Key = 84
+
 // Cursor identifies a cursor shape.
 type Cursor uint8
 
