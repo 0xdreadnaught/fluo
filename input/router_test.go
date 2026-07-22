@@ -339,6 +339,26 @@ func TestWheelUnderCapture(t *testing.T) {
 // clearing capture outright. This is what lets a popup-internal drag (e.g.
 // a ScrollViewer thumb) release cleanly back into an OverlayHost's own modal
 // capture instead of dropping it.
+// TestCaptureTopIdempotent is the regression for the multi-popup capture
+// leak: Capture(a) called twice in a row (a already IS the current top)
+// must not push a second stack entry — otherwise a single Release would
+// leave a's own capture still active, wedging dispatch. A genuinely
+// different widget still nests normally (covered by
+// TestNestedCaptureRestores).
+func TestCaptureTopIdempotent(t *testing.T) {
+	a := &probe{name: "a"}
+
+	r := input.NewRouter()
+
+	r.Capture(a)
+	r.Capture(a) // re-asserting the same top must be a no-op, not a second push
+
+	r.Release()
+	if got := r.Captured(); got != nil {
+		t.Fatalf("Captured() after one Release() following two Capture(a) calls = %v, want nil (second Capture(a) must not have pushed)", got)
+	}
+}
+
 func TestNestedCaptureRestores(t *testing.T) {
 	a := &probe{name: "a"}
 	b := &probe{name: "b"}

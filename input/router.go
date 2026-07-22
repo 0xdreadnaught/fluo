@@ -100,7 +100,20 @@ func (r *Router) Clipboard() Clipboard {
 // controls.OverlayHost.OnPointer); if a widget inside that popup (a
 // ScrollViewer thumb, say) captures for its own drag, releasing that drag
 // must restore the host's modal capture, not silently drop it.
+//
+// Capture is idempotent when w already IS the current top of the stack: it
+// does nothing rather than pushing a second identical entry. Without this, a
+// caller that re-asserts its own capture repeatedly (e.g. OverlayHost.
+// ShowPopup calling r.Capture(h) again for every additional popup opened
+// while h already holds the grab from the first) would accumulate one stack
+// entry per call, and a single matching Release would only pop one of them
+// — leaving Captured() == w even after the caller believes it fully
+// released, permanently wedging pointer dispatch. Capture with a genuinely
+// DIFFERENT widget than the current top still nests normally.
 func (r *Router) Capture(w core.Widget) {
+	if len(r.captureStack) > 0 && r.captureStack[len(r.captureStack)-1] == w {
+		return
+	}
 	r.captureStack = append(r.captureStack, w)
 }
 

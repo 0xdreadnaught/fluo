@@ -305,6 +305,57 @@ func TestPopupInternalCaptureRestoresHost(t *testing.T) {
 	}
 }
 
+// TestMultiPopupCloseRestoresPointerFlow is the overlay-level regression for
+// the multi-popup capture leak: opening a SECOND popup while the host
+// already holds the capture (from the first) must not push a second,
+// redundant entry onto the router's capture stack — otherwise closing both
+// popups would leave one stale "host" entry behind, Captured() would still
+// report the host with zero popups open, OnPointer's len(h.popups)==0
+// early-return would swallow every future press, and pointer input would be
+// permanently dead. After closing both popups, a press at the content
+// probe's position must actually reach it, and Captured() must be nil.
+func TestMultiPopupCloseRestoresPointerFlow(t *testing.T) {
+	probe := &ovProbe{}
+	probe.SetWidth(400)
+	probe.SetHeight(300)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(probe)
+	r.SetRoot(host) // BEFORE ShowPopup: SetRoot itself resets any capture
+
+	first := NewFixed(60, 30, render.RGB(1, 0, 0))
+	second := NewFixed(40, 20, render.RGB(0, 1, 0))
+	host.ShowPopup(first, render.Rect{X: 10, Y: 10, W: 10, H: 10}, nil)
+	host.ShowPopup(second, render.Rect{X: 200, Y: 10, W: 10, H: 10}, nil)
+	layoutOverlay(host, 400, 300)
+
+	if got := r.Captured(); got != core.Widget(host) {
+		t.Fatalf("Captured() with two popups open = %v, want host", got)
+	}
+
+	host.CloseTopPopup() // closes second; first still open, host still captured
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after closing one of two = %v, want 1", got)
+	}
+	host.CloseTopPopup() // closes first; stack now empty -> capture released
+
+	if got := host.PopupCount(); got != 0 {
+		t.Fatalf("PopupCount after closing both = %v, want 0", got)
+	}
+	if got := r.Captured(); got != nil {
+		t.Fatalf("Captured() after closing both popups = %v, want nil (fully released)", got)
+	}
+
+	// With capture released, an ordinary press must reach content normally.
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0)
+
+	if got := probe.events; len(got) != 1 || got[0] != "press" {
+		t.Fatalf("probe.events = %v, want [press] (pointer flow restored, not permanently swallowed)", got)
+	}
+}
+
 func TestOverlayClosePopupIdempotentAndDismissOnce(t *testing.T) {
 	host := NewOverlayHost()
 	popup := NewFixed(60, 30, render.RGB(4, 5, 6))
