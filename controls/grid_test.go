@@ -52,3 +52,14 @@ func TestGridAddOutOfRangePanics(t *testing.T) {
 	}()
 	NewGrid().Cols(Px(10)).Rows(Px(10)).Add(NewFixed(1, 1, render.Color{}), 0, 5)
 }
+
+func TestGridShrinkTracksPanics(t *testing.T) {
+	g := NewGrid().Cols(Px(10), Px(10), Px(10)).Rows(Px(10))
+	g.Add(NewFixed(1, 1, render.Color{}), 0, 2)
+	func() {
+		defer func() {
+			if recover() == nil { t.Fatal("expected panic") }
+		}()
+		g.Cols(Px(10))
+	}()
+}

@@ -62,6 +62,9 @@ type gridCell struct {
 //     that desired size and the cell it is arranged into.
 //   - When Rows or Cols is never called, that axis defaults to a single
 //     Star(1) track.
+//   - Rows/Cols re-validate every already-Added cell against the new track
+//     count, panicking rather than letting a later layout pass index out of
+//     range.
 type Grid struct {
 	core.Element
 
@@ -75,17 +78,31 @@ func NewGrid() *Grid {
 }
 
 // Rows sets the row tracks for this axis, replacing any previously set
-// rows. Layout-relevant: invalidates measure.
+// rows. Layout-relevant: invalidates measure. Panics if any already-Added
+// cell's row index no longer fits the new track count.
 func (g *Grid) Rows(tracks ...Track) *Grid {
 	g.rows = tracks
+	n := len(g.effectiveRows())
+	for _, c := range g.cells {
+		if c.row >= n {
+			panic(fmt.Sprintf("controls: Grid.Rows(%d tracks) invalidates existing cell at row %d", n, c.row))
+		}
+	}
 	g.InvalidateMeasure()
 	return g
 }
 
 // Cols sets the column tracks for this axis, replacing any previously set
-// columns. Layout-relevant: invalidates measure.
+// columns. Layout-relevant: invalidates measure. Panics if any already-Added
+// cell's col index no longer fits the new track count.
 func (g *Grid) Cols(tracks ...Track) *Grid {
 	g.cols = tracks
+	n := len(g.effectiveCols())
+	for _, c := range g.cells {
+		if c.col >= n {
+			panic(fmt.Sprintf("controls: Grid.Cols(%d tracks) invalidates existing cell at col %d", n, c.col))
+		}
+	}
 	g.InvalidateMeasure()
 	return g
 }
