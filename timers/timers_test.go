@@ -41,8 +41,17 @@ func TestStop(t *testing.T) {
 	n := 0
 	tm := q.Every(10*time.Millisecond, func() { n++ })
 	q.Advance(t0.Add(10 * time.Millisecond))
+	if q.Len() != 1 {
+		t.Fatalf("timer not in queue before stop")
+	}
 	tm.Stop()
+	if q.Len() != 0 {
+		t.Fatalf("timer still in queue after stop")
+	}
 	tm.Stop() // idempotent
+	if q.Len() != 0 {
+		t.Fatalf("timer back in queue after idempotent stop")
+	}
 	q.Advance(t0.Add(50 * time.Millisecond))
 	if n != 1 {
 		t.Fatalf("n=%d", n)

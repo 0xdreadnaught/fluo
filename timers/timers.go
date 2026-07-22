@@ -14,12 +14,11 @@ type Queue struct {
 
 // Timer represents a scheduled callback, either one-shot (After) or repeating (Every).
 type Timer struct {
-	due      time.Time
-	period   time.Duration // 0 for one-shot (After), >0 for repeating (Every)
-	fn       func()
-	stopped  bool
-	queue    *Queue // back-reference to remove from queue on Stop
-	queueIdx int    // index in queue.items for O(1) removal
+	due     time.Time
+	period  time.Duration // 0 for one-shot (After), >0 for repeating (Every)
+	fn      func()
+	stopped bool
+	queue   *Queue // back-reference to remove from queue on Stop
 }
 
 // NewQueue creates a new timer queue starting at the given time.
@@ -122,14 +121,20 @@ func (q *Queue) Len() int {
 	return len(q.items)
 }
 
-// Stop cancels the timer. It is idempotent.
+// Stop cancels the timer and removes it from the queue immediately. It is idempotent.
 func (t *Timer) Stop() {
 	if t.stopped {
 		return
 	}
 	t.stopped = true
 
-	// Remove from queue by setting a marker; Advance will skip it
-	// We could also remove it immediately but that's more complex during Advance
-	// For now we just mark it stopped and Advance will skip the callback
+	// Remove from queue immediately
+	if t.queue != nil {
+		for i, timer := range t.queue.items {
+			if timer == t {
+				t.queue.items = append(t.queue.items[:i], t.queue.items[i+1:]...)
+				break
+			}
+		}
+	}
 }
