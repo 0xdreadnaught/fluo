@@ -238,15 +238,53 @@ func ArrangeWidget(w Widget, final render.Rect) {
 	e.arrangeClean = true
 }
 
+// ClipProvider is an optional interface for widgets that clip their
+// children's rendering to a rectangle (e.g. ScrollViewer clipping its
+// scrolled content to its viewport). ClipRect returns the rectangle to clip
+// to and whether clipping should actually be applied this frame; returning
+// ok == false (or not implementing the interface at all) renders children
+// unclipped.
+type ClipProvider interface{ ClipRect() (render.Rect, bool) }
+
+// OverlayRenderer is an optional interface for widgets that draw content
+// ABOVE their children — scrollbars, adorners, selection handles, and the
+// like. RenderOverlay runs after children (and after any PopClip), so
+// overlays are never clipped by the widget's own ClipRect.
+type OverlayRenderer interface{ RenderOverlay(r render.Renderer) }
+
 // RenderWidget draws w and, in order, its children. Hidden widgets (and
 // their entire subtree) are skipped.
+//
+// Full order: w.Render(r) → [PushClip if w is a ClipProvider with ok==true]
+// → children (each recursively via RenderWidget) → [PopClip, matching the
+// push above] → [w.RenderOverlay(r) if w is an OverlayRenderer]. Clipping
+// wraps only the children; the widget's own Render and any OverlayRenderer
+// draw unclipped, so a widget can always paint its own chrome (and any
+// overlay adornments) outside the region it clips its content to.
 func RenderWidget(w Widget, r render.Renderer) {
 	e := w.element()
 	if e.hidden {
 		return
 	}
 	w.Render(r)
+
+	clipped := false
+	if cp, ok := w.(ClipProvider); ok {
+		if rect, apply := cp.ClipRect(); apply {
+			r.PushClip(rect)
+			clipped = true
+		}
+	}
+
 	for _, c := range w.Children() {
 		RenderWidget(c, r)
+	}
+
+	if clipped {
+		r.PopClip()
+	}
+
+	if or, ok := w.(OverlayRenderer); ok {
+		or.RenderOverlay(r)
 	}
 }

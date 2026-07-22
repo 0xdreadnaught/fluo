@@ -38,10 +38,13 @@ before its dependencies. Check items off as they land. Design spec:
 - [ ] Cursor shapes (I-beam, hand, resize)
 - [ ] Frame tick / timer service (caret blink, tooltip delay, later animation)
 - [ ] `ScrollViewer` (needs input + clip)
-- [ ] **DPI gate (from Phase-1 final review):** verify `Ctx.Mouse.Pos` and `Ctx.Size`
+- [x] **DPI gate (from Phase-1 final review):** verify `Ctx.Mouse.Pos` and `Ctx.Size`
       share the same logical coordinate space on a scale≠1 display before wiring
       hit-testing — the Phase-1 host assumes cursor pos is logical (true at scale 1;
-      unverified at 2x)
+      unverified at 2x). Resolved in Phase 3 Task 5: `Ctx.Size` now comes from
+      `win.GetSize()` (GLFW window coordinates) instead of framebuffer/content-scale,
+      matching `win.GetCursorPos()`'s coordinate space by construction — see the
+      DPI comment block on `app.Run` in `app/window.go`.
 
 ## Phase 4 · Theming
 - [ ] Theme resource model (color/metric/typography/effect tokens)

@@ -171,6 +171,124 @@ func TestParentOf(t *testing.T) {
 	}
 }
 
+// recordRenderer is a minimal render.Renderer stub for exercising
+// RenderWidget's draw order. PushClip/PopClip append "push"/"pop" markers
+// to the shared ops slice (the same slice widgets append their own markers
+// to, from Render/RenderOverlay); every other method is a no-op since the
+// clip/overlay hook tests only care about ordering, not pixels.
+type recordRenderer struct {
+	ops *[]string
+}
+
+func (r *recordRenderer) Begin(fbWidth, fbHeight int, scale float32) {}
+func (r *recordRenderer) End()                                       {}
+func (r *recordRenderer) FillRect(rect render.Rect, c render.Color)  {}
+func (r *recordRenderer) FillRoundedRect(rect render.Rect, radius float32, c render.Color) {
+}
+func (r *recordRenderer) StrokeRoundedRect(rect render.Rect, radius, width float32, c render.Color) {
+}
+func (r *recordRenderer) DrawShadow(rect render.Rect, radius, blur float32, c render.Color) {}
+func (r *recordRenderer) CreateTexture(w, h int, rgba []byte) render.TextureID {
+	return render.NoTexture
+}
+func (r *recordRenderer) UpdateTexture(id render.TextureID, x, y, w, h int, rgba []byte) {}
+func (r *recordRenderer) DeleteTexture(id render.TextureID)                              {}
+func (r *recordRenderer) DrawQuad(dst, src render.Rect, tex render.TextureID, tint render.Color) {
+}
+func (r *recordRenderer) DrawSDFQuads(quads []render.GlyphQuad, tex render.TextureID, c render.Color) {
+}
+func (r *recordRenderer) PushClip(rect render.Rect) { *r.ops = append(*r.ops, "push") }
+func (r *recordRenderer) PopClip()                  { *r.ops = append(*r.ops, "pop") }
+
+// clipStub is a Widget that always implements ClipProvider: its Render
+// appends name to the shared ops slice, and ClipRect reports (clip, hasClip)
+// so a test can opt in or out of actually clipping.
+type clipStub struct {
+	Element
+	ops      *[]string
+	name     string
+	hasClip  bool
+	clip     render.Rect
+	children []Widget
+}
+
+func (s *clipStub) MeasureContent(render.Size) render.Size { return render.Size{} }
+func (s *clipStub) ArrangeContent(render.Rect)             {}
+func (s *clipStub) Render(render.Renderer)                 { *s.ops = append(*s.ops, s.name) }
+func (s *clipStub) Children() []Widget                     { return s.children }
+func (s *clipStub) ClipRect() (render.Rect, bool)          { return s.clip, s.hasClip }
+
+// overlayStub is a Widget that always implements OverlayRenderer: its
+// Render and RenderOverlay each append a marker to the shared ops slice.
+type overlayStub struct {
+	Element
+	ops      *[]string
+	name     string
+	children []Widget
+}
+
+func (s *overlayStub) MeasureContent(render.Size) render.Size { return render.Size{} }
+func (s *overlayStub) ArrangeContent(render.Rect)             {}
+func (s *overlayStub) Render(render.Renderer)                 { *s.ops = append(*s.ops, s.name) }
+func (s *overlayStub) Children() []Widget                     { return s.children }
+func (s *overlayStub) RenderOverlay(render.Renderer)          { *s.ops = append(*s.ops, s.name+"-overlay") }
+
+func TestRenderWidgetClipsChildren(t *testing.T) {
+	var ops []string
+	child := &clipStub{ops: &ops, name: "child"}
+	parent := &clipStub{
+		ops: &ops, name: "self",
+		hasClip:  true,
+		clip:     render.Rect{X: 0, Y: 0, W: 10, H: 10},
+		children: []Widget{child},
+	}
+
+	RenderWidget(parent, &recordRenderer{ops: &ops})
+
+	want := []string{"self", "push", "child", "pop"}
+	if !slicesEqual(ops, want) {
+		t.Fatalf("ops = %v, want %v", ops, want)
+	}
+}
+
+func TestRenderWidgetClipsChildrenNoClipWhenNotApplied(t *testing.T) {
+	var ops []string
+	child := &clipStub{ops: &ops, name: "child"}
+	parent := &clipStub{ops: &ops, name: "self", hasClip: false, children: []Widget{child}}
+
+	RenderWidget(parent, &recordRenderer{ops: &ops})
+
+	want := []string{"self", "child"}
+	if !slicesEqual(ops, want) {
+		t.Fatalf("ops = %v, want %v (no push/pop when ClipRect ok==false)", ops, want)
+	}
+}
+
+func TestRenderWidgetOverlayAfterChildren(t *testing.T) {
+	var ops []string
+	child := &overlayStub{ops: &ops, name: "child"}
+	parent := &overlayStub{ops: &ops, name: "self", children: []Widget{child}}
+
+	RenderWidget(parent, &recordRenderer{ops: &ops})
+
+	want := []string{"self", "child", "child-overlay", "self-overlay"}
+	if !slicesEqual(ops, want) {
+		t.Fatalf("ops = %v, want %v", ops, want)
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestIsVisible(t *testing.T) {
 	s := &stub{contentW: 50, contentH: 20}
 	if !IsVisible(s) {
