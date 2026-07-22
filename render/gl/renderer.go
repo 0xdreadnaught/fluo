@@ -5,6 +5,7 @@ package gl
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/go-gl/gl/v3.3-core/gl"
 
@@ -117,14 +118,23 @@ func (rd *Renderer) FillRect(r render.Rect, c render.Color) {
 	rd.quad(0, r, render.Rect{}, c, [4]float32{}, [2]float32{}, rd.whiteTex)
 }
 
+// rectParams returns the rect center and half-dimensions for shader SDF calculations.
+func rectParams(r render.Rect) [4]float32 {
+	return [4]float32{r.X + r.W/2, r.Y + r.H/2, r.W / 2, r.H / 2}
+}
+
 // FillRoundedRect fills a rectangle with rounded corners with a solid color.
 func (rd *Renderer) FillRoundedRect(r render.Rect, radius float32, c render.Color) {
-	panic("gl: FillRoundedRect not implemented (Task 5)")
+	// Clamp radius to not exceed half the rectangle dimensions
+	radius = float32(math.Min(float64(radius), math.Min(float64(r.W/2), float64(r.H/2))))
+	rd.quad(3, r, render.Rect{}, c, rectParams(r), [2]float32{radius, 0}, rd.whiteTex)
 }
 
 // StrokeRoundedRect draws the stroke of a rectangle with rounded corners.
 func (rd *Renderer) StrokeRoundedRect(r render.Rect, radius, width float32, c render.Color) {
-	panic("gl: StrokeRoundedRect not implemented (Task 5)")
+	// Clamp radius to not exceed half the rectangle dimensions
+	radius = float32(math.Min(float64(radius), math.Min(float64(r.W/2), float64(r.H/2))))
+	rd.quad(4, r, render.Rect{}, c, rectParams(r), [2]float32{radius, width}, rd.whiteTex)
 }
 
 // DrawShadow draws a soft shadow of a rounded rectangle.

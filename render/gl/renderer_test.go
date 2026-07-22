@@ -43,3 +43,16 @@ func TestClip(t *testing.T) {
 		r.FillRect(render.Rect{X: 100, Y: 70, W: 40, H: 40}, render.RGB(16, 124, 16)) // unclipped again
 	})
 }
+
+func TestRoundedFill(t *testing.T) {
+	testFrame(t, "rounded_fill", 128, 96, func(r *glr.Renderer) {
+		r.FillRoundedRect(render.Rect{X: 10, Y: 10, W: 80, H: 50}, 8, render.RGB(0, 120, 215))
+		r.FillRoundedRect(render.Rect{X: 60, Y: 40, W: 50, H: 50}, 25, render.RGB(255, 185, 0)) // circle
+	})
+}
+
+func TestRoundedStroke(t *testing.T) {
+	testFrame(t, "rounded_stroke", 128, 96, func(r *glr.Renderer) {
+		r.StrokeRoundedRect(render.Rect{X: 10, Y: 10, W: 100, H: 70}, 8, 2, render.RGB(255, 255, 255))
+	})
+}
