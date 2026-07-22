@@ -25,6 +25,12 @@ type probe struct {
 	router    *input.Router // set by the test; used by capturing and reclaim
 	capturing bool
 
+	// lastTarget records e.Target from the most recent OnPointer call, so
+	// capture-delivery tests (TestReleaseUnderCapture, TestWheelUnderCapture)
+	// can assert Target == the captured widget even when the event's
+	// position falls outside that widget's bounds.
+	lastTarget core.Widget
+
 	// reclaim: if true, OnFocusChanged(false) reentrantly calls
 	// router.Focus(p) to try to reclaim focus for itself (regression probe
 	// for TestFocusReentrancyIgnored — the router's guard must ignore this).
@@ -45,6 +51,7 @@ type probe struct {
 func (p *probe) AcceptsFocus() bool   { return p.focusable }
 func (p *probe) Cursor() input.Cursor { return p.cursor }
 func (p *probe) OnPointer(e *input.PointerEvent) {
+	p.lastTarget = e.Target
 	switch e.Action {
 	case input.Press:
 		p.events = append(p.events, "press")
@@ -260,6 +267,72 @@ func TestCaptureRoutesAll(t *testing.T) {
 	}
 }
 
+func TestReleaseUnderCapture(t *testing.T) {
+	a := &probe{name: "a", capturing: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	b := &probe{name: "b"}
+	b.SetWidth(50)
+	b.SetHeight(50)
+	root := controls.NewCanvas().Add(a, 0, 0).Add(b, 60, 0)
+	layout(root, 200, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // press on a -> captures
+	if r.Captured() != core.Widget(a) {
+		t.Fatalf("Captured() = %v, want a", r.Captured())
+	}
+
+	// Release at a point OUTSIDE a's bounds (in fact inside b's): still goes
+	// only to the captured widget (a), with Target == a, and b sees nothing.
+	r.PointerButton(input.ButtonLeft, false, render.Point{X: 70, Y: 10}, 0)
+
+	if got := a.events; len(got) != 2 || got[1] != "release" {
+		t.Fatalf("a.events = %v, want [press release]", got)
+	}
+	if a.lastTarget != core.Widget(a) {
+		t.Fatalf("release Target = %v, want a", a.lastTarget)
+	}
+	if got := b.events; len(got) != 0 {
+		t.Fatalf("b.events = %v, want none (release routed to captured widget only)", got)
+	}
+}
+
+func TestWheelUnderCapture(t *testing.T) {
+	a := &probe{name: "a", capturing: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	b := &probe{name: "b"}
+	b.SetWidth(50)
+	b.SetHeight(50)
+	root := controls.NewCanvas().Add(a, 0, 0).Add(b, 60, 0)
+	layout(root, 200, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // press on a -> captures
+	if r.Captured() != core.Widget(a) {
+		t.Fatalf("Captured() = %v, want a", r.Captured())
+	}
+
+	// Wheel at a point OUTSIDE a's bounds (in fact inside b's): still goes
+	// only to the captured widget (a), with Target == a, and b sees nothing.
+	r.PointerWheel(render.Point{X: 0, Y: 1}, render.Point{X: 70, Y: 10}, 0)
+
+	if got := a.events; len(got) != 2 || got[1] != "wheel" {
+		t.Fatalf("a.events = %v, want [press wheel]", got)
+	}
+	if a.lastTarget != core.Widget(a) {
+		t.Fatalf("wheel Target = %v, want a", a.lastTarget)
+	}
+	if got := b.events; len(got) != 0 {
+		t.Fatalf("b.events = %v, want none (wheel routed to captured widget only)", got)
+	}
+}
+
 func TestWheelBubbles(t *testing.T) {
 	leaf := &probe{name: "leaf"}
 	leaf.SetWidth(50)
@@ -276,7 +349,7 @@ func TestWheelBubbles(t *testing.T) {
 	}
 }
 
-func TestClickFocusesAndDefocuses(t *testing.T) {
+func TestClickFocusRetainedOnNonFocusable(t *testing.T) {
 	p := &probe{name: "p", focusable: true}
 	p.SetWidth(50)
 	p.SetHeight(50)
@@ -294,12 +367,80 @@ func TestClickFocusesAndDefocuses(t *testing.T) {
 		t.Fatalf("p.events = %v, want [focus:true press]", got)
 	}
 
+	// Pressing on empty canvas (no Focusable on the hit path) RETAINS focus —
+	// it neither clears it nor fires OnFocusChanged on p.
 	r.PointerButton(input.ButtonLeft, true, render.Point{X: 90, Y: 90}, 0) // press on empty canvas
+	if r.Focused() != core.Widget(p) {
+		t.Fatalf("Focused() after empty-space click = %v, want p (retained)", r.Focused())
+	}
+	if got := p.events; len(got) != 2 {
+		t.Fatalf("p.events after empty-space click = %v, want unchanged [focus:true press] (no focus:false)", got)
+	}
+
+	// The programmatic path, Focus(nil), still clears focus explicitly.
+	r.Focus(nil)
 	if r.Focused() != nil {
-		t.Fatalf("Focused() after empty-space click = %v, want nil", r.Focused())
+		t.Fatalf("Focused() after Focus(nil) = %v, want nil", r.Focused())
 	}
 	if got := p.events; len(got) != 3 || got[2] != "focus:false" {
-		t.Fatalf("p.events = %v, want [focus:true press focus:false]", got)
+		t.Fatalf("p.events after Focus(nil) = %v, want [focus:true press focus:false]", got)
+	}
+}
+
+// TestSetRootResetsState is a regression test for SetRoot's state-hygiene
+// contract: swapping the root widget tree must not leave hover, capture, or
+// focus pointing at widgets from the tree that's being replaced. Without the
+// reset, a widget from the old tree could keep the pointer grab or keyboard
+// focus indefinitely (nothing in the new tree can ever release/blur it), and
+// a stale hover path would fire a spurious Leave for it on the very next
+// PointerMove over the new tree.
+func TestSetRootResetsState(t *testing.T) {
+	a := &probe{name: "a", focusable: true, capturing: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	rootA := controls.NewCanvas().Add(a, 0, 0)
+	layout(rootA, 100, 100)
+
+	rootB := controls.NewCanvas() // a disjoint tree with nothing at (10,10)
+	layout(rootB, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(rootA)
+
+	r.PointerMove(render.Point{X: 10, Y: 10}, 0)                           // hover over a: enter+move
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // focus a, and (capturing) capture a
+	if r.Focused() != core.Widget(a) {
+		t.Fatalf("Focused() = %v, want a", r.Focused())
+	}
+	if r.Captured() != core.Widget(a) {
+		t.Fatalf("Captured() = %v, want a", r.Captured())
+	}
+
+	before := len(a.events)
+
+	r.SetRoot(rootB)
+	if r.Focused() != nil {
+		t.Fatalf("Focused() after SetRoot(treeB) = %v, want nil", r.Focused())
+	}
+	if r.Captured() != nil {
+		t.Fatalf("Captured() after SetRoot(treeB) = %v, want nil", r.Captured())
+	}
+	// Focus is cleared via the normal Focus(nil) path, so a still sees its
+	// OnFocusChanged(false) notification.
+	if got := a.events; len(got) != before+1 || got[len(got)-1] != "focus:false" {
+		t.Fatalf("a.events after SetRoot(treeB) = %v, want exactly one more [focus:false] appended", got)
+	}
+
+	afterReset := len(a.events)
+
+	// A PointerMove over treeB at the same coordinates a used to occupy must
+	// NOT fire a Leave on a: hover was reset outright, not diffed against the
+	// (now unreachable) tree-A path.
+	r.PointerMove(render.Point{X: 10, Y: 10}, 0)
+	for _, e := range a.events[afterReset:] {
+		if e == "leave" {
+			t.Fatalf("a.events after post-SetRoot move = %v, want no \"leave\" for tree-A widgets", a.events)
+		}
 	}
 }
 
@@ -448,6 +589,7 @@ func TestNilRootSafe(t *testing.T) {
 	r.PointerButton(input.ButtonLeft, false, render.Point{X: 1, Y: 1}, 0)
 	r.PointerWheel(render.Point{X: 0, Y: 1}, render.Point{X: 1, Y: 1}, 0)
 	r.KeyDown(input.KeyEnter, 0, 0)
+	r.KeyDown(input.KeyTab, 0, 0) // unhandled Tab reaches FocusNext's rootless no-op
 	r.KeyUp(input.KeyEnter, 0)
 	// Reaching here without a panic is the assertion; nothing above has an
 	// observable effect on a rootless router beyond the cursor check.

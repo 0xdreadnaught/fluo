@@ -45,9 +45,17 @@ func NewRouter() *Router {
 	return &Router{}
 }
 
-// SetRoot sets the root widget for this router.
+// SetRoot sets the root widget for this router. SetRoot resets hover,
+// capture, and focus: the previous tree's hover path and pointer capture are
+// discarded directly (no Enter/Leave or capture-release notifications fire
+// for widgets that are about to become unreachable), while focus is cleared
+// via Focus(nil) so OnFocusChanged(false) still fires normally on whatever
+// widget previously held it.
 func (r *Router) SetRoot(w core.Widget) {
 	r.root = w
+	r.hover = nil
+	r.captured = nil
+	r.Focus(nil)
 }
 
 // Root returns the root widget for this router.
@@ -81,6 +89,21 @@ func deliverDirect(w core.Widget, e *PointerEvent) {
 	if h, ok := w.(PointerHandler); ok {
 		h.OnPointer(e)
 	}
+}
+
+// deliverCaptured builds a PointerEvent for action (with the given pos,
+// button, delta, and mods — callers pass the zero value for whichever of
+// button/delta don't apply to their action) targeted at r.captured, and
+// delivers it directly (no hit-testing, no bubbling), returning the event so
+// callers that need the captured widget's own cursor (PointerMove) can
+// inspect it afterward. Shared by PointerMove/PointerButton/PointerWheel's
+// captured branch, which is otherwise identical across all three: build an
+// event with Target = r.captured, deliver it direct, done — even when the
+// event's position falls outside the captured widget's bounds.
+func (r *Router) deliverCaptured(action Action, pos render.Point, button Button, delta render.Point, mods Modifiers) *PointerEvent {
+	e := &PointerEvent{Action: action, Pos: pos, Button: button, Delta: delta, Mods: mods, Target: r.captured, Router: r}
+	deliverDirect(r.captured, e)
+	return e
 }
 
 // dispatchBubble delivers e leaf→root along path: every widget on path that
@@ -155,8 +178,7 @@ func (r *Router) updateHover(newPath []core.Widget) {
 // leaf→root, and returns the cursor from the new hover path.
 func (r *Router) PointerMove(p render.Point, mods Modifiers) Cursor {
 	if r.captured != nil {
-		e := &PointerEvent{Action: Move, Pos: p, Mods: mods, Target: r.captured, Router: r}
-		deliverDirect(r.captured, e)
+		r.deliverCaptured(Move, p, 0, render.Point{}, mods)
 		if cs, ok := r.captured.(CursorShaper); ok {
 			return cs.Cursor()
 		}
@@ -186,8 +208,7 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 	}
 
 	if r.captured != nil {
-		e := &PointerEvent{Action: action, Pos: p, Button: b, Mods: mods, Target: r.captured, Router: r}
-		deliverDirect(r.captured, e)
+		r.deliverCaptured(action, p, b, render.Point{}, mods)
 		return
 	}
 	// No root set yet and nothing captured: nothing to hit-test or focus.
@@ -207,8 +228,7 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 // captured widget if one holds the pointer grab.
 func (r *Router) PointerWheel(delta render.Point, p render.Point, mods Modifiers) {
 	if r.captured != nil {
-		e := &PointerEvent{Action: Wheel, Pos: p, Delta: delta, Mods: mods, Target: r.captured, Router: r}
-		deliverDirect(r.captured, e)
+		r.deliverCaptured(Wheel, p, 0, delta, mods)
 		return
 	}
 	// No root set yet and nothing captured: nothing to hit-test.
@@ -224,8 +244,10 @@ func (r *Router) PointerWheel(delta render.Point, p render.Point, mods Modifiers
 // leaf) of an uncaptured press, it walks leaf→root and focuses the first
 // widget that implements Focusable with AcceptsFocus() == true. If no widget
 // on the path qualifies — including an empty path, i.e. a press that hit
-// nothing — focus is cleared. Focus itself is a no-op when the target is
-// already focused.
+// nothing — focus is RETAINED: pressing on a non-focusable widget (or empty
+// space) leaves whatever is currently focused alone rather than clearing it.
+// Focus(nil) remains available for callers that want to clear focus
+// explicitly. Focus itself is a no-op when the target is already focused.
 func (r *Router) focusFromPath(path []core.Widget) {
 	for i := len(path) - 1; i >= 0; i-- {
 		if f, ok := path[i].(Focusable); ok && f.AcceptsFocus() {
@@ -233,7 +255,6 @@ func (r *Router) focusFromPath(path []core.Widget) {
 			return
 		}
 	}
-	r.Focus(nil)
 }
 
 // Focus sets w as the focused widget, or clears focus entirely when w is

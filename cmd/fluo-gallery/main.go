@@ -47,18 +47,21 @@ func (s *swatch) MeasureContent(available render.Size) render.Size {
 	return render.Size{W: s.w, H: s.h}
 }
 
-// Render fills the color block, then draws a 2px white stroke when hovered
-// and a 2px accent stroke when selected (both may be visible at once).
+// Render fills the color block, then draws a 2px accent stroke at the
+// swatch's own bounds when selected, and a 2px white stroke inset 3px from
+// those bounds when hovered — the inset keeps the two strokes from
+// overdrawing each other, so a swatch that is both hovered and selected
+// shows both rings distinctly instead of one overpainting the other.
 func (s *swatch) Render(r render.Renderer) {
 	b := s.Bounds()
 	if s.color.A != 0 {
 		r.FillRect(b, s.color)
 	}
-	if s.hover {
-		r.StrokeRoundedRect(b, 0, 2, render.RGB(255, 255, 255))
-	}
 	if s.selected {
 		r.StrokeRoundedRect(b, 0, 2, accent)
+	}
+	if s.hover {
+		r.StrokeRoundedRect(b.Inset(render.Uniform(3)), 0, 2, render.RGB(255, 255, 255))
 	}
 }
 

@@ -87,25 +87,29 @@ func (q *Queue) Advance(now time.Time) {
 			tm.fn()
 		}
 
-		// Handle rescheduling or removal (by identity, in case callback stopped/removed tm)
-		// Check if tm is still in the queue (callback might have called Stop())
-		stillPresent := false
-		for _, t := range q.items {
+		// Handle rescheduling or removal with a single index-of scan (by
+		// identity, in case the callback stopped/removed tm itself): find
+		// tm's current index once, then either reschedule it in place or
+		// splice it out — no separate "is it still present" pass followed by
+		// a second identity scan to remove it.
+		idx := -1
+		for i, t := range q.items {
 			if t == tm {
-				stillPresent = true
+				idx = i
 				break
 			}
 		}
-
-		if stillPresent && tm.period > 0 && !tm.stopped {
+		switch {
+		case idx == -1:
+			// Already removed (by Stop() or other means) during the callback.
+		case tm.period > 0 && !tm.stopped:
 			// Repeating timer that's still in queue and not stopped: reschedule for next period
 			tm.due = tm.due.Add(tm.period)
 			// Re-sort and continue
-		} else if stillPresent {
-			// One-shot or stopped timer that's still in queue: remove by identity
-			q.remove(tm)
+		default:
+			// One-shot or stopped timer that's still in queue: splice it out by index
+			q.items = append(q.items[:idx], q.items[idx+1:]...)
 		}
-		// If not stillPresent, it was already removed (by Stop() or other means)
 	}
 
 	// Final update to reflect the actual advance time
@@ -151,11 +155,6 @@ func (t *Timer) Stop() {
 
 	// Remove from queue immediately
 	if t.queue != nil {
-		for i, timer := range t.queue.items {
-			if timer == t {
-				t.queue.items = append(t.queue.items[:i], t.queue.items[i+1:]...)
-				break
-			}
-		}
+		t.queue.remove(t)
 	}
 }

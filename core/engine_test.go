@@ -2,6 +2,7 @@ package core
 
 import (
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/0xdreadnaught/fluo/render"
@@ -246,7 +247,7 @@ func TestRenderWidgetClipsChildren(t *testing.T) {
 	RenderWidget(parent, &recordRenderer{ops: &ops})
 
 	want := []string{"self", "push", "child", "pop"}
-	if !slicesEqual(ops, want) {
+	if !slices.Equal(ops, want) {
 		t.Fatalf("ops = %v, want %v", ops, want)
 	}
 }
@@ -259,7 +260,7 @@ func TestRenderWidgetClipsChildrenNoClipWhenNotApplied(t *testing.T) {
 	RenderWidget(parent, &recordRenderer{ops: &ops})
 
 	want := []string{"self", "child"}
-	if !slicesEqual(ops, want) {
+	if !slices.Equal(ops, want) {
 		t.Fatalf("ops = %v, want %v (no push/pop when ClipRect ok==false)", ops, want)
 	}
 }
@@ -272,21 +273,9 @@ func TestRenderWidgetOverlayAfterChildren(t *testing.T) {
 	RenderWidget(parent, &recordRenderer{ops: &ops})
 
 	want := []string{"self", "child", "child-overlay", "self-overlay"}
-	if !slicesEqual(ops, want) {
+	if !slices.Equal(ops, want) {
 		t.Fatalf("ops = %v, want %v", ops, want)
 	}
-}
-
-func slicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func TestIsVisible(t *testing.T) {

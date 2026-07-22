@@ -9,8 +9,8 @@ import (
 // contain p. Hidden widgets (core.IsVisible false) are skipped along with
 // their subtrees. Children are tested LAST-to-first (topmost painted wins).
 // A widget is on the path only if its own bounds contain p. Empty if the root
-// misses. Root need not contain p for children to be tested? NO — the root
-// must contain p (bounds gate applies at every level).
+// misses. The bounds gate applies at every level, including the root: a point
+// outside a widget's bounds never reaches its children.
 func HitPath(root core.Widget, p render.Point) []core.Widget {
 	// A nil root (Router used before SetRoot, or an empty tree) hits nothing.
 	// Guard this before touching root at all: core.IsVisible/BoundsOf call
