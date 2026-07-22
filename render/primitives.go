@@ -7,12 +7,7 @@ type Color struct {
 
 // RGB creates a color from 8-bit red, green, and blue components with full alpha.
 func RGB(r, g, b uint8) Color {
-	return Color{
-		R: float32(r) / 255,
-		G: float32(g) / 255,
-		B: float32(b) / 255,
-		A: 1,
-	}
+	return RGBA(r, g, b, 255)
 }
 
 // RGBA creates a color from 8-bit red, green, blue, and alpha components.
@@ -118,13 +113,3 @@ func (r Rect) Inset(t Thickness) Rect {
 	}
 }
 
-// TextureID uniquely identifies a texture, with 0 meaning no texture.
-type TextureID uint32
-
-// NoTexture is a TextureID representing no texture.
-const NoTexture TextureID = 0
-
-// GlyphQuad represents a glyph quad with destination and source rectangles.
-type GlyphQuad struct {
-	Dst, Src Rect
-}

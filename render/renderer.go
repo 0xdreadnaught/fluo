@@ -1,5 +1,16 @@
 package render
 
+// TextureID uniquely identifies a texture, with 0 meaning no texture.
+type TextureID uint32
+
+// NoTexture is a TextureID representing no texture.
+const NoTexture TextureID = 0
+
+// GlyphQuad represents a glyph quad with destination and source rectangles.
+type GlyphQuad struct {
+	Dst, Src Rect
+}
+
 // Renderer is the interface for rendering graphics operations.
 type Renderer interface {
 	// Begin starts a new frame with the given framebuffer dimensions (in device pixels) and scale factor.
