@@ -188,3 +188,38 @@ func TestFluentButton(t *testing.T) {
 		core.RenderWidget(card, r)
 	})
 }
+
+// TestButtons is the Phase 5 Task 3 golden: three controls.Button instances
+// side by side in a StackPanel — default, accent, and disabled — proving
+// their token-driven fills/strokes/label colors render correctly together.
+func TestButtons(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "buttons", 320, 60, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		def := controls.NewButton(face, "Button")
+		accent := controls.NewButton(face, "Accent").SetAccent(true)
+		disabled := controls.NewButton(face, "Disabled").SetEnabled(false)
+
+		row := controls.NewStackPanel(controls.Horizontal).SetGap(12).Add(def, accent, disabled)
+
+		frame := render.Rect{X: 0, Y: 0, W: 320, H: 60}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(row, render.Size{W: frame.W, H: frame.H})
+		desired := core.DesiredSizeOf(row)
+		bounds := render.Rect{
+			X: (frame.W - desired.W) / 2, Y: (frame.H - desired.H) / 2,
+			W: desired.W, H: desired.H,
+		}
+		core.ArrangeWidget(row, bounds)
+		core.RenderWidget(row, r)
+	})
+}

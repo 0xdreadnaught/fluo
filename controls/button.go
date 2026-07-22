@@ -1,0 +1,315 @@
+package controls
+
+import (
+	"github.com/0xdreadnaught/fluo/core"
+	"github.com/0xdreadnaught/fluo/input"
+	"github.com/0xdreadnaught/fluo/render"
+	"github.com/0xdreadnaught/fluo/text"
+	"github.com/0xdreadnaught/fluo/theme"
+)
+
+// Button is a clickable, focusable, token-styled push button showing a text
+// label. It is a composite widget: its own Render paints the fill/stroke
+// chrome (varying by accent/hover/pressed/disabled state), RenderOverlay
+// paints the focus ring while focused, and its label TextBlock is arranged
+// centered within the padded content rect. Colors and metrics are captured
+// from theme.Active() at construction (rebuild to re-theme, matching every
+// other control in this package).
+type Button struct {
+	core.Element
+
+	click ClickBehavior
+
+	label   *TextBlock
+	accent  bool
+	enabled bool
+	focused bool
+
+	colors  theme.ColorTokens
+	metrics theme.MetricTokens
+}
+
+// initButton fills b in place: builds the label, marks it enabled, captures
+// theme.Active()'s tokens, and parents the label to b. Factored out of
+// NewButton so NewToggleButton can initialize the Button EMBEDDED (by value)
+// inside a *ToggleButton directly at its final address, rather than building
+// a standalone *Button and copying it: copying a Button whose label already
+// has its parent set to the (about-to-be-discarded) standalone pointer would
+// leave the label's parent dangling, silently breaking InvalidateMeasure's
+// climb to the real container.
+func initButton(b *Button, face *text.Face, label string) {
+	th := theme.Active()
+	b.enabled = true
+	b.colors = th.Color
+	b.metrics = th.Metric
+	b.label = NewTextBlock(face, label)
+	core.SetParent(b.label, b)
+}
+
+// NewButton returns an enabled, non-accent Button showing label in face
+// (face may be nil, per TextBlock).
+func NewButton(face *text.Face, label string) *Button {
+	b := &Button{}
+	initButton(b, face, label)
+	return b
+}
+
+// OnClick sets the callback fired on a successful click (pointer
+// press-release-inside, or Space/Enter while focused). Replaces any
+// previously set callback; a nil fn is a valid, silent no-op.
+func (b *Button) OnClick(fn func()) *Button {
+	b.click.OnClick = fn
+	return b
+}
+
+// SetAccent switches between the default (ControlFill-family) chrome and the
+// accent (Accent-family, no stroke) chrome. Purely visual: no invalidation
+// needed since the host redraws every frame.
+func (b *Button) SetAccent(a bool) *Button {
+	b.accent = a
+	return b
+}
+
+// SetEnabled toggles whether the button accepts focus and pointer/keyboard
+// input. Disabling a currently-focused button does not itself clear router
+// focus (the button has no router reference) — callers that need that must
+// clear focus explicitly; a documented v0 simplification. Purely visual
+// otherwise: no invalidation needed.
+func (b *Button) SetEnabled(v bool) *Button {
+	b.enabled = v
+	return b
+}
+
+// Label returns the button's label TextBlock, for tests and customization
+// (e.g. overriding its color).
+func (b *Button) Label() *TextBlock {
+	return b.label
+}
+
+// padding returns the content inset: PaddingL horizontal, PaddingM vertical.
+func (b *Button) padding() render.Thickness {
+	return render.Thickness{
+		Left: b.metrics.PaddingL, Right: b.metrics.PaddingL,
+		Top: b.metrics.PaddingM, Bottom: b.metrics.PaddingM,
+	}
+}
+
+// MeasureContent measures the label within the available space reduced by
+// padding, then adds the padding back to its desired size.
+func (b *Button) MeasureContent(available render.Size) render.Size {
+	pad := b.padding()
+
+	availW := available.W - pad.Left - pad.Right
+	if availW < 0 {
+		availW = 0
+	}
+	availH := available.H - pad.Top - pad.Bottom
+	if availH < 0 {
+		availH = 0
+	}
+
+	core.MeasureWidget(b.label, render.Size{W: availW, H: availH})
+	d := core.DesiredSizeOf(b.label)
+
+	return render.Size{W: d.W + pad.Left + pad.Right, H: d.H + pad.Top + pad.Bottom}
+}
+
+// ArrangeContent arranges the label centered (both axes) within bounds inset
+// by padding. Centering (rather than filling) matters whenever the button
+// ends up wider/taller than its own desired size, e.g. stretched by a parent
+// panel.
+func (b *Button) ArrangeContent(bounds render.Rect) {
+	pad := b.padding()
+	inner := bounds.Inset(pad)
+	if inner.W < 0 {
+		inner.W = 0
+	}
+	if inner.H < 0 {
+		inner.H = 0
+	}
+
+	d := core.DesiredSizeOf(b.label)
+	x := inner.X + (inner.W-d.W)/2
+	y := inner.Y + (inner.H-d.H)/2
+	core.ArrangeWidget(b.label, render.Rect{X: x, Y: y, W: d.W, H: d.H})
+}
+
+// stateColors resolves the fill, stroke (zero-alpha means "no stroke"), and
+// label color for the button's current state:
+//
+//   - disabled: ControlFillDisabled/ControlStrokeDisabled/TextDisabled, or
+//     for an accent button, AccentDisabled fill with no stroke.
+//   - accent (enabled): Accent/AccentHover/AccentPressed fill, no stroke,
+//     AccentText label.
+//   - default (enabled): ControlFill/Hover/Pressed fill, ControlStroke
+//     stroke, TextPrimary label.
+func (b *Button) stateColors() (fill, stroke, label render.Color) {
+	c := b.colors
+
+	if !b.enabled {
+		if b.accent {
+			return c.AccentDisabled, render.Color{}, c.TextDisabled
+		}
+		return c.ControlFillDisabled, c.ControlStrokeDisabled, c.TextDisabled
+	}
+
+	if b.accent {
+		fill = c.Accent
+		switch {
+		case b.click.Pressed():
+			fill = c.AccentPressed
+		case b.click.Hover():
+			fill = c.AccentHover
+		}
+		return fill, render.Color{}, c.AccentText
+	}
+
+	fill = c.ControlFill
+	switch {
+	case b.click.Pressed():
+		fill = c.ControlFillPressed
+	case b.click.Hover():
+		fill = c.ControlFillHover
+	}
+	return fill, c.ControlStroke, c.TextPrimary
+}
+
+// Render paints the button's fill and (if visible) stroke, and recolors the
+// label for the current state; children (the label) render separately via
+// core.RenderWidget.
+func (b *Button) Render(r render.Renderer) {
+	fill, stroke, labelColor := b.stateColors()
+	bounds := b.Bounds()
+	radius := b.metrics.ControlCornerRadius
+
+	r.FillRoundedRect(bounds, radius, fill)
+	if stroke.A > 0 {
+		r.StrokeRoundedRect(bounds, radius, b.metrics.StrokeWidth, stroke)
+	}
+	b.label.SetColor(labelColor)
+}
+
+// RenderOverlay draws the focus ring while focused, per the global focus
+// constraint: StrokeRoundedRect on the button's bounds inflated by 2, radius
+// = control radius + 2, FocusStroke color and FocusStrokeWidth.
+func (b *Button) RenderOverlay(r render.Renderer) {
+	if !b.focused {
+		return
+	}
+	bounds := b.Bounds().Inflate(2)
+	radius := b.metrics.ControlCornerRadius + 2
+	r.StrokeRoundedRect(bounds, radius, b.metrics.FocusStrokeWidth, b.colors.FocusStroke)
+}
+
+// Children returns the label as the button's sole child.
+func (b *Button) Children() []core.Widget {
+	return []core.Widget{b.label}
+}
+
+// AcceptsFocus implements input.Focusable: a disabled button never accepts
+// focus.
+func (b *Button) AcceptsFocus() bool {
+	return b.enabled
+}
+
+// OnFocusChanged implements input.FocusHandler, tracking focus for the
+// focus-ring overlay and keyboard activation.
+func (b *Button) OnFocusChanged(focused bool) {
+	b.focused = focused
+}
+
+// OnPointer implements input.PointerHandler, delegating the entire
+// press/release/hover state machine to the embedded ClickBehavior while
+// disabled (ignoring pointer input outright, not merely failing to fire —
+// e.Handled is left false so the event keeps bubbling).
+func (b *Button) OnPointer(e *input.PointerEvent) {
+	if !b.enabled {
+		return
+	}
+	b.click.HandlePointer(e, b)
+}
+
+// OnKey implements input.KeyHandler: Space or Enter, on Press, activates the
+// button (fires OnClick) and marks the event handled. OnKey is only ever
+// invoked while this button is focused or an ancestor of the focused widget
+// (input.Router's key dispatch walks up from the focused widget), and a
+// disabled button can never hold focus in the first place; the enabled
+// check here is a defensive no-op guard, not load-bearing.
+func (b *Button) OnKey(e *input.KeyEvent) {
+	if !b.enabled || e.Action != input.Press {
+		return
+	}
+	if e.Key == input.KeySpace || e.Key == input.KeyEnter {
+		b.click.Activate()
+		e.Handled = true
+	}
+}
+
+// ToggleButton is a Button that toggles a boolean checked state on click,
+// rendering the checked state as accent-on (Accent-family fill, no stroke,
+// AccentText label) regardless of accent — it has no independent accent
+// flag of its own; checked IS the accent look, achieved by driving the
+// embedded Button's own SetAccent as checked changes.
+//
+// ToggleButton embeds Button BY VALUE and never overrides any of its
+// methods (OnPointer, Render, RenderOverlay, ...): Go method promotion is
+// static, so a promoted method always runs with a *Button receiver (pointing
+// at the embedded field), never a *ToggleButton one, and cannot itself know
+// it was reached via a ToggleButton to run different logic. Rather than
+// fight that, ToggleButton hooks its behavior through DATA the promoted
+// code already reads: the embedded ClickBehavior's OnClick function field.
+// NewToggleButton wires click.OnClick to a closure that toggles state, syncs
+// SetAccent, and fires the user's OnChanged — Button.OnClick(fn) (which
+// replaces that field wholesale) is therefore for plain Button use only and
+// must never be called on a ToggleButton.
+type ToggleButton struct {
+	Button
+
+	checked   bool
+	onChanged func(bool)
+}
+
+// NewToggleButton returns an unchecked, enabled ToggleButton showing label
+// in face.
+func NewToggleButton(face *text.Face, label string) *ToggleButton {
+	t := &ToggleButton{}
+	initButton(&t.Button, face, label)
+
+	t.click.OnClick = func() {
+		t.checked = !t.checked
+		t.Button.SetAccent(t.checked)
+		if t.onChanged != nil {
+			t.onChanged(t.checked)
+		}
+	}
+	return t
+}
+
+// Checked reports the current toggle state.
+func (t *ToggleButton) Checked() bool {
+	return t.checked
+}
+
+// SetChecked sets the toggle state programmatically. Normative: unlike a
+// click, SetChecked does NOT fire OnChanged — it is the plain setter
+// counterpart to the getter Checked, matching the rest of fluo's SetX
+// convention (SetText, SetAccent, ...), while OnChanged is reserved for
+// user-driven changes (clicks, keyboard activation). A no-op (no re-render
+// implications either way) when v already matches the current state.
+func (t *ToggleButton) SetChecked(v bool) *ToggleButton {
+	if t.checked == v {
+		return t
+	}
+	t.checked = v
+	t.Button.SetAccent(v)
+	return t
+}
+
+// OnChanged sets the callback fired with the new checked value whenever the
+// user toggles the button (click or Space/Enter) — never for a programmatic
+// SetChecked. Replaces any previously set callback; a nil fn is a valid,
+// silent no-op.
+func (t *ToggleButton) OnChanged(fn func(bool)) *ToggleButton {
+	t.onChanged = fn
+	return t
+}
