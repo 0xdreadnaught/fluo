@@ -35,16 +35,18 @@ func (r *recordingWidget) Children() []core.Widget { return nil }
 func TestScrollViewerThemeMetrics(t *testing.T) {
 	defer theme.SetActive(nil)
 
-	for _, th := range []*theme.Theme{theme.FluentLight(), theme.FluentDark()} {
-		theme.SetActive(th)
-		child := &recordingWidget{}
-		s := NewScrollViewer().SetChild(child)
-		core.MeasureWidget(s, render.Size{W: 100, H: 50})
+	// Use a custom theme with a distinctive ScrollGutter value to prove token wiring.
+	customTheme := theme.FluentDark()
+	customTheme.Metric.ScrollGutter = 20
+	theme.SetActive(customTheme)
 
-		want := float32(100) - theme.Active().Metric.ScrollGutter
-		if got := child.lastAvailable.W; got != want {
-			t.Fatalf("%s: child available width=%v, want %v (100 - gutter %v)", th.Name, got, want, theme.Active().Metric.ScrollGutter)
-		}
+	child := &recordingWidget{}
+	s := NewScrollViewer().SetChild(child)
+	core.MeasureWidget(s, render.Size{W: 100, H: 50})
+
+	want := float32(100) - 20
+	if got := child.lastAvailable.W; got != want {
+		t.Fatalf("child available width=%v, want %v (100 - 20)", got, want)
 	}
 }
 

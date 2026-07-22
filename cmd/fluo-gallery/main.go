@@ -259,7 +259,7 @@ func (g *galleryRoot) Children() []core.Widget { return []core.Widget{g.child} }
 // frame callback on the NEXT frame (a pending flag set here), not inline —
 // see toggle's construction in main for why.
 func (g *galleryRoot) OnKey(e *input.KeyEvent) {
-	if e.Action == input.Press && e.Key == input.KeyT {
+	if e.Action == input.Press && e.Key == input.KeyT && e.Mods == 0 {
 		g.toggle()
 		e.Handled = true
 	}

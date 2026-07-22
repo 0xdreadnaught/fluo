@@ -32,6 +32,9 @@ func TestLightDarkDiffer(t *testing.T) {
 	if l.Color.TextPrimary == d.Color.TextPrimary {
 		t.Fatal("text identical")
 	}
+	if l.Color.SelectionBackground == d.Color.SelectionBackground {
+		t.Fatal("selection background should differ between variants")
+	}
 	if l.Metric != d.Metric {
 		t.Fatal("metrics should be SHARED between variants")
 	}

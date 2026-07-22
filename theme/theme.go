@@ -10,7 +10,11 @@ type ColorTokens struct {
 	ControlFill, ControlFillHover, ControlFillPressed render.Color
 	ControlStroke, FocusStroke                        render.Color
 	ScrollThumb                                       render.Color
-	Shadow                                            render.Color
+	// SelectionBackground and SelectionText for selected text/content regions.
+	SelectionBackground, SelectionText render.Color
+	// ControlFillDisabled, ControlStrokeDisabled, and AccentDisabled for disabled control states.
+	ControlFillDisabled, ControlStrokeDisabled, AccentDisabled render.Color
+	Shadow                                                     render.Color
 }
 
 // MetricTokens holds the layout and sizing values for a theme.
@@ -38,6 +42,7 @@ type Theme struct {
 var active *Theme
 
 // Active returns the currently active theme, never nil (defaults to FluentDark).
+// Not safe for concurrent use; fluo v0 assumes a single UI goroutine and one active theme per process.
 func Active() *Theme {
 	if active == nil {
 		active = FluentDark()
@@ -46,6 +51,7 @@ func Active() *Theme {
 }
 
 // SetActive sets the active theme. If t is nil, resets to the default (FluentDark).
+// Not safe for concurrent use; fluo v0 assumes a single UI goroutine and one active theme per process.
 func SetActive(t *Theme) {
 	if t == nil {
 		active = nil
