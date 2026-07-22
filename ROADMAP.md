@@ -1,0 +1,84 @@
+# fluo Roadmap
+
+Dependency-ordered. A phase may start before the prior one is 100% done, but no node
+before its dependencies. Check items off as they land. Design spec:
+[`docs/superpowers/specs/2026-07-22-fluo-gui-toolkit-design.md`](docs/superpowers/specs/2026-07-22-fluo-gui-toolkit-design.md)
+
+## Phase 0 · Scaffolding
+- [ ] Module layout, LICENSE, README
+- [ ] CI: headless `go test` (GL tests auto-skip without a GPU)
+- [ ] Golden-image test harness (hidden glfw window + offscreen FBO pattern)
+
+## Phase 1 · Renderer + text  *(hardest bottom layer; unblocks everything visual)*
+- [ ] `render.Renderer` interface + primitives (Color/Point/Size/Rect/Thickness)
+- [ ] DPI scale factor plumbed through the renderer from day one
+- [ ] GL backend: batched colored-quad pipeline
+- [ ] SDF text: font load → glyph raster → atlas → `DrawText` (crisp at any scale)
+- [ ] Rounded-rect + anti-aliased fill/stroke shader
+- [ ] Clip stack (scissor/stencil)
+- [ ] Drop shadow + image draw
+- [ ] Golden-image tests for each primitive
+- [ ] **Minimal demo host**: glfw window + frame loop + input pump (polish waits for Phase 8)
+
+## Phase 2 · Layout engine  *(pure Go, headless-testable)*
+- [ ] `Widget` interface + base element (margin/padding/alignment/size/visibility)
+- [ ] Two-pass Measure → Arrange
+- [ ] Invalidation + reactive `Property[T]`
+- [ ] First widgets: `Border`, `TextBlock`, `StackPanel` (exercise the engine)
+- [ ] `Grid`, `DockPanel`, `WrapPanel`, `Canvas`
+- [ ] Headless layout-geometry tests
+- [ ] Gallery example app skeleton (grows a page per control from here on)
+
+## Phase 3 · Input & events  *(pure Go core + thin glfw pump)*
+- [ ] Event types; mouse/keyboard/wheel from glfw
+- [ ] Hit-testing over the arranged tree
+- [ ] Routed events (bubbling first)
+- [ ] Focus management + pointer capture
+- [ ] Tab navigation / focus traversal order
+- [ ] Cursor shapes (I-beam, hand, resize)
+- [ ] Frame tick / timer service (caret blink, tooltip delay, later animation)
+- [ ] `ScrollViewer` (needs input + clip)
+
+## Phase 4 · Theming
+- [ ] Theme resource model (color/metric/typography/effect tokens)
+- [ ] Fluent Light theme
+- [ ] Fluent Dark theme
+- [ ] Wire existing widgets to tokens (no hard-coded styling anywhere)
+- [ ] **MILESTONE: themed, laid-out, clickable Fluent button in a real GL context**
+
+## Phase 5 · Core controls
+- [ ] Overlay/popup layer (prerequisite for several controls)
+- [ ] `Button`, `ToggleButton`, `CheckBox`, `RadioButton`, `ToggleSwitch`
+      — incl. theme-driven hover/press/disabled visual states (animation comes later)
+- [ ] `TextBox` (caret + blink, selection, editing — biggest single control)
+- [ ] Clipboard cut/copy/paste (glfw clipboard API)
+- [ ] `Slider`, `ProgressBar`
+- [ ] `ComboBox` (uses popup)
+- [ ] `ToolTip` (uses timer service)
+
+## Phase 6 · Data binding
+- [ ] One-way bind (property → UI) via `Property` subscriptions
+- [ ] Two-way bind for inputs (`TextBox`/`CheckBox`/`Slider` ↔ `*T`)
+- [ ] `ItemsSource` / collection binding
+
+## Phase 7 · Advanced controls
+- [ ] `ItemsControl` / `ListView` (+ virtualization)
+- [ ] `TreeView`, `TabControl`, `Expander`
+- [ ] `Menu` / `MenuBar` / `ContextMenu`
+- [ ] Dialog + modal layer
+- [ ] `DataGrid`
+
+## Phase 8 · App shell & polish
+- [ ] Clean embedding API: integrate into an app's existing GL render loop
+- [ ] Custom Fluent titlebar + window chrome
+- [ ] Acrylic / mica surface effect (blur shader)
+- [ ] Animation system (easing, transitions between the Phase-5 visual states)
+- [ ] High-DPI audit pass end-to-end
+- [ ] Docs site / examples / integration guide
+- [ ] Tag + publish v0.1
+- [ ] *(stretch)* IME input
+- [ ] *(stretch)* Accessibility hooks
+
+## Out of scope for this repo
+Adoption in any specific existing app (e.g. replacing cimgui elsewhere) is the
+consumer's project, not ours — the gallery + integration guide are our deliverables.
