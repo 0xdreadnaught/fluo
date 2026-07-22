@@ -12,9 +12,16 @@ const Auto float32 = -1
 type Alignment uint8
 
 const (
+	// Stretch fills the entire slot on this axis (unless an explicit
+	// width/height is set, in which case it centers instead).
 	Stretch Alignment = iota
+	// Start aligns the widget to the slot's near edge (left/top) at its
+	// desired size.
 	Start
+	// Center centers the widget within the slot at its desired size.
 	Center
+	// End aligns the widget to the slot's far edge (right/bottom) at its
+	// desired size.
 	End
 )
 
@@ -56,10 +63,22 @@ func (e *Element) element() *Element { return e }
 
 // Default Widget content behavior: a bare Element embed is a valid, empty,
 // leaf widget.
+
+// MeasureContent returns a zero size by default; embedders override this to
+// report the size their content actually wants.
 func (e *Element) MeasureContent(available render.Size) render.Size { return render.Size{} }
-func (e *Element) ArrangeContent(bounds render.Rect)                {}
-func (e *Element) Render(r render.Renderer)                         {}
-func (e *Element) Children() []Widget                               { return nil }
+
+// ArrangeContent does nothing by default; embedders override this to
+// position their children within the bounds ArrangeWidget computed.
+func (e *Element) ArrangeContent(bounds render.Rect) {}
+
+// Render does nothing by default; embedders override this to draw
+// themselves (children are drawn separately by RenderWidget).
+func (e *Element) Render(r render.Renderer) {}
+
+// Children returns nil by default, marking a bare Element embed as a leaf
+// widget; embedders override this to expose their children.
+func (e *Element) Children() []Widget { return nil }
 
 // SetMargin sets the outer margin. Layout-relevant: invalidates measure.
 func (e *Element) SetMargin(t render.Thickness) {

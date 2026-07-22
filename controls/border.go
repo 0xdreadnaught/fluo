@@ -141,6 +141,7 @@ func (b *Border) Render(r render.Renderer) {
 }
 
 // Children returns the single child in a slice, or nil if there is none.
+// Returns a copy; mutating it does not affect the panel.
 func (b *Border) Children() []core.Widget {
 	if b.child == nil {
 		return nil

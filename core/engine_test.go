@@ -118,6 +118,10 @@ func TestDesiredSizeOfMatchesDesiredSize(t *testing.T) {
 	if got, want := DesiredSizeOf(s), s.DesiredSize(); got != want {
 		t.Fatalf("DesiredSizeOf=%v want %v", got, want)
 	}
+	ArrangeWidget(s, render.Rect{X: 5, Y: 5, W: 200, H: 200})
+	if got, want := BoundsOf(s), s.Bounds(); got != want {
+		t.Fatalf("BoundsOf=%v want %v", got, want)
+	}
 }
 
 func TestInvalidationBubbles(t *testing.T) {
@@ -135,6 +139,24 @@ func TestInvalidationBubbles(t *testing.T) {
 	if !child.NeedsLayout() || !parent.NeedsLayout() {
 		t.Fatal("invalidation must bubble to parent")
 	}
+}
+
+func TestSetParentRejectsDoubleParent(t *testing.T) {
+	parentA := &stub{}
+	parentB := &stub{}
+	child := &stub{}
+
+	SetParent(child, parentA)
+
+	// Re-setting the same parent is a no-op, not a panic.
+	SetParent(child, parentA)
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic when re-parenting an already-parented widget")
+		}
+	}()
+	SetParent(child, parentB)
 }
 
 func TestIsVisible(t *testing.T) {

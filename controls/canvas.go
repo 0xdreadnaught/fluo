@@ -19,6 +19,9 @@ type canvasItem struct {
 // with unbounded space and arranged at its own desired size (no stretch on
 // a canvas, matching WPF Canvas semantics) — a child that wants Stretch
 // alignment simply gets its desired size, not the Canvas's full extent.
+//
+// Canvas desires zero size: it is only useful given an explicit size or a
+// filled slot; it does not size to its children.
 type Canvas struct {
 	core.Element
 
@@ -39,7 +42,8 @@ func (c *Canvas) Add(w core.Widget, x, y float32) *Canvas {
 	return c
 }
 
-// Children returns the child widgets in the order they were added.
+// Children returns the child widgets in the order they were added. Returns
+// a copy; mutating it does not affect the panel.
 func (c *Canvas) Children() []core.Widget {
 	children := make([]core.Widget, len(c.items))
 	for i, item := range c.items {

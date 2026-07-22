@@ -31,8 +31,19 @@ type Widget interface {
 // SetParent records parent as child's layout parent. Container widgets call
 // this from their Add (or equivalent) methods. A nil parent detaches child:
 // its future invalidations no longer climb into any ancestor.
+//
+// Fail-fast double-parenting guard: if parent is non-nil and child already
+// has a different non-nil parent, SetParent panics rather than silently
+// re-homing the child (which would leave the old parent's child slice
+// pointing at a widget that no longer reports it as an ancestor). Detach
+// first with SetParent(child, nil) before re-adding elsewhere. Re-setting
+// the same parent is a no-op; setting nil is always allowed.
 func SetParent(child, parent Widget) {
-	child.element().parent = parent
+	e := child.element()
+	if parent != nil && e.parent != nil && e.parent != parent {
+		panic("core: widget already has a parent; detach it (SetParent(w, nil)) before re-adding")
+	}
+	e.parent = parent
 }
 
 // DesiredSizeOf returns w's desired size as computed by the last MeasureWidget
@@ -40,6 +51,14 @@ func SetParent(child, parent Widget) {
 // measurement back — Widget itself deliberately exposes no getters.
 func DesiredSizeOf(w Widget) render.Size {
 	return w.element().desired
+}
+
+// BoundsOf returns w's arranged bounds in absolute window space, as computed
+// by the last ArrangeWidget call. Valid after ArrangeWidget has run; like
+// DesiredSizeOf, it exists so parents (and external custom panels) can read
+// a child's layout result back without Widget itself exposing getters.
+func BoundsOf(w Widget) render.Rect {
+	return w.element().bounds
 }
 
 // IsVisible reports whether w participates in layout and rendering.

@@ -51,9 +51,12 @@ func (s *StackPanel) SetGap(g float32) *StackPanel {
 	return s
 }
 
-// Children returns the slice of children.
+// Children returns a copy of the children slice; mutating it does not
+// affect the panel.
 func (s *StackPanel) Children() []core.Widget {
-	return s.children
+	out := make([]core.Widget, len(s.children))
+	copy(out, s.children)
+	return out
 }
 
 // MeasureContent measures all children and computes the total size.

@@ -49,9 +49,12 @@ func (w *WrapPanel) SetGap(g float32) *WrapPanel {
 	return w
 }
 
-// Children returns the slice of children.
+// Children returns a copy of the children slice; mutating it does not
+// affect the panel.
 func (w *WrapPanel) Children() []core.Widget {
-	return w.children
+	out := make([]core.Widget, len(w.children))
+	copy(out, w.children)
+	return out
 }
 
 // MeasureContent measures all children and computes desired size using
@@ -97,14 +100,6 @@ func (w *WrapPanel) MeasureContent(available render.Size) render.Size {
 func (w *WrapPanel) ArrangeContent(bounds render.Rect) {
 	rows := w.flowRows(bounds.W)
 
-	// Build a set of visible children for quick lookup
-	visibleSet := make(map[core.Widget]bool)
-	for _, r := range rows {
-		for _, child := range r.children {
-			visibleSet[child] = true
-		}
-	}
-
 	y := bounds.Y
 	for _, r := range rows {
 		x := bounds.X
@@ -122,9 +117,11 @@ func (w *WrapPanel) ArrangeContent(bounds render.Rect) {
 		y += r.height + w.gap
 	}
 
-	// Arrange hidden children with empty rect
+	// Arrange hidden children with empty rect. flowRows already filters by
+	// IsVisible, so re-checking it here (instead of building a set from the
+	// rows above) stays consistent by construction.
 	for _, child := range w.children {
-		if !visibleSet[child] {
+		if !core.IsVisible(child) {
 			core.ArrangeWidget(child, render.Rect{})
 		}
 	}

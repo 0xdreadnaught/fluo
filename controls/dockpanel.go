@@ -56,7 +56,8 @@ func (d *DockPanel) SetLastChildFill(v bool) *DockPanel {
 	return d
 }
 
-// Children returns the slice of child widgets.
+// Children returns the slice of child widgets. Returns a copy; mutating it
+// does not affect the panel.
 func (d *DockPanel) Children() []core.Widget {
 	children := make([]core.Widget, len(d.items))
 	for i, item := range d.items {

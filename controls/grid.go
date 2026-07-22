@@ -128,7 +128,8 @@ func (g *Grid) Add(w core.Widget, row, col int) *Grid {
 	return g
 }
 
-// Children returns the widgets added to this Grid, in Add order.
+// Children returns the widgets added to this Grid, in Add order. Returns a
+// copy; mutating it does not affect the panel.
 func (g *Grid) Children() []core.Widget {
 	out := make([]core.Widget, len(g.cells))
 	for i, c := range g.cells {
@@ -210,6 +211,14 @@ func resolveTracks(tracks []Track, avail float32, maxDesired func(i int) float32
 			}
 		}
 	}
+	// If there are Star tracks but sumWeight == 0 (e.g. all Star(0)), no
+	// weight exists to divide the remaining space by, so those tracks stay
+	// at their zero-value resolved size and the leftover space is simply
+	// left unallocated. This is a deliberate v0 choice, not a bug: a
+	// zero-weight Star track is a degenerate input, and silently treating it
+	// as "give it everything" or "give it nothing but still consume space"
+	// would both be surprising. Callers who want a track to consume all
+	// remaining space should give it a positive weight instead.
 
 	return resolved
 }

@@ -63,3 +63,16 @@ func TestGridShrinkTracksPanics(t *testing.T) {
 		g.Cols(Px(10))
 	}()
 }
+
+func TestGridShrinkRowsPanics(t *testing.T) {
+	g := NewGrid().Rows(Px(10), Px(10), Px(10)).Cols(Px(10))
+	g.Add(NewFixed(1, 1, render.Color{}), 2, 0)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic")
+			}
+		}()
+		g.Rows(Px(10))
+	}()
+}
