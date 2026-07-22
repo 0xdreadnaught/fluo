@@ -26,8 +26,13 @@ func NewBorder() *Border {
 }
 
 // SetChild sets (replacing any existing) the single child, re-parenting it
-// to this Border and invalidating measure.
+// to this Border and invalidating measure. Any previously set child is
+// detached (its parent cleared) so its future invalidations stop climbing
+// into this Border.
 func (b *Border) SetChild(w core.Widget) *Border {
+	if b.child != nil {
+		core.SetParent(b.child, nil)
+	}
 	b.child = w
 	core.SetParent(w, b)
 	b.InvalidateMeasure()
@@ -68,23 +73,6 @@ func (b *Border) SetPadding(t render.Thickness) *Border {
 	return b
 }
 
-// sizer is satisfied by any core.Widget (every concrete widget embeds
-// core.Element, which exports DesiredSize). core.Widget itself only
-// requires the unexported element() method, so childDesiredSize asserts to
-// this interface to read back what core.MeasureWidget just computed.
-type sizer interface {
-	DesiredSize() render.Size
-}
-
-// childDesiredSize returns w's desired size as recorded by the last
-// MeasureWidget call.
-func childDesiredSize(w core.Widget) render.Size {
-	if s, ok := w.(sizer); ok {
-		return s.DesiredSize()
-	}
-	return render.Size{}
-}
-
 // chrome returns the total inset (padding + borderWidth on all four sides).
 func (b *Border) chrome() render.Thickness {
 	bw := b.borderWidth
@@ -114,7 +102,7 @@ func (b *Border) MeasureContent(available render.Size) render.Size {
 	var childW, childH float32
 	if b.child != nil {
 		core.MeasureWidget(b.child, render.Size{W: availW, H: availH})
-		d := childDesiredSize(b.child)
+		d := core.DesiredSizeOf(b.child)
 		childW, childH = d.W, d.H
 	}
 

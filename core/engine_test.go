@@ -112,6 +112,14 @@ func TestHiddenMeasuresZeroAndSkipsRender(t *testing.T) {
 	}
 }
 
+func TestDesiredSizeOfMatchesDesiredSize(t *testing.T) {
+	s := &stub{contentW: 50, contentH: 20}
+	MeasureWidget(s, render.Size{W: 200, H: 200})
+	if got, want := DesiredSizeOf(s), s.DesiredSize(); got != want {
+		t.Fatalf("DesiredSizeOf=%v want %v", got, want)
+	}
+}
+
 func TestInvalidationBubbles(t *testing.T) {
 	parent := &stub{contentW: 100, contentH: 100}
 	child := &stub{contentW: 10, contentH: 10}

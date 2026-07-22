@@ -29,6 +29,27 @@ func TestBorderArrangesChildInset(t *testing.T) {
 	}
 }
 
+func TestBorderDetachesReplacedChild(t *testing.T) {
+	oldChild := NewFixed(10, 10, render.RGB(1, 2, 3))
+	newChild := NewFixed(20, 20, render.RGB(4, 5, 6))
+
+	b := NewBorder().SetChild(oldChild)
+	core.MeasureWidget(b, render.Size{W: 100, H: 100})
+	core.ArrangeWidget(b, render.Rect{X: 0, Y: 0, W: 100, H: 100})
+
+	b.SetChild(newChild)
+	core.MeasureWidget(b, render.Size{W: 100, H: 100})
+	core.ArrangeWidget(b, render.Rect{X: 0, Y: 0, W: 100, H: 100})
+	if b.NeedsLayout() {
+		t.Fatal("border should be clean after measure+arrange following SetChild")
+	}
+
+	oldChild.InvalidateMeasure()
+	if b.NeedsLayout() {
+		t.Fatal("invalidating the detached old child must not dirty the border")
+	}
+}
+
 func TestBorderNoChild(t *testing.T) {
 	b := NewBorder().SetPadding(render.Uniform(8))
 	core.MeasureWidget(b, render.Size{W: 500, H: 500})

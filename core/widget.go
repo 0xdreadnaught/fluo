@@ -29,9 +29,17 @@ type Widget interface {
 }
 
 // SetParent records parent as child's layout parent. Container widgets call
-// this from their Add (or equivalent) methods.
+// this from their Add (or equivalent) methods. A nil parent detaches child:
+// its future invalidations no longer climb into any ancestor.
 func SetParent(child, parent Widget) {
 	child.element().parent = parent
+}
+
+// DesiredSizeOf returns w's desired size as computed by the last MeasureWidget
+// call. It is the way parents (and external custom panels) read a child's
+// measurement back — Widget itself deliberately exposes no getters.
+func DesiredSizeOf(w Widget) render.Size {
+	return w.element().desired
 }
 
 // clampAxis clamps v into [min, max]. max <= 0 means "no maximum" (+Inf).
