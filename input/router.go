@@ -5,10 +5,16 @@ import (
 	"github.com/0xdreadnaught/fluo/render"
 )
 
-// Router owns the widget tree's pointer-dispatch state: which widgets are
-// currently hovered (for Enter/Leave) and which widget, if any, holds an
-// active pointer capture. Keyboard/focus/tab-navigation state is added in a
-// later task.
+// Router owns the widget tree's input-dispatch state: which widgets are
+// currently hovered (for Enter/Leave), which widget (if any) holds an active
+// pointer capture, and which widget (if any) holds keyboard focus. Pointer
+// events (PointerMove/PointerButton/PointerWheel) hit-test and bubble along
+// the resulting path, or go straight to the captured widget while one holds
+// the grab. Key events (KeyDown/KeyUp) instead bubble from the focused
+// widget up its core.ParentOf ancestor chain, since the focused widget need
+// not be under the pointer at all; an unhandled Tab/Shift+Tab KeyDown moves
+// focus via FocusNext/FocusPrev. See Capture/Release for pointer capture and
+// Focus/Focused/FocusNext/FocusPrev for focus and tab navigation.
 type Router struct {
 	root core.Widget
 
@@ -26,6 +32,12 @@ type Router struct {
 	// Set by Focus (directly, or indirectly via press-to-focus in
 	// PointerButton and Tab handling in KeyDown).
 	focused core.Widget
+
+	// focusing guards Focus against reentrancy: set true for the duration of
+	// the OnFocusChanged callback-firing section, so a callback that itself
+	// calls Focus/FocusNext/FocusPrev is ignored rather than recursing (see
+	// Focus's doc comment and TestFocusReentrancyIgnored).
+	focusing bool
 }
 
 // NewRouter creates an empty Router. Call SetRoot before dispatching events.
@@ -215,12 +227,25 @@ func (r *Router) focusFromPath(path []core.Widget) {
 // nil. A no-op if w is already focused. Otherwise fires OnFocusChanged(false)
 // on the previously focused widget (if it implements FocusHandler), then
 // OnFocusChanged(true) on w (likewise), in that order.
+//
+// Focus is not reentrant: focus changes requested from within an
+// OnFocusChanged callback (via Focus, FocusNext, or FocusPrev, from either
+// the blurring or the focusing widget) are ignored. Without this guard, two
+// widgets that each try to reclaim focus from within OnFocusChanged could
+// recurse into each other unboundedly.
 func (r *Router) Focus(w core.Widget) {
+	if r.focusing {
+		return
+	}
 	if r.focused == w {
 		return
 	}
 	old := r.focused
 	r.focused = w
+
+	r.focusing = true
+	defer func() { r.focusing = false }()
+
 	if old != nil {
 		if fh, ok := old.(FocusHandler); ok {
 			fh.OnFocusChanged(false)

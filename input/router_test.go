@@ -22,8 +22,13 @@ type probe struct {
 	handleKey bool     // mark key events handled (OnKey's Handled, mirrors handlePtr)
 	focusable bool
 	cursor    input.Cursor
-	router    *input.Router // captured on press when capturing==true
+	router    *input.Router // set by the test; used by capturing and reclaim
 	capturing bool
+
+	// reclaim: if true, OnFocusChanged(false) reentrantly calls
+	// router.Focus(p) to try to reclaim focus for itself (regression probe
+	// for TestFocusReentrancyIgnored — the router's guard must ignore this).
+	reclaim bool
 
 	// child: NOT part of the brief's probe listing. core.Element alone is
 	// always a leaf (Children() returns nil), but TestBubbleStopsAtHandled
@@ -61,7 +66,12 @@ func (p *probe) OnPointer(e *input.PointerEvent) {
 		e.Handled = true
 	}
 }
-func (p *probe) OnFocusChanged(f bool) { p.events = append(p.events, fmt.Sprintf("focus:%v", f)) }
+func (p *probe) OnFocusChanged(f bool) {
+	p.events = append(p.events, fmt.Sprintf("focus:%v", f))
+	if !f && p.reclaim {
+		p.router.Focus(p)
+	}
+}
 
 // OnKey records "key" for every key event delivered to this probe, marking
 // it Handled when handleKey is set (mirrors handlePtr's role for OnPointer).
@@ -382,5 +392,36 @@ func TestKeyBubbles(t *testing.T) {
 	}
 	if got := parent.events; len(got) != 2 || got[0] != "press" || got[1] != "key" {
 		t.Fatalf("parent.events = %v, want [press key] (leaf didn't handle, so it bubbled to parent)", got)
+	}
+}
+
+func TestFocusReentrancyIgnored(t *testing.T) {
+	a := &probe{name: "a", focusable: true, reclaim: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	b := &probe{name: "b", focusable: true}
+	b.SetWidth(50)
+	b.SetHeight(50)
+	root := controls.NewCanvas().Add(a, 0, 0).Add(b, 60, 0)
+	layout(root, 200, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+	a.router = r
+
+	r.Focus(a)
+	if r.Focused() != core.Widget(a) {
+		t.Fatalf("Focused() = %v, want a", r.Focused())
+	}
+
+	// Focusing b blurs a. a's OnFocusChanged(false) reentrantly calls
+	// r.Focus(a), trying to reclaim focus for itself from inside the
+	// callback. The router's reentrancy guard must ignore that inner call —
+	// without it, this would either stack-overflow (two widgets fighting
+	// over focus) or leave focus back on a instead of the widget the caller
+	// actually asked for.
+	r.Focus(b)
+	if r.Focused() != core.Widget(b) {
+		t.Fatalf("Focused() after reentrant reclaim attempt = %v, want b (reentrant Focus must be ignored)", r.Focused())
 	}
 }
