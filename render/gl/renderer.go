@@ -139,7 +139,7 @@ func (rd *Renderer) StrokeRoundedRect(r render.Rect, radius, width float32, c re
 
 // DrawShadow draws a soft shadow of a rounded rectangle.
 func (rd *Renderer) DrawShadow(r render.Rect, radius, blur float32, c render.Color) {
-	panic("gl: DrawShadow not implemented (Task 5)")
+	rd.quad(5, r.Inflate(blur), render.Rect{}, c, rectParams(r), [2]float32{radius, blur}, rd.whiteTex)
 }
 
 // CreateTexture creates a new texture from RGBA8 data.

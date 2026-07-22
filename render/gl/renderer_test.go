@@ -56,3 +56,11 @@ func TestRoundedStroke(t *testing.T) {
 		r.StrokeRoundedRect(render.Rect{X: 10, Y: 10, W: 100, H: 70}, 8, 2, render.RGB(255, 255, 255))
 	})
 }
+
+func TestShadow(t *testing.T) {
+	testFrame(t, "shadow", 128, 96, func(r *glr.Renderer) {
+		card := render.Rect{X: 24, Y: 20, W: 80, H: 56}
+		r.DrawShadow(card, 8, 12, render.RGBA(0, 0, 0, 140))
+		r.FillRoundedRect(card, 8, render.RGB(243, 243, 243))
+	})
+}
