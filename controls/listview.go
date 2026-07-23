@@ -178,9 +178,10 @@ func (l *ListView) MeasureContent(available render.Size) render.Size {
 // virtualizer.layout) and for row realization: it computes the viewport
 // (bounds minus the thumb gutter on the right), clamps the scroll offset,
 // determines the visible row range, resizes the TextBlock pool to exactly
-// that many rows (see ensurePool — existing pool entries are re-texted in
-// place, never reallocated), and arranges each pool entry at its row's
-// position, offset by the current scroll.
+// that many rows (see shrinkPool and the grow/reuse branches below —
+// existing pool entries are re-texted in place, never reallocated), and
+// arranges each pool entry at its row's position, offset by the current
+// scroll.
 func (l *ListView) ArrangeContent(bounds render.Rect) {
 	viewport := bounds.Inset(render.Thickness{Right: l.gutter})
 	if viewport.W < 0 {
