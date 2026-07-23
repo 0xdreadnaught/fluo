@@ -19,6 +19,33 @@
 // bindings onto them. Every binder buildUI creates returns a cancel func,
 // collected into main's cancels slice — see the T-key toggle in main for
 // the cancel-before-rebuild discipline this enables.
+//
+// Phase 7 turns the nav sidebar into a real page switcher: the three static
+// "Layout"/"Panels"/"Text" TextBlocks are replaced by a ListView of page
+// names ("Controls"/"Advanced") — dogfooding ListView itself as the nav
+// widget — bound two-way via bind.ListSelected to a core.Property[int]
+// (pageProp) that main owns and never recreates, exactly like
+// textProp/sliderProp/itemList. Clicking a page name pushes the new index
+// into pageProp; a permanent subscription in main (installed once, never
+// canceled, since it isn't tied to any one built tree) sets a pending flag
+// that main's frame loop notices and rebuilds from — the same
+// cancel-old-bindings-then-build()-again discipline as the T-key toggle,
+// just triggered by a different pending flag. Page 0 ("Controls") is
+// Phase 5/6's existing scroll content, moved into buildControlsPage
+// unchanged; page 1 ("Advanced", the startup default so the gallery opens
+// showing the newest work) is buildAdvancedPage: a MenuBar (File/Edit, the
+// latter with a submenu) above a 3-tab TabControl — List (a 30-row
+// ListView plus a selected-index TextBlock, again via bind.ListSelected),
+// Tree (a small nested TreeView beside an Expander showing the selected
+// node's detail), and Data (a 3-column/50-row DataGrid plus a button that
+// fires ShowDialog, its result mirrored into a TextBlock via bind.OneWay).
+// ListView is fluo's one disposable control (see ListView.Dispose's doc
+// comment): every ListView buildUI creates — the nav switcher and the List
+// tab's — has its Dispose appended to *cancels alongside the ordinary
+// binder cancels, so a stale items-channel subscription never outlives its
+// tree. DataGrid.Dispose is a no-op but is called too, for the same reason
+// its own doc comment gives: uniform Dispose-everything-virtualized in the
+// cancel path, no type switch needed.
 package main
 
 import (
@@ -284,30 +311,13 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 		Add(row1, row2, row3, row4, row5)
 }
 
-// buildUI builds the gallery's entire widget tree from th's tokens — colors,
-// paddings, radii, and type sizes all come from th, so the whole tree is a
-// pure function of the active theme (see FLUO_THEME and the T-key toggle in
-// main: re-theming means calling buildUI again and swapping roots, never
-// mutating an existing tree in place). counter/onToggle wire up the demo
-// button's click count and the theme-toggle shortcut respectively; tq is
-// forwarded to buildControlsSection (see its doc comment).
-//
-// Since Phase 5 Task 9, the returned root is a *controls.OverlayHost (rather
-// than *galleryRoot directly): ComboBox's popup and ToolTipArea's tip (both
-// used in the Controls section) need an OverlayHost ancestor to render into
-// (OverlayHostFor walks up looking for one), so the host must sit above
-// everything that uses either control — see main's SetRouter wiring, which
-// an OverlayHost needs to drive its light-dismiss capture.
-//
-// textProp/sliderProp/itemList are the Phase 6 binding models (owned by
-// main, outliving every rebuild); cancels collects every binder's cancel
-// func created while building this tree — see buildControlsSection's doc
-// comment and main's theme-toggle path, which cancels the OLD tree's
-// bindings before calling buildUI again.
-func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq *timers.Queue, textProp *core.Property[string], sliderProp *core.Property[float32], itemList *bind.List[string], cancels *[]func()) *controls.OverlayHost {
-	title := text.NewFace(font, th.Type.SubtitleSize)
-	body := text.NewFace(font, th.Type.BodySize)
-
+// buildControlsPage builds page 0's content: the Phase 5/6 Controls section
+// plus the swatch WrapPanel plus a 20-row filler stack, all inside a
+// ScrollViewer — pulled out of buildUI unchanged (byte-for-byte the same
+// tree it always built) so buildUI can choose between it and
+// buildAdvancedPage per the current page selection. See buildControlsSection
+// and buildUI's own doc comments for the params threaded through.
+func buildControlsPage(th *theme.Theme, body *text.Face, counter *int, tq *timers.Queue, textProp *core.Property[string], sliderProp *core.Property[float32], itemList *bind.List[string], cancels *[]func()) core.Widget {
 	swatches := controls.NewWrapPanel().SetGap(th.Metric.PaddingM)
 	for _, c := range swatchPalette {
 		swatches.Add(newSwatch(72, 48, c, th.Color.Accent, th.Color.TextPrimary))
@@ -321,13 +331,223 @@ func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq
 		content.Add(controls.NewTextBlock(body, fmt.Sprintf("Row %02d", i)).SetColor(th.Color.TextSecondary))
 	}
 
-	scroll := controls.NewScrollViewer().SetChild(content)
+	return controls.NewScrollViewer().SetChild(content)
+}
 
-	nav := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingS).Add(
-		controls.NewTextBlock(body, "Layout").SetColor(th.Color.TextPrimary),
-		controls.NewTextBlock(body, "Panels").SetColor(th.Color.TextSecondary),
-		controls.NewTextBlock(body, "Text").SetColor(th.Color.TextSecondary),
+// advancedTreeSample builds the small nested TreeView sample the Tree tab
+// shows: two roots, one of them ("Pictures") two levels deep — built fresh
+// on every buildAdvancedPage call (v0: this demo tree carries no state that
+// needs to survive a rebuild the way textProp/itemList do), with "Pictures"
+// and its "Vacation" child pre-expanded so the nesting is visible without
+// any clicking, which matters for the Task 9 startup screenshot.
+func advancedTreeSample() []*controls.TreeNode {
+	docs := controls.NewTreeNode("Documents",
+		controls.NewTreeNode("Report.docx"),
+		controls.NewTreeNode("Notes.txt"),
 	)
+	vacation := controls.NewTreeNode("Vacation",
+		controls.NewTreeNode("beach.jpg"),
+		controls.NewTreeNode("hike.jpg"),
+	)
+	pictures := controls.NewTreeNode("Pictures", vacation, controls.NewTreeNode("Screenshot.png"))
+	pictures.SetExpanded(true)
+	vacation.SetExpanded(true)
+	return []*controls.TreeNode{docs, pictures}
+}
+
+// buildAdvancedPage builds page 1's content: a MenuBar (File → New/Open/
+// separator/Exit, Edit → a submenu demo) above a 3-tab TabControl —
+// List/Tree/Data — exercising every Phase 7 control. host is threaded
+// through so the Data tab's "Show dialog" Button can call ShowDialog
+// directly (ShowDialog takes a *controls.OverlayHost, not something
+// OverlayHostFor can resolve from a not-yet-attached button). selectedProp/
+// dialogResultProp are owned by main and outlive every rebuild — like
+// textProp/sliderProp/itemList on the Controls page — so the List tab's
+// selection and the last dialog result both survive a theme toggle or a
+// switch away to the Controls page and back; every ListView's items
+// (the 30-row nav-irrelevant list) and the TreeView/Expander/DataGrid demo
+// data are cheap to rebuild fresh each call and carry no state worth
+// persisting. cancels collects every binder's cancel func AND every
+// disposable control's Dispose (ListView, DataGrid — see the package doc
+// comment above), exactly like buildControlsSection.
+func buildAdvancedPage(th *theme.Theme, body *text.Face, host *controls.OverlayHost, selectedProp *core.Property[int], dialogResultProp *core.Property[string], cancels *[]func()) core.Widget {
+	menuBar := controls.NewMenuBar(body)
+
+	fileMenu := menuBar.AddMenu("File")
+	fileMenu.Add("New", func() { log.Println("gallery: File > New") })
+	fileMenu.Add("Open", func() { log.Println("gallery: File > Open") })
+	fileMenu.AddSeparator()
+	fileMenu.Add("Exit", func() {}) // no-op, per the brief
+
+	editMenu := menuBar.AddMenu("Edit")
+	editMenu.Add("Cut", func() { log.Println("gallery: Edit > Cut") })
+	editMenu.Add("Copy", func() { log.Println("gallery: Edit > Copy") })
+	editMenu.AddSub("Paste Special").
+		Add("Values", func() { log.Println("gallery: Edit > Paste Special > Values") }).
+		Add("Formulas", func() { log.Println("gallery: Edit > Paste Special > Formulas") })
+
+	// Tab 1 "List": a 30-row ListView two-way bound to selectedProp (via
+	// bind.ListSelected) plus a mirror TextBlock, one-way bound to the same
+	// property, showing the selected index as plain text. The row data
+	// itself ("Row 0".."Row 29") is rebuilt fresh every call — only the
+	// SELECTION persists across rebuilds, via selectedProp.
+	rows := make([]string, 30)
+	for i := range rows {
+		rows[i] = fmt.Sprintf("Row %d", i)
+	}
+	rowsList := bind.NewList(rows...)
+	listView := controls.NewListView(body, rowsList)
+	listView.SetWidth(160)
+	listView.SetHeight(200)
+	selectedText := controls.NewTextBlock(body, fmt.Sprintf("Selected: %d", selectedProp.Get())).
+		SetColor(th.Color.TextSecondary)
+
+	*cancels = append(*cancels,
+		bind.ListSelected(selectedProp, listView),
+		listView.Dispose,
+		bind.OneWay(selectedProp, func(v int) { selectedText.SetText(fmt.Sprintf("Selected: %d", v)) }),
+	)
+
+	tab1 := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
+		Add(listView, selectedText)
+
+	// Tab 2 "Tree": a small nested TreeView beside an Expander("Details")
+	// whose content TextBlock mirrors whichever node is currently selected
+	// — plain field wiring (TreeView.OnChanged), not a binder, since
+	// TreeView owns no external resource needing a cancel (see
+	// ListView.Dispose's doc comment: ListView is fluo's ONE disposable
+	// control in v0).
+	detailText := controls.NewTextBlock(body, "Select a node to see its details.").
+		SetColor(th.Color.TextSecondary)
+	expander := controls.NewExpander(body, "Details").SetContent(detailText)
+	expander.SetExpanded(true) // so Details is visible without a click, for the screenshot
+
+	treeView := controls.NewTreeView(body, advancedTreeSample()...)
+	treeView.OnChanged(func(n *controls.TreeNode) {
+		if n != nil {
+			detailText.SetText(fmt.Sprintf("Selected: %s", n.Label))
+		}
+	})
+
+	tab2 := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
+		Add(treeView, expander)
+
+	// Tab 3 "Data": a 3-column (Px/Star/Px), 50-row DataGrid plus a "Show
+	// dialog" Button firing ShowDialog, whose result is mirrored into a
+	// TextBlock via bind.OneWay onto dialogResultProp (so the result
+	// survives a rebuild exactly like selectedProp does above).
+	grid := controls.NewDataGrid(body)
+	grid.SetColumns(
+		controls.Column{Title: "ID", Width: controls.Px(60), Value: func(row int) string {
+			return fmt.Sprintf("%d", row)
+		}},
+		controls.Column{Title: "Name", Width: controls.Star(1), Value: func(row int) string {
+			return fmt.Sprintf("Item %d", row)
+		}},
+		controls.Column{Title: "Qty", Width: controls.Px(60), Value: func(row int) string {
+			return fmt.Sprintf("%d", (row*7)%100)
+		}},
+	)
+	grid.SetRowCount(50)
+	*cancels = append(*cancels, grid.Dispose)
+
+	resultText := controls.NewTextBlock(body, dialogResultProp.Get()).SetColor(th.Color.TextSecondary)
+	*cancels = append(*cancels, bind.OneWay(dialogResultProp, func(s string) { resultText.SetText(s) }))
+
+	showDialogButton := controls.NewButton(body, "Show dialog").OnClick(func() {
+		controls.ShowDialog(host, body, controls.DialogSpec{
+			Title:     "Confirm",
+			Body:      "Proceed with this action?",
+			Primary:   "OK",
+			Secondary: "Cancel",
+			OnResult: func(r controls.DialogResult) {
+				var s string
+				switch r {
+				case controls.DialogPrimary:
+					s = "Primary"
+				case controls.DialogSecondary:
+					s = "Secondary"
+				case controls.DialogDismissed:
+					s = "Dismissed"
+				}
+				dialogResultProp.Set(fmt.Sprintf("Result: %s", s))
+			},
+		})
+	})
+
+	buttonRow := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
+		Add(showDialogButton, resultText)
+
+	tab3 := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingM).
+		Add(grid, buttonRow)
+
+	tabs := controls.NewTabControl(body).
+		AddTab("List", tab1).
+		AddTab("Tree", tab2).
+		AddTab("Data", tab3)
+
+	stack := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingM).
+		Add(menuBar, tabs)
+
+	return controls.NewScrollViewer().SetChild(stack)
+}
+
+// buildUI builds the gallery's entire widget tree from th's tokens — colors,
+// paddings, radii, and type sizes all come from th, so the whole tree is a
+// pure function of the active theme (see FLUO_THEME and the T-key toggle in
+// main: re-theming means calling buildUI again and swapping roots, never
+// mutating an existing tree in place) AND of pageProp's current value (see
+// the package doc comment's Phase 7 paragraph) — a page switch rebuilds via
+// the exact same mechanism a theme toggle does. counter/onToggle wire up the
+// demo button's click count and the theme-toggle shortcut respectively; tq
+// is forwarded to buildControlsSection (see its doc comment).
+//
+// Since Phase 5 Task 9, the returned root is a *controls.OverlayHost (rather
+// than *galleryRoot directly): ComboBox's popup and ToolTipArea's tip (both
+// used in the Controls section) need an OverlayHost ancestor to render into
+// (OverlayHostFor walks up looking for one), so the host must sit above
+// everything that uses either control — see main's SetRouter wiring, which
+// an OverlayHost needs to drive its light-dismiss capture. Phase 7's
+// Advanced page needs the SAME host explicitly (its Data tab's "Show
+// dialog" Button calls controls.ShowDialog(host, ...) directly), so host is
+// constructed first, here, and threaded into buildAdvancedPage before
+// SetContent installs the finished tree onto it at the end.
+//
+// textProp/sliderProp/itemList are the Phase 6 binding models; pageProp/
+// advSelectedProp/advDialogResultProp are Phase 7's (see buildAdvancedPage's
+// doc comment) — all owned by main, outliving every rebuild. cancels
+// collects every binder's cancel func AND every disposable control's
+// Dispose created while building this tree — see buildControlsSection's and
+// buildAdvancedPage's doc comments, and main's rebuild paths (T-key toggle,
+// page-change), both of which cancel the OLD tree's bindings before calling
+// buildUI again.
+func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq *timers.Queue, textProp *core.Property[string], sliderProp *core.Property[float32], itemList *bind.List[string], pageProp *core.Property[int], advSelectedProp *core.Property[int], advDialogResultProp *core.Property[string], cancels *[]func()) *controls.OverlayHost {
+	title := text.NewFace(font, th.Type.SubtitleSize)
+	body := text.NewFace(font, th.Type.BodySize)
+
+	host := controls.NewOverlayHost()
+
+	// nav: a 2-row ListView of page names ("Controls"/"Advanced"), two-way
+	// bound to pageProp via bind.ListSelected — see the package doc
+	// comment's Phase 7 paragraph for the full page-switch mechanism this
+	// feeds into. navItems is rebuilt fresh every call (nothing ever
+	// mutates it after construction, so there's no state worth persisting
+	// beyond the SELECTION itself, which lives in pageProp).
+	navItems := bind.NewList("Controls", "Advanced")
+	navList := controls.NewListView(body, navItems)
+	navList.SetWidth(130)
+	navList.SetHeight(64)
+	*cancels = append(*cancels,
+		bind.ListSelected(pageProp, navList),
+		navList.Dispose,
+	)
+
+	var pageContent core.Widget
+	if pageProp.Get() == 0 {
+		pageContent = buildControlsPage(th, body, counter, tq, textProp, sliderProp, itemList, cancels)
+	} else {
+		pageContent = buildAdvancedPage(th, body, host, advSelectedProp, advDialogResultProp, cancels)
+	}
 
 	dock := controls.NewDockPanel().
 		Add(controls.NewBorder().
@@ -341,15 +561,14 @@ func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq
 		Add(controls.NewBorder().
 			SetBackground(th.Color.LayerBackground).
 			SetPadding(render.Uniform(th.Metric.PaddingM)).
-			SetChild(nav),
+			SetChild(navList),
 			controls.DockLeft).
 		Add(controls.NewBorder().
 			SetBackground(th.Color.WindowBackground).
 			SetPadding(render.Uniform(th.Metric.PaddingL)).
-			SetChild(scroll),
+			SetChild(pageContent),
 			controls.DockLeft) // last child fills
 
-	host := controls.NewOverlayHost()
 	host.SetContent(newGalleryRoot(dock, onToggle))
 	return host
 }
@@ -385,6 +604,28 @@ func main() {
 	sliderProp.Set(0.3)
 	itemList := bind.NewList[string]()
 
+	// Phase 7 binding models, same "constructed once, outlives every
+	// rebuild" convention as the three above. pageProp drives buildUI's
+	// page switch (see its own doc comment's Phase 7 paragraph); it starts
+	// at 1 ("Advanced") per the Task 9 brief, so the gallery opens showing
+	// the newest work. pagePending mirrors togglePending below, but is set
+	// from a PERMANENT subscription on pageProp (installed once, right
+	// here, never canceled — it isn't owned by any one built tree, unlike
+	// the binder cancels buildUI/buildAdvancedPage collect into cancels)
+	// rather than from a widget callback, since the page-switching ListView
+	// itself is rebuilt on every page change and can't hold this flag's
+	// only reference to safety. advSelectedProp/advDialogResultProp are the
+	// Advanced page's own persistent models — see buildAdvancedPage's doc
+	// comment.
+	pageProp := new(core.Property[int])
+	pageProp.Set(1)
+	var pagePending bool
+	pageProp.OnChange(func(_, _ int) { pagePending = true })
+	advSelectedProp := new(core.Property[int])
+	advSelectedProp.Set(-1)
+	advDialogResultProp := new(core.Property[string])
+	advDialogResultProp.Set("Result: (none)")
+
 	// cancels collects every binder's cancel func from the CURRENTLY BUILT
 	// tree (buildUI/buildControlsSection append to it). The theme toggle
 	// below calls each cancel and resets the slice before calling build()
@@ -394,7 +635,7 @@ func main() {
 	// older one silently fighting the newer one for OnChanged ownership.
 	var cancels []func()
 	build := func() *controls.OverlayHost {
-		return buildUI(theme.Active(), f, &counter, func() { togglePending = true }, timerQueue, textProp, sliderProp, itemList, &cancels)
+		return buildUI(theme.Active(), f, &counter, func() { togglePending = true }, timerQueue, textProp, sliderProp, itemList, pageProp, advSelectedProp, advDialogResultProp, &cancels)
 	}
 
 	var root *controls.OverlayHost
@@ -425,6 +666,22 @@ func main() {
 			cancels = cancels[:0]
 			root = build()
 			c.Input.SetRoot(root) // SetRoot resets hover/capture/focus by design
+			root.SetRouter(c.Input)
+			lastSize = render.Size{}
+			// This rebuild already reflects pageProp's current value (build()
+			// reads it fresh via buildUI), so a page change coincidentally
+			// pending on the SAME frame as a theme toggle needs no second
+			// rebuild.
+			pagePending = false
+		}
+		if pagePending {
+			pagePending = false
+			for _, cancel := range cancels {
+				cancel()
+			}
+			cancels = cancels[:0]
+			root = build()
+			c.Input.SetRoot(root)
 			root.SetRouter(c.Input)
 			lastSize = render.Size{}
 		}

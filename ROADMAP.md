@@ -88,11 +88,25 @@ before its dependencies. Check items off as they land. Design spec:
       `buildUI` call — the package's first real cancel consumer.
 
 ## Phase 7 · Advanced controls
-- [ ] `ItemsControl` / `ListView` (+ virtualization)
-- [ ] `TreeView`, `TabControl`, `Expander`
-- [ ] `Menu` / `MenuBar` / `ContextMenu`
-- [ ] Dialog + modal layer
-- [ ] `DataGrid`
+- [x] `ItemsControl` / `ListView` (+ virtualization)
+- [x] `TreeView`, `TabControl`, `Expander`
+- [x] `Menu` / `MenuBar` / `ContextMenu`
+- [x] Dialog + modal layer
+- [x] `DataGrid`
+- [x] **MILESTONE: gallery Advanced page** — `fluo-gallery`'s nav sidebar
+      becomes a real page switcher: a 2-row `ListView` of page names
+      ("Controls"/"Advanced", two-way bound via `bind.ListSelected` to a
+      `core.Property[int]` main owns across rebuilds), dogfooding `ListView`
+      itself as the nav widget. "Advanced" (the new page, and the gallery's
+      startup default) holds a `MenuBar` (File → New/Open/separator/Exit,
+      Edit → a submenu demo) above a 3-tab `TabControl`: List (a 30-row
+      `ListView` plus a selected-index `TextBlock`, again via
+      `bind.ListSelected`), Tree (a small nested `TreeView` beside an
+      `Expander` mirroring the selected node's label), and Data (a
+      3-column/50-row `DataGrid` plus a button firing `ShowDialog`, its
+      result mirrored into a `TextBlock` via `bind.OneWay`). Every
+      `ListView`'s `Dispose` (fluo's one disposable control) is collected
+      into the rebuild's cancel path alongside the ordinary binder cancels.
 
 ## Phase 8 · App shell & polish
 - [ ] Clean embedding API: integrate into an app's existing GL render loop

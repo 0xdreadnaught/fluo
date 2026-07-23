@@ -54,6 +54,27 @@ setter/`OnChanged` contract: programmatic setters (`SetChecked`, `SetValue`,
 reports only user-driven changes (click, drag, typed input, keyboard
 activation).
 
+## Advanced controls
+
+Phase 7 rounds out the control set with `ListView` (virtualized, single-
+column, selection via `SelectedIndex`/`OnChanged`/`SetSelectedIndex`),
+`TreeView` (`TreeNode` trees with expand/collapse and the same selection
+contract), `TabControl` (`AddTab`), `Expander` (collapsible content),
+`MenuBar`/`MenuItems`/`ShowContextMenu` (top-level menus, separators, and
+hover-opened submenus), `ShowDialog` (a modal `DialogSpec` with
+Primary/Secondary buttons and a `DialogResult`), and `DataGrid` (virtualized,
+multi-column, `Column.Width` as a `Px`/`Star` `Track`). `fluo-gallery`'s nav
+sidebar is now a real page switcher — itself a 2-row `ListView` bound via
+`bind.ListSelected` — and its "Advanced" page (the gallery's startup default)
+exercises every one of these together: a `MenuBar` above a 3-tab
+`TabControl` whose tabs hold a bound `ListView`, a `TreeView`+`Expander`
+pair, and a `DataGrid` with a dialog-showing button. `ListView` is fluo's one
+disposable control (`Dispose()` releases its subscription to the item
+source's change channel); every `ListView` the gallery builds has its
+`Dispose` collected into the same rebuild cancel path as the ordinary
+binder cancels (see Data binding below), so a page switch or theme toggle
+never leaves a stale subscription behind.
+
 ## Data binding
 
 Package `bind` connects `core.Property[T]` values to controls. `bind.OneWay`
