@@ -6,7 +6,42 @@ import (
 	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/input"
 	"github.com/0xdreadnaught/fluo/render"
+	"github.com/0xdreadnaught/fluo/text"
+
+	"golang.org/x/image/font/gofont/goregular"
 )
+
+// TestTabStripFocusRingHugsSelectedCell pins the WinUI-style focus ring: the
+// ring targets the selected tab's header cell rect, not the whole strip.
+func TestTabStripFocusRingHugsSelectedCell(t *testing.T) {
+	f, err := text.Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face := text.NewFace(f, 14)
+	blk := func() core.Widget { return NewFixed(1, 1, render.Color{}) }
+	tc := NewTabControl(face).AddTab("One", blk()).AddTab("Two", blk()).AddTab("Three", blk())
+	layoutTabControl(tc, 0, 0, 300, 120)
+	s := tc.strip
+
+	// Header cells are contiguous in tab order, each cellWidths[i] wide.
+	var acc float32
+	for i := 0; i < 3; i++ {
+		r := s.cellRect(i)
+		if r.X != acc || r.W != s.cellWidths[i] {
+			t.Fatalf("cellRect(%d) = %v, want X=%v W=%v", i, r, acc, s.cellWidths[i])
+		}
+		acc += r.W
+	}
+
+	// The ring hugs the selected cell — narrower than, and not equal to, the
+	// full strip bounds.
+	tc.SetSelectedIndex(1)
+	ring := s.cellRect(tc.SelectedIndex())
+	if ring == s.Bounds() || ring.W >= s.Bounds().W {
+		t.Fatalf("ring %v should hug the selected cell, not span the strip %v", ring, s.Bounds())
+	}
+}
 
 // layoutTabControl measures then arranges tc at the given absolute rect,
 // mirroring layoutTreeView/layoutListView's shared test helper pattern.

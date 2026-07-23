@@ -46,10 +46,12 @@ func setTabContentVisible(w core.Widget, visible bool) {
 // against face) rather than composed from TextBlocks like ComboBox/Expander.
 //
 // Normative: the strip is TabControl's SINGLE focusable unit. The focus
-// ring (RenderOverlay) is drawn around the strip's own bounds only — never
-// the content area below it — and Left/Right while the strip is focused
-// switch tabs (OnKey), clamped at the ends (no wrap), matching
-// ListView/TreeView's clampRowIndex convention exactly.
+// ring (RenderOverlay) hugs the SELECTED tab's header cell — never the
+// content area below it — matching WinUI, where the focus rectangle tracks
+// the active tab header rather than the whole tab list. Left/Right while the
+// strip is focused switch tabs (OnKey), clamped at the ends (no wrap),
+// matching ListView/TreeView's clampRowIndex convention exactly; the ring
+// follows the selection since focus and selection move together.
 type tabStrip struct {
 	core.Element
 
@@ -173,13 +175,33 @@ func (s *tabStrip) Render(r render.Renderer) {
 	}
 }
 
-// RenderOverlay draws the focus ring around the strip's own bounds while
-// focused — per the brief's "the strip is the focusable unit" normative
-// rule, this is the ONLY focus ring TabControl ever shows (the content area
-// below is never itself focusable).
+// cellRect returns tab i's header cell rect (the header box only, excluding
+// the selection underline), using s.Bounds()/s.cellWidths as of the last
+// layout pass — cells are contiguous in tab order, each cellWidths[i] wide,
+// exactly as Render and cellAt walk them. Out-of-range i yields a zero-width
+// rect at the accumulated offset.
+func (s *tabStrip) cellRect(i int) render.Rect {
+	bounds := s.Bounds()
+	var x float32
+	for k := 0; k < i && k < len(s.cellWidths); k++ {
+		x += s.cellWidths[k]
+	}
+	var w float32
+	if i >= 0 && i < len(s.cellWidths) {
+		w = s.cellWidths[i]
+	}
+	return render.Rect{X: bounds.X + x, Y: bounds.Y, W: w, H: s.cellHeight()}
+}
+
+// RenderOverlay draws the focus ring around the SELECTED tab's header cell
+// while the strip is focused, hugging that one cell rather than the whole
+// strip — matching WinUI, where the focus rectangle tracks the active tab
+// header, not the entire tab list. Arrow keys move the selection (OnKey), so
+// the focused cell is always the selected one. The strip remains the single
+// focusable unit; this only changes where the ring is drawn.
 func (s *tabStrip) RenderOverlay(r render.Renderer) {
-	if s.focused {
-		drawFocusRing(r, s.Bounds(), s.metrics.ControlCornerRadius, s.colors, s.metrics)
+	if s.focused && s.face != nil && len(s.owner.tabs) > 0 {
+		drawFocusRing(r, s.cellRect(s.owner.SelectedIndex()), s.metrics.ControlCornerRadius, s.colors, s.metrics)
 	}
 }
 
