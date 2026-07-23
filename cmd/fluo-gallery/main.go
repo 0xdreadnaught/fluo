@@ -332,6 +332,9 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 		itemList.Add(fmt.Sprintf("Item %d", itemList.Len()+1))
 	})
 	addButton.SetAnimated(true).SetTimers(tq)
+	// Left-align to natural width: row5 is a vertical stack, so without this
+	// the button stretches to the full content width.
+	addButton.SetAlign(core.Start, core.Start)
 
 	row5 := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingS).
 		Add(addButton, listPanel)
