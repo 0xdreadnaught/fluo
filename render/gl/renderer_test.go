@@ -510,3 +510,93 @@ func TestTabs(t *testing.T) {
 		core.RenderWidget(root, r)
 	})
 }
+
+// TestMenuOpen is the Phase 7 Task 6 golden: a MenuBar ("File", "Edit") with
+// "File" open — showing its Card+shadow popup with "New", "Open", a
+// separator, "Exit", and a "Recent >" submenu trigger — and that submenu
+// ITSELF expanded (as a second, nested popup) to the right of its row,
+// showing "Report.docx" and "Notes.txt" — inside a 260x200 frame. Opened and
+// expanded entirely through the real router-driven input path (matching
+// TestComboOpen's own approach), not by reaching into any unexported
+// controls internals:
+//
+//   - "File" is the bar's leftmost cell, so a press a few px in from the
+//     bar's own left edge (comfortably inside "File"'s hit zone, whatever its
+//     exact measured width) opens it.
+//   - The "Recent" row's own position isn't observable from this external
+//     package, so rather than hardcode its offset, a plain PointerMove sweep
+//     (2px steps) down the popup's left edge re-hit-tests after every step
+//     and stops the moment PopupCount() reports 2 — i.e. the moment the
+//     sweep's Move has landed on "Recent" and its onHover has fired. Moving
+//     across every OTHER row first (New/Open/separator/Exit) is harmless:
+//     none of them do anything on hover beyond their own (invisible at this
+//     resolution) fill state.
+func TestMenuOpen(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "menu_open", 260, 200, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		bar := controls.NewMenuBar(face)
+		bar.AddMenu("File").
+			Add("New", nil).
+			Add("Open", nil).
+			AddSeparator().
+			Add("Exit", nil).
+			AddSub("Recent").
+			Add("Report.docx", nil).
+			Add("Notes.txt", nil)
+		bar.AddMenu("Edit").Add("Undo", nil)
+		bar.SetAlign(core.Start, core.Start) // top-left; never stretched
+
+		host := controls.NewOverlayHost()
+		router := input.NewRouter()
+		host.SetRouter(router)
+		host.SetContent(bar)
+		router.SetRoot(host)
+
+		frame := render.Rect{X: 0, Y: 0, W: 260, H: 200}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		// First layout pass: gives the bar real arranged bounds, so both the
+		// click point below and the popup's anchor rect (computed from those
+		// same bounds by MenuBar.openMenu) are correct.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		barBounds := core.BoundsOf(bar)
+		fileClick := render.Point{X: barBounds.X + 5, Y: barBounds.Y + barBounds.H/2}
+		router.PointerButton(input.ButtonLeft, true, fileClick, 0)
+		router.PointerButton(input.ButtonLeft, false, fileClick, 0)
+
+		// Second layout pass: arranges the now-open File popup's rows, so
+		// the hover sweep below hit-tests against real bounds.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		sweepX := barBounds.X + 6
+		opened := false
+		for y := barBounds.Y + barBounds.H; y < frame.H; y += 2 {
+			router.PointerMove(render.Point{X: sweepX, Y: y}, 0)
+			if host.PopupCount() == 2 {
+				opened = true
+				break
+			}
+		}
+		if !opened {
+			t.Fatal("hover sweep never found the Recent submenu row (PopupCount never reached 2)")
+		}
+
+		// Third layout pass: arranges the newly-opened submenu popup's rows.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		core.RenderWidget(host, r)
+	})
+}

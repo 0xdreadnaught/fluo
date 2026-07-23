@@ -288,6 +288,29 @@ func (h *OverlayHost) PopupCount() int {
 	return len(h.popups)
 }
 
+// CloseAllPopups closes every open popup, topmost first, via repeated
+// CloseTopPopup calls — so each popup's onDismiss fires exactly once, in
+// topmost-to-bottommost order, as if the caller had manually closed each one
+// from the top down. A no-op when no popup is open.
+//
+// Added for the menu family (MenuBar/ContextMenu, controls/menu.go): a
+// menu-item click needs to collapse an arbitrarily deep stack of nested
+// submenu popups (each opened via its own ShowPopup call — see
+// menuPopupCard.openSub) in a single call, not just the one topmost popup
+// CloseTopPopup closes. This is a v0 simplification for callers that know
+// every popup currently open belongs to the same menu/submenu chain: it
+// closes EVERY popup on this host indiscriminately, including any unrelated
+// one (e.g. a ComboBox dropdown left open elsewhere) that happens to also be
+// open at the same time — acceptable because in normal use nothing else
+// holds a popup open while a menu is engaged (a menu popup is modal, so
+// opening one already dismisses whatever else was open first — see
+// MenuBar.openMenu). Document, don't special-case, this limitation.
+func (h *OverlayHost) CloseAllPopups() {
+	for len(h.popups) > 0 {
+		h.CloseTopPopup()
+	}
+}
+
 // OverlayHostFor walks core.ParentOf from w, looking for the nearest
 // ancestor (inclusive of w itself) that is an *OverlayHost. Returns nil if
 // w has no OverlayHost ancestor — e.g. it isn't attached to a tree rooted at
