@@ -103,13 +103,26 @@ func (l *List[T]) notify() {
 	}
 }
 
+// snapshotListItems returns a copy of all items in the list.
+// This is a helper for Items to avoid builtin shadowing.
+func snapshotListItems[T any](l *List[T]) []T {
+	snapshot := make([]T, l.Len())
+	for i := 0; i < len(snapshot); i++ {
+		snapshot[i] = l.At(i)
+	}
+	return snapshot
+}
+
 // Items binds a list to a panel: on ANY list change, panel.Clear() then Add(make(item))
 // for each item, in order. v0 = full rebuild (virtualization arrives Phase 7).
 //
 // Reentrancy: if a list mutation occurs during make() (while rebuilding), the
 // rebuild coalesces into one additional rebuild after the outer completes, matching
-// Property's own reentrancy semantics. This ensures a mutation triggered by
-// make() settling into a consistent state rather than seeing a half-rebuilt panel.
+// Property's own reentrancy semantics. Each pass snapshots the current items and
+// iterates the snapshot; mutations discovered during the pass set a pending flag,
+// and after the outer loop completes, one additional rebuild pass runs if pending,
+// ensuring convergence (each pass has bounded iteration). Unsupported: a make()
+// that mutates on EVERY invocation across every pass will not converge.
 func Items[T any](l *List[T], panel *controls.StackPanel, make func(item T, index int) core.Widget) (cancel func()) {
 	var rebuilding bool
 	var pending bool
@@ -125,13 +138,17 @@ func Items[T any](l *List[T], panel *controls.StackPanel, make func(item T, inde
 			rebuilding = false
 			if pending {
 				pending = false
-				rebuild() // tail-recursive: run once more if a mutation queued
+				rebuild() // tail-recursive: one coalesced rebuild after outer completes
 			}
 		}()
 
+		// Snapshot items at start of pass to bound iteration.
+		// Any mutation during this pass will set pending=true via guard.
+		snapshot := snapshotListItems(l)
+
 		panel.Clear()
-		for i := 0; i < l.Len(); i++ {
-			item := l.At(i)
+		for i := 0; i < len(snapshot); i++ {
+			item := snapshot[i]
 			widget := make(item, i)
 			panel.Add(widget)
 		}

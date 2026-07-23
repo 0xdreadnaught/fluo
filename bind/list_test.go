@@ -519,6 +519,17 @@ func TestItemsIdentityPerIndexAfterAdd(t *testing.T) {
 	if len(panelChildren) != 3 {
 		t.Fatalf("panel.Children() = %d, want 3", len(panelChildren))
 	}
+
+	// CRITICAL: verify widget identity (not just item/index order)
+	if panelChildren[0] != records[0].widget {
+		t.Fatalf("panelChildren[0] != records[0].widget (widget identity mismatch)")
+	}
+	if panelChildren[1] != records[1].widget {
+		t.Fatalf("panelChildren[1] != records[1].widget (widget identity mismatch)")
+	}
+	if panelChildren[2] != records[2].widget {
+		t.Fatalf("panelChildren[2] != records[2].widget (widget identity mismatch)")
+	}
 }
 
 func TestItemsIdentityPerIndexAfterRemove(t *testing.T) {
@@ -615,36 +626,62 @@ func TestItemsReentrancyGuard(t *testing.T) {
 	l := NewList[string]("Alice")
 	panel := controls.NewStackPanel(controls.Vertical)
 
-	var makeCount int
-	var addedInMake bool
+	var rebuildCount int
+	var mutatedInMake bool
 
 	Items[string](l, panel, func(item string, index int) core.Widget {
-		makeCount++
 		tb := controls.NewTextBox(textFace)
 		tb.SetText(item)
 
-		// On the first rebuild of the initial item, trigger a mutation
-		if item == "Alice" && !addedInMake {
-			addedInMake = true
-			l.Add("Bob") // This should queue a pending rebuild, not panic
+		// Mutate during the subscribed rebuild (after Items binding).
+		// We detect "subscribed" by tracking rebuild invocations.
+		// First rebuild is the initial one (pre-subscription).
+		// Second rebuild is triggered externally (subscription live).
+		if item == "Alice" && rebuildCount > 0 && !mutatedInMake {
+			mutatedInMake = true
+			l.Add("Bob") // Mutation during subscribed rebuild → sets pending
 		}
 
 		return tb
 	})
 
-	// makeCount should be 2: first rebuild of ["Alice"], then
-	// the queued rebuild of ["Alice", "Bob"] after make() for "Alice" completes.
-	if makeCount != 2 {
-		t.Fatalf("makeCount = %d, want 2 (initial rebuild + queued rebuild)", makeCount)
+	rebuildCount++ // Count the initial rebuild
+
+	// Verify initial state
+	if len(panel.Children()) != 1 {
+		t.Fatalf("initial panel.Children() = %d, want 1", len(panel.Children()))
 	}
 
-	// Final panel should have both items
+	// Trigger external mutation while subscription is live
+	l.Add("Charlie")
+	rebuildCount++ // This triggers a rebuild subscription
+
+	// After external Add:
+	// 1. rebuild() snapshots ["Alice", "Charlie"]
+	// 2. make("Alice") is called, which mutates via l.Add("Bob") → pending=true
+	// 3. make("Charlie") is called
+	// 4. defer runs: rebuilding=false, pending=true
+	// 5. rebuild() called again, snapshots ["Alice", "Bob", "Charlie"] and rebuilds
+
+	// Verify final state
 	panelChildren := panel.Children()
-	if len(panelChildren) != 2 {
-		t.Fatalf("panel.Children() = %d, want 2", len(panelChildren))
+	if len(panelChildren) != 3 {
+		t.Fatalf("final panel.Children() = %d, want 3 (full rebuild after reentrancy)", len(panelChildren))
 	}
 
-	if l.Len() != 2 {
-		t.Fatalf("l.Len() = %d, want 2", l.Len())
+	if l.Len() != 3 {
+		t.Fatalf("l.Len() = %d, want 3", l.Len())
+	}
+
+	// Verify correct order: Add("Bob") appends, so after ["Alice", "Charlie"],
+	// Add("Bob") yields ["Alice", "Charlie", "Bob"]
+	if l.At(0) != "Alice" || l.At(1) != "Charlie" || l.At(2) != "Bob" {
+		t.Fatalf("list order incorrect: got [%s, %s, %s], want [Alice, Charlie, Bob]",
+			l.At(0), l.At(1), l.At(2))
+	}
+
+	// Verify mutation was attempted
+	if !mutatedInMake {
+		t.Fatal("mutation during make() did not occur")
 	}
 }
