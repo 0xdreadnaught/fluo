@@ -468,7 +468,7 @@ func TestItemsCancelIsIdempotent(t *testing.T) {
 	cancel() // must not panic
 }
 
-func TestItemsFullRebuildOnEachChange(t *testing.T) {
+func TestItemsIdentityPerIndexAfterAdd(t *testing.T) {
 	face, err := text.Load(goregular.TTF)
 	if err != nil {
 		t.Fatalf("text.Load: %v", err)
@@ -478,37 +478,173 @@ func TestItemsFullRebuildOnEachChange(t *testing.T) {
 	l := NewList[string]("Alice", "Bob")
 	panel := controls.NewStackPanel(controls.Vertical)
 
+	// Record (widget, item, index) for each rebuild
+	type record struct {
+		widget core.Widget
+		item   string
+		index  int
+	}
+	var records []record
+
 	Items[string](l, panel, func(item string, index int) core.Widget {
 		tb := controls.NewTextBox(textFace)
 		tb.SetText(item)
+		records = append(records, record{tb, item, index})
 		return tb
 	})
 
-	getWidgets := func() []core.Widget {
-		return panel.Children()
+	if len(records) != 2 || records[0].item != "Alice" || records[1].item != "Bob" {
+		t.Fatalf("initial records incorrect")
 	}
 
-	firstWidgets := getWidgets()
-	if len(firstWidgets) != 2 {
-		t.Fatalf("initial panel.Children() = %d, want 2", len(firstWidgets))
-	}
-
+	// Add an item -> full rebuild
+	records = records[:0]
 	l.Add("Charlie")
-	secondWidgets := getWidgets()
-	if len(secondWidgets) != 3 {
-		t.Fatalf("after Add panel.Children() = %d, want 3", len(secondWidgets))
+
+	if len(records) != 3 {
+		t.Fatalf("after Add: make called %d times, want 3 (full rebuild)", len(records))
+	}
+	if records[0].item != "Alice" || records[0].index != 0 {
+		t.Fatalf("record[0]: item=%s index=%d, want Alice 0", records[0].item, records[0].index)
+	}
+	if records[1].item != "Bob" || records[1].index != 1 {
+		t.Fatalf("record[1]: item=%s index=%d, want Bob 1", records[1].item, records[1].index)
+	}
+	if records[2].item != "Charlie" || records[2].index != 2 {
+		t.Fatalf("record[2]: item=%s index=%d, want Charlie 2", records[2].item, records[2].index)
 	}
 
-	// After Add, the first two widgets might be different objects (full rebuild)
-	// This tests that the binding properly clears and rebuilds
-	if secondWidgets[0] == firstWidgets[0] && secondWidgets[1] == firstWidgets[1] {
-		// This is actually OK - depends on whether Clear/Add reuses widgets
-		// The key is that the count is right and order is right
+	// Verify panel has 3 children with correct order
+	panelChildren := panel.Children()
+	if len(panelChildren) != 3 {
+		t.Fatalf("panel.Children() = %d, want 3", len(panelChildren))
+	}
+}
+
+func TestItemsIdentityPerIndexAfterRemove(t *testing.T) {
+	face, err := text.Load(goregular.TTF)
+	if err != nil {
+		t.Fatalf("text.Load: %v", err)
+	}
+	textFace := text.NewFace(face, 14)
+
+	l := NewList[string]("Alice", "Bob", "Charlie")
+	panel := controls.NewStackPanel(controls.Vertical)
+
+	type record struct {
+		item  string
+		index int
+	}
+	var records []record
+
+	Items[string](l, panel, func(item string, index int) core.Widget {
+		tb := controls.NewTextBox(textFace)
+		tb.SetText(item)
+		records = append(records, record{item, index})
+		return tb
+	})
+
+	if len(records) != 3 {
+		t.Fatalf("initial: make called %d times, want 3", len(records))
 	}
 
-	l.RemoveAt(0)
-	thirdWidgets := getWidgets()
-	if len(thirdWidgets) != 2 {
-		t.Fatalf("after RemoveAt panel.Children() = %d, want 2", len(thirdWidgets))
+	// Remove middle item -> full rebuild
+	records = records[:0]
+	l.RemoveAt(1)
+
+	if len(records) != 2 {
+		t.Fatalf("after RemoveAt(1): make called %d times, want 2 (full rebuild)", len(records))
+	}
+	if records[0].item != "Alice" || records[0].index != 0 {
+		t.Fatalf("record[0]: item=%s index=%d, want Alice 0", records[0].item, records[0].index)
+	}
+	if records[1].item != "Charlie" || records[1].index != 1 {
+		t.Fatalf("record[1]: item=%s index=%d, want Charlie 1", records[1].item, records[1].index)
+	}
+}
+
+func TestItemsIdentityPerIndexAfterSet(t *testing.T) {
+	face, err := text.Load(goregular.TTF)
+	if err != nil {
+		t.Fatalf("text.Load: %v", err)
+	}
+	textFace := text.NewFace(face, 14)
+
+	l := NewList[string]("Alice", "Bob")
+	panel := controls.NewStackPanel(controls.Vertical)
+
+	type record struct {
+		item  string
+		index int
+	}
+	var records []record
+
+	Items[string](l, panel, func(item string, index int) core.Widget {
+		tb := controls.NewTextBox(textFace)
+		tb.SetText(item)
+		records = append(records, record{item, index})
+		return tb
+	})
+
+	if len(records) != 2 {
+		t.Fatalf("initial: make called %d times, want 2", len(records))
+	}
+
+	// Set triggers full rebuild
+	records = records[:0]
+	l.Set(0, "Changed")
+
+	if len(records) != 2 {
+		t.Fatalf("after Set: make called %d times, want 2 (full rebuild)", len(records))
+	}
+	if records[0].item != "Changed" || records[0].index != 0 {
+		t.Fatalf("record[0]: item=%s index=%d, want Changed 0", records[0].item, records[0].index)
+	}
+	if records[1].item != "Bob" || records[1].index != 1 {
+		t.Fatalf("record[1]: item=%s index=%d, want Bob 1", records[1].item, records[1].index)
+	}
+}
+
+func TestItemsReentrancyGuard(t *testing.T) {
+	face, err := text.Load(goregular.TTF)
+	if err != nil {
+		t.Fatalf("text.Load: %v", err)
+	}
+	textFace := text.NewFace(face, 14)
+
+	l := NewList[string]("Alice")
+	panel := controls.NewStackPanel(controls.Vertical)
+
+	var makeCount int
+	var addedInMake bool
+
+	Items[string](l, panel, func(item string, index int) core.Widget {
+		makeCount++
+		tb := controls.NewTextBox(textFace)
+		tb.SetText(item)
+
+		// On the first rebuild of the initial item, trigger a mutation
+		if item == "Alice" && !addedInMake {
+			addedInMake = true
+			l.Add("Bob") // This should queue a pending rebuild, not panic
+		}
+
+		return tb
+	})
+
+	// makeCount should be 2: first rebuild of ["Alice"], then
+	// the queued rebuild of ["Alice", "Bob"] after make() for "Alice" completes.
+	if makeCount != 2 {
+		t.Fatalf("makeCount = %d, want 2 (initial rebuild + queued rebuild)", makeCount)
+	}
+
+	// Final panel should have both items
+	panelChildren := panel.Children()
+	if len(panelChildren) != 2 {
+		t.Fatalf("panel.Children() = %d, want 2", len(panelChildren))
+	}
+
+	if l.Len() != 2 {
+		t.Fatalf("l.Len() = %d, want 2", l.Len())
 	}
 }
