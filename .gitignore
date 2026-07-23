@@ -1,3 +1,7 @@
 *.exe
 *.got.png
 .superpowers/
+
+# python bytecode from tools/
+__pycache__/
+*.pyc
