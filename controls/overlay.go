@@ -55,14 +55,17 @@ type popupEntry struct {
 // router (SetRouter must be wired) for as long as at least one MODAL popup
 // is open: every pointer event routes directly to OverlayHost.OnPointer
 // while a modal popup is showing, completely bypassing hit-testing into
-// content. OnPointer re-hit-tests and forwards into the topmost popup's own
-// subtree (input.HitPath + input.Bubble) when the event falls inside it, so
-// popup-internal controls (ComboBox item rows, etc.) still receive
-// Press/Release/Move/Wheel normally. Content (and any popup beneath the
-// topmost one) is the part that stays inert while a modal popup is open —
-// only the topmost popup's interior and the dismiss-on-outside-Press
-// decision are live. Documented v0 simplification, not an oversight. A
-// non-modal popup with no modal popup open engages none of this: it is
+// content. OnPointer re-hit-tests the WHOLE stack, top-down, for the popup
+// actually containing the event (see popupAt) — not just the last one — and
+// forwards into THAT popup's own subtree (input.HitPath + input.Bubble),
+// closing whatever popups sit above it first (see OnPointer's own doc
+// comment for the full chain-aware (a)/(b)/(c) semantics), so popup-internal
+// controls (ComboBox item rows, a menu's own sibling rows or nested
+// submenu, etc.) still receive Press/Release/Move/Wheel normally regardless
+// of which level of an open chain they belong to. Content is the part that
+// stays inert while a modal popup is open — only the currently-containing
+// popup's interior and the dismiss/auto-close decisions above it are live.
+// A non-modal popup with no modal popup open engages none of this: it is
 // never light-dismissed (nothing captures on its account), and the
 // ordinary uncaptured dispatch path below (hit-testing, hover-diffing,
 // bubbling) reaches it and everything else exactly as if it weren't a
@@ -76,15 +79,19 @@ type popupEntry struct {
 // OverlayHost holds the capture — a captured Move only ever reaches
 // OverlayHost.OnPointer as a bare Move, with no Enter/Leave synthesized
 // anywhere. Popup-internal controls that drive their hover state off
-// Enter/Leave (e.g. ComboBox's item rows) would therefore never actually
-// hover from real mouse movement, only from Press/Release — so OnPointer
-// replicates Router.updateHover's diff-and-notify algorithm itself, scoped to
-// the topmost popup's own subtree, via popupHover/diffPopupHover. A
-// non-modal popup with no modal capture engaged needs none of this
-// replication: Router's own hover-diffing runs normally (it was never
-// bypassed), so Enter/Leave reach it exactly as they would any other widget
-// in the tree — this is what restores ToolTipArea's documented
-// close-on-Leave path (see its own type doc comment).
+// Enter/Leave (e.g. ComboBox's item rows, a menuSubRow's hover-opens-submenu)
+// would therefore never actually hover from real mouse movement, only from
+// Press/Release — so OnPointer replicates Router.updateHover's
+// diff-and-notify algorithm itself, scoped to whichever popup's own subtree
+// currently CONTAINS the pointer (not necessarily the topmost one — see
+// popupAt), via popupHover/diffPopupHover. Moving the pointer into a
+// DIFFERENT (lower) popup than the one previously hovered auto-closes
+// whatever popup(s) sat above it, exactly like a Press would (see
+// OnPointer's own doc comment). A non-modal popup with no modal capture
+// engaged needs none of this replication: Router's own hover-diffing runs
+// normally (it was never bypassed), so Enter/Leave reach it exactly as they
+// would any other widget in the tree — this is what restores ToolTipArea's
+// documented close-on-Leave path (see its own type doc comment).
 type OverlayHost struct {
 	core.Element
 
@@ -92,14 +99,20 @@ type OverlayHost struct {
 	popups  []popupEntry
 	router  *input.Router
 
-	// popupHover is the last hit-test path (root→leaf, rooted at the topmost
-	// popup) computed by a forwarded Move, used to diff against the next one
-	// and synthesize Enter/Leave for popup-internal widgets — see
-	// diffPopupHover and the type doc comment's "Hover" paragraph. Reset to
-	// nil (silently — no Leave fired, matching input.Router.Detach's
-	// no-notification-on-teardown convention) whenever the topmost popup
-	// changes: a new popup opens (ShowPopup) or any popup closes
-	// (ClosePopup), since either invalidates whatever it was tracking.
+	// popupHover is the last hit-test path (root→leaf, rooted at whichever
+	// popup OnPointer's popupAt found as the CONTAINING popup for the most
+	// recent forwarded Move — not necessarily the topmost one; see
+	// OnPointer's chain-aware doc comment) computed by that Move, used to
+	// diff against the next one and synthesize Enter/Leave for
+	// popup-internal widgets — see diffPopupHover and the type doc comment's
+	// "Hover" paragraph. Reset to nil (silently — no Leave fired, matching
+	// input.Router.Detach's no-notification-on-teardown convention) whenever
+	// any popup opens (ShowPopup/ShowPopupNonModal) or closes (ClosePopup):
+	// either invalidates whatever it was tracking, since OnPointer always
+	// closes every popup ABOVE the containing one before recomputing this —
+	// so by the time diffPopupHover runs again, a change of containing popup
+	// has already reset popupHover to nil via that closing, with no separate
+	// "which popup does this belong to" field needed to detect the switch.
 	popupHover []core.Widget
 
 	// popupHoverGen counts every write to popupHover (both the resets in
@@ -451,52 +464,78 @@ func (h *OverlayHost) OnKey(e *input.KeyEvent) {
 	}
 }
 
+// popupAt returns the index (into h.popups) of the topmost popup whose
+// bounds contain p, searching the stack TOP-DOWN — the first (highest-index)
+// match wins, mirroring input.HitPath's own topmost-child-wins convention:
+// a nested submenu, opened later and therefore later in the stack, is found
+// before the parent popup beneath it even where the two would overlap.
+// Returns -1 if p falls inside no popup on the stack at all.
+func (h *OverlayHost) popupAt(p render.Point) int {
+	for i := len(h.popups) - 1; i >= 0; i-- {
+		if core.BoundsOf(h.popups[i].w).Contains(p) {
+			return i
+		}
+	}
+	return -1
+}
+
 // OnPointer implements input.PointerHandler. See the OverlayHost doc comment
 // for why the router is captured while any MODAL popup is open, which is
 // what makes this the exclusive receiver of every pointer event during that
 // window: with no root set (or no modal popup open), this is never called
 // via capture at all — only ever via ordinary bubbling, if it happens to be
-// on the hit path, in which case there's nothing to do (len(h.popups) == 0
-// short-circuits below). Note top (below) is simply the LAST entry on the
-// stack regardless of its modal flag: a non-modal popup opened while a
-// modal one is already active is forwarded into (or dismisses, per the
-// outside-Press branch) exactly like a modal one would, since it's the
-// modal capture that got this call routed here at all — see the type doc
-// comment's "Modal vs non-modal popups" paragraph.
+// on the hit path, in which case there's nothing to do (the hasModalPopup
+// guard below short-circuits it).
 //
-// When e.Pos falls inside the topmost popup's bounds, the event is forwarded
-// into that popup's own subtree — input.HitPath(topmost, e.Pos) finds the
-// widget(s) under the point, and input.Bubble replays the same leaf→root
-// delivery Router's own dispatch would have done had it not been bypassed by
-// the capture — so popup-internal controls (buttons, item rows, ...) receive
-// Press/Release/Move/Wheel much as if the router had hit-tested normally. A
-// Move specifically is ALSO run through diffPopupHover first (see the type
-// doc comment's "Hover" paragraph), so popup-internal widgets that rely on
-// Enter/Leave (e.g. ComboBox's item rows) receive proper hover transitions
-// from real mouse movement, not just from this forwarded Move. Nothing here
-// is dismissed in this branch, regardless of whether the forwarded delivery
-// itself ends up Handled.
+// CHAIN-AWARE forwarding/dismissal (Phase 8 Task 1, replacing the earlier
+// "only the topmost popup exists" v0 simplification): every popup on the
+// stack is a candidate, not just the last one. popupAt searches top-down for
+// the first (i.e. topmost) popup whose bounds contain e.Pos:
+//
+//   - (a) e.Pos is inside NO popup at all (popupAt returns -1): a Move first
+//     clears popupHover (diffPopupHover(nil) delivers Leave to everything it
+//     was tracking); a Press closes EVERY popup on the stack, topmost first
+//     (via CloseAllPopups, so each one's onDismiss fires in that order) and
+//     marks e.Handled, swallowing it. Every other outside action
+//     (Move/Release/Wheel) is swallowed silently beyond that hover clear.
+//
+//   - (b)/(c) e.Pos is inside popups[idx]'s bounds for some idx: any popup
+//     ABOVE idx — opened later, e.g. a deeper submenu in the same chain that
+//     e.Pos no longer falls within — is now stale relative to where the
+//     pointer actually is, and is closed first (topmost first, via
+//     CloseTopPopup, each firing its own onDismiss) before anything is
+//     delivered. This is what makes a lower popup's sibling rows reachable
+//     again — hovering a parent menu's row auto-closes whatever submenu
+//     chain was open above it — and what collapses an out-of-order chain
+//     down to the level a Press actually landed in, in one step, rather than
+//     needing one dismiss per stale level.
+//
+//     Once popups[idx] (call it target) is topmost, the event is forwarded
+//     into its own subtree exactly as single-popup forwarding always worked:
+//     input.HitPath(target, e.Pos) finds the widget(s) under the point, and
+//     input.Bubble replays the same leaf→root delivery Router's own dispatch
+//     would have done had it not been bypassed by the capture — so
+//     popup-internal controls (buttons, item rows, ...) receive
+//     Press/Release/Move/Wheel much as if the router had hit-tested
+//     normally. A Move specifically is ALSO run through diffPopupHover first
+//     (see the type doc comment's "Hover" paragraph and diffPopupHover's own
+//     doc comment for why this needs no extra "which popup is this rooted
+//     at" bookkeeping beyond what closing the stale levels above already
+//     gives it), so popup-internal widgets that rely on Enter/Leave (e.g.
+//     ComboBox's item rows, a menuSubRow's hover-opens-submenu) receive
+//     proper hover transitions from real mouse movement. Nothing here is
+//     dismissed by virtue of landing inside target, regardless of whether
+//     the forwarded delivery itself ends up Handled — only popups ABOVE
+//     target are ever closed by this branch.
 //
 // One real difference from ordinary (uncaptured) dispatch: this host's own
 // Capture(h) is still the one on top of the router's capture stack for the
-// duration of that forwarded call. If a forwarded widget itself captures —
-// e.g. a ScrollViewer thumb starting a drag inside a popup — that Capture
-// NESTS on top of the host's (see input.Router.Capture), and the widget's
-// own matching Release pops back to the host's capture rather than clearing
-// it: light dismiss stays armed for the rest of the popup's lifetime even
-// after an inner drag completes.
-//
-// When e.Pos falls outside the topmost popup's bounds, a Move first clears
-// popupHover (diffPopupHover(nil) delivers Leave to everything it was
-// tracking — the pointer just left the popup's interior entirely, whether or
-// not the popup itself stays open), then only Press matters: it closes that
-// popup (via CloseTopPopup, so its onDismiss fires) and marks e.Handled,
-// swallowing it. Every other outside action (Move/Release/Wheel) is
-// swallowed silently with no forwarding beyond that hover clear — content
-// (and any popup beneath the topmost one) still gets no hover/move feedback
-// while a popup is open; only the topmost popup's own interior and the
-// dismiss-on-Press decision are live. This is a documented v0
-// simplification, not an oversight.
+// duration of a forwarded call. If a forwarded widget itself captures — e.g.
+// a ScrollViewer thumb starting a drag inside a popup — that Capture NESTS
+// on top of the host's (see input.Router.Capture), and the widget's own
+// matching Release pops back to the host's capture rather than clearing it:
+// light dismiss stays armed for the rest of the popup's lifetime even after
+// an inner drag completes.
 func (h *OverlayHost) OnPointer(e *input.PointerEvent) {
 	// Guard on hasModalPopup, NOT merely len(h.popups) == 0: OverlayHost is
 	// the root, so it sits on EVERY hit-test path and is reached via the
@@ -506,49 +545,63 @@ func (h *OverlayHost) OnPointer(e *input.PointerEvent) {
 	// happens at all, is exactly that ordinary bubble, not the captured
 	// forwarding call the rest of this method is written for). Without this
 	// guard, a plain uncaptured press elsewhere in content would still
-	// reach here, find e.Pos outside the topmost (non-modal) popup's
-	// bounds, and wrongly light-dismiss it via the outside-Press branch
-	// below — exactly the swallow this whole feature exists to avoid. Once
-	// hasModalPopup() is true, this IS always the captured-forwarding call
-	// (ShowPopup guarantees the capture is held for as long as any modal
-	// popup remains), so the rest of the method proceeds exactly as before.
+	// reach here, find e.Pos outside every popup, and wrongly light-dismiss
+	// them via the outside-Press branch below — exactly the swallow this
+	// whole feature exists to avoid. Once hasModalPopup() is true, this IS
+	// always the captured-forwarding call (ShowPopup guarantees the capture
+	// is held for as long as any modal popup remains), so the rest of the
+	// method proceeds exactly as before.
 	if !h.hasModalPopup() {
 		return
 	}
-	top := h.popups[len(h.popups)-1].w
 
-	if core.BoundsOf(top).Contains(e.Pos) {
-		path := input.HitPath(top, e.Pos)
+	idx := h.popupAt(e.Pos)
+
+	if idx == -1 {
 		if e.Action == input.Move {
-			h.diffPopupHover(path)
+			h.diffPopupHover(nil)
 		}
-		input.Bubble(path, e)
+		if e.Action == input.Press {
+			h.CloseAllPopups()
+			e.Handled = true
+		}
 		return
 	}
 
-	if e.Action == input.Move {
-		h.diffPopupHover(nil)
+	target := h.popups[idx].w
+	for len(h.popups) > 0 && h.popups[len(h.popups)-1].w != target {
+		h.CloseTopPopup()
 	}
 
-	if e.Action == input.Press {
-		h.CloseTopPopup()
-		e.Handled = true
+	path := input.HitPath(target, e.Pos)
+	if e.Action == input.Move {
+		h.diffPopupHover(path)
 	}
+	input.Bubble(path, e)
 }
 
-// diffPopupHover diffs h.popupHover (the hit-test path, rooted at the
-// topmost popup, as of the previous forwarded Move) against newPath,
-// delivering a direct (non-bubbling; e.Handled is not consulted, matching
-// input.Router.updateHover) Leave to every widget that dropped off the path
-// and an Enter to every widget newly on it, then stores newPath as the new
-// popupHover. Passing nil (as OnPointer does once the pointer has moved
-// outside the popup entirely) delivers Leave to every currently-tracked
-// widget and Enter to none — this replicates input.Router.updateHover's own
-// diff-and-notify algorithm (that method is private to the input package,
-// and in any case diffs against the ROOT tree's hover state, which
-// OverlayHost's modal capture bypasses entirely while any popup is open —
-// see the type doc comment's "Hover" paragraph for why Router's own
-// mechanism never runs during that window).
+// diffPopupHover diffs h.popupHover (the hit-test path, rooted at whichever
+// popup was the CONTAINING popup as of the previous forwarded Move — see the
+// field's own doc comment) against newPath, delivering a direct
+// (non-bubbling; e.Handled is not consulted, matching input.Router.updateHover)
+// Leave to every widget that dropped off the path and an Enter to every
+// widget newly on it, then stores newPath as the new popupHover. Passing nil
+// (as OnPointer does once the pointer has moved outside every popup on the
+// stack) delivers Leave to every currently-tracked widget and Enter to none
+// — this replicates input.Router.updateHover's own diff-and-notify algorithm
+// (that method is private to the input package, and in any case diffs
+// against the ROOT tree's hover state, which OverlayHost's modal capture
+// bypasses entirely while any popup is open — see the type doc comment's
+// "Hover" paragraph for why Router's own mechanism never runs during that
+// window). Because OnPointer always closes every popup above the containing
+// one BEFORE calling this (see its own doc comment), a Move that finds a
+// DIFFERENT containing popup than the previous one already arrives here with
+// old (== h.popupHover) reset to nil — that reset happened silently, as a
+// side effect of closing the now-stale popup(s) above (see the field's own
+// doc comment), not as a Leave delivered here. This diff then simply has
+// nothing to deliver a Leave for (old is empty) and delivers Enter to every
+// widget on newPath, with no separate "did the containing popup change"
+// check needed to get that right.
 //
 // REENTRANCY: delivering a synthesized Enter/Leave below can itself call
 // ShowPopup/ClosePopup synchronously — e.g. a ToolTipArea with no

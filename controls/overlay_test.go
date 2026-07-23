@@ -620,6 +620,141 @@ func TestPopupHoverEnterLeaveSynthesis(t *testing.T) {
 	}
 }
 
+// TestOverlayChainOutsidePressClosesAllPopups is the overlay-level regression
+// for Phase 8 Task 1's (a) semantics: with a TWO-level popup stack (neither
+// popup overlapping the other), a single press that lands inside NEITHER
+// popup (but well inside content's full-host coverage) must close BOTH,
+// topmost first (each firing its own onDismiss, in that order), and swallow
+// the press — content must never see it. This replaces the old
+// topmost-only CloseTopPopup swallow.
+func TestOverlayChainOutsidePressClosesAllPopups(t *testing.T) {
+	content := &ovProbe{}
+	content.SetWidth(400)
+	content.SetHeight(300)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(content)
+	r.SetRoot(host) // BEFORE ShowPopup: SetRoot itself resets any capture
+
+	var dismissed []string
+	first := NewFixed(60, 30, render.RGB(1, 0, 0))
+	second := NewFixed(40, 20, render.RGB(0, 1, 0))
+	host.ShowPopup(first, render.Rect{X: 10, Y: 10, W: 10, H: 10}, func() { dismissed = append(dismissed, "first") })
+	host.ShowPopup(second, render.Rect{X: 200, Y: 10, W: 10, H: 10}, func() { dismissed = append(dismissed, "second") })
+	layoutOverlay(host, 400, 300)
+
+	// first bounds {10,20,60,30}; second bounds {200,20,40,20}; (350,150) is
+	// outside both, well inside content's full-host coverage.
+	outside := render.Point{X: 350, Y: 150}
+	r.PointerButton(input.ButtonLeft, true, outside, 0)
+
+	if got := host.PopupCount(); got != 0 {
+		t.Fatalf("PopupCount after outside press = %d, want 0 (whole chain closed in one press)", got)
+	}
+	want := []string{"second", "first"} // topmost first
+	if len(dismissed) != len(want) || dismissed[0] != want[0] || dismissed[1] != want[1] {
+		t.Fatalf("dismissed = %v, want %v", dismissed, want)
+	}
+	if got := content.events; len(got) != 0 {
+		t.Fatalf("content.events = %v, want none (press swallowed, not delivered to content)", got)
+	}
+}
+
+// TestOverlayChainPressInLowerPopupClosesAboveAndDelivers is the
+// overlay-level regression for Phase 8 Task 1's (b) semantics: with a
+// TWO-level popup stack, a press that lands inside the LOWER (non-topmost)
+// popup's bounds only must close every popup above it (here, just the
+// topmost one — firing its onDismiss) and then forward the press into the
+// lower popup's own subtree via input.HitPath + input.Bubble, exactly as
+// single-popup forwarding always worked.
+func TestOverlayChainPressInLowerPopupClosesAboveAndDelivers(t *testing.T) {
+	lowerProbe := &ovProbe{}
+	lowerProbe.SetWidth(60)
+	lowerProbe.SetHeight(30)
+	upperProbe := &ovProbe{}
+	upperProbe.SetWidth(40)
+	upperProbe.SetHeight(20)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(NewFixed(400, 300, render.RGB(1, 2, 3)))
+	r.SetRoot(host) // BEFORE ShowPopup: SetRoot itself resets any capture
+
+	upperDismissed := false
+	host.ShowPopup(lowerProbe, render.Rect{X: 10, Y: 10, W: 10, H: 10}, nil)
+	host.ShowPopup(upperProbe, render.Rect{X: 200, Y: 10, W: 10, H: 10}, func() { upperDismissed = true })
+	layoutOverlay(host, 400, 300)
+
+	// lowerProbe bounds {10,20,60,30}; press inside it, well outside upperProbe.
+	pos := render.Point{X: 30, Y: 30}
+	r.PointerButton(input.ButtonLeft, true, pos, 0)
+
+	if !upperDismissed {
+		t.Fatal("upper popup's onDismiss did not fire — want it closed (chain-aware: popups above the pressed level close first)")
+	}
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after press in the lower popup = %d, want 1 (only the lower popup remains)", got)
+	}
+	if got := lowerProbe.events; len(got) != 1 || got[0] != "press" {
+		t.Fatalf("lowerProbe.events = %v, want [press] (forwarded into the containing popup)", got)
+	}
+}
+
+// TestOverlayChainHoverMoveBetweenLevelsAutoCloses is the overlay-level
+// regression for Phase 8 Task 1's (c) semantics: with a TWO-level popup
+// stack, hovering the topmost popup behaves exactly as single-popup hover
+// always did (Enter then Move, forwarded), but moving from there to a
+// position inside the LOWER popup only — a DIFFERENT containing popup —
+// auto-closes the (now stale) upper popup first, then synthesizes a fresh
+// Enter+Move against the lower popup's own hover path. No Leave reaches
+// upperProbe: it's detached/closed silently, matching ClosePopup's
+// Detach-on-close convention (see popupHover's own doc comment), not
+// delivered a Leave on its way out.
+func TestOverlayChainHoverMoveBetweenLevelsAutoCloses(t *testing.T) {
+	lowerProbe := &hoverProbe{}
+	lowerProbe.SetWidth(60)
+	lowerProbe.SetHeight(30)
+	upperProbe := &hoverProbe{}
+	upperProbe.SetWidth(40)
+	upperProbe.SetHeight(20)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(NewFixed(400, 300, render.RGB(1, 2, 3)))
+	r.SetRoot(host) // BEFORE ShowPopup: SetRoot itself resets any capture
+
+	host.ShowPopup(lowerProbe, render.Rect{X: 10, Y: 10, W: 10, H: 10}, nil)
+	host.ShowPopup(upperProbe, render.Rect{X: 200, Y: 10, W: 10, H: 10}, nil)
+	layoutOverlay(host, 400, 300)
+
+	// upperProbe bounds {200,20,40,20}; hover into it first — unaffected by
+	// the chain-aware change (it's already the topmost/containing popup).
+	posUpper := render.Point{X: 210, Y: 25}
+	r.PointerMove(posUpper, 0)
+	if got := upperProbe.events; len(got) != 2 || got[0] != "enter" || got[1] != "move" {
+		t.Fatalf("upperProbe.events after hovering it = %v, want [enter move]", got)
+	}
+	if got := host.PopupCount(); got != 2 {
+		t.Fatalf("PopupCount after hovering the topmost popup = %d, want 2 (unaffected)", got)
+	}
+
+	// lowerProbe bounds {10,20,60,30}; moving there finds a DIFFERENT
+	// (lower) containing popup.
+	posLower := render.Point{X: 30, Y: 30}
+	r.PointerMove(posLower, 0)
+
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after moving into the lower popup = %d, want 1 (upper auto-closed)", got)
+	}
+	if got := lowerProbe.events; len(got) != 2 || got[0] != "enter" || got[1] != "move" {
+		t.Fatalf("lowerProbe.events after the cross-level Move = %v, want [enter move]", got)
+	}
+}
+
 // ovKeyProbe is a minimal widget for OverlayHost.OnKey delegation tests: it
 // counts every OnKey delivery (so a test can assert a key reached it exactly
 // once — never zero, never twice) and optionally exposes a single child (so

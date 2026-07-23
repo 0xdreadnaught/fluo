@@ -223,36 +223,30 @@ func (card *menuPopupCard) Render(r render.Renderer) {
 // so there is no h→w→h stack to worry about here — see OverlayHost.ShowPopup's
 // own doc comment for the general caveat this sidesteps.
 //
-// PINNED v0 consequences of "the submenu is a second, independent entry on
-// the host's popup stack, on top of the parent's" (see the type doc
-// comment) — all three follow directly from OverlayHost.OnPointer's own
-// "forwarding targets topmost" rule (see its doc comment's "documented v0
-// simplification, not an oversight" paragraph) and are locked in place by
-// TestMenuOutsidePressWithSubmenuClosesOnlyTopmost and
-// TestMenuSiblingRowUnreachableWhileSubmenuOpen (controls/menu_test.go):
+// Chain-aware forwarding/dismissal (Phase 8 Task 1 — see
+// OverlayHost.OnPointer's own doc comment for the full (a)/(b)/(c)
+// semantics) replaced the earlier "the submenu is a second, independent
+// entry on the host's popup stack, and forwarding/dismissal only ever
+// targets the topmost entry" v0 simplification: an outside press now
+// light-dismisses the ENTIRE open chain (this submenu AND the parent menu
+// beneath it) in one press, via OverlayHost's outside-press CloseAllPopups
+// branch — see TestMenuOutsidePressWithSubmenuClosesAll
+// (controls/menu_test.go); and every OTHER row in the PARENT popup (siblings
+// of row) is reachable again while the submenu is open — hovering one
+// auto-closes this submenu first (OverlayHost.OnPointer closes whatever sits
+// above the popup a Move's position actually falls in), then hovers/forwards
+// into the parent row normally — see
+// TestMenuSiblingRowHoverAutoClosesSubmenu.
 //
-//   - An outside press light-dismisses ONLY the topmost popup — the
-//     submenu, via CloseTopPopup — never the parent menu beneath it. A
-//     SECOND outside press is needed to close the parent too. This differs
-//     from WinUI's close-the-whole-chain-on-outside-click convention.
-//   - While the submenu is open, every OTHER row in the PARENT popup
-//     (siblings of row, above or below it) is unreachable: forwarding only
-//     ever hit-tests/delivers into the topmost popup's own subtree, so a
-//     Move over a parent sibling row neither hovers nor un-hovers it, and a
-//     Press on one does nothing (not even light-dismiss, since it's not
-//     "outside" the parent popup's own bounds — it just never gets
-//     forwarded at all).
-//   - The anchor's clamping (via OverlayHost.placePopup's existing x-clamp)
-//     means a submenu opened from a row near the host's RIGHT edge, wide
-//     enough to overflow, is clamped back leftward rather than flipping to
-//     open on the LEFT of row instead — it can end up overlapping row (and
-//     the parent popup) rather than sitting cleanly beside it.
-//
-// Revisit (not done here): chain-aware forwarding/dismissal — walking the
-// WHOLE open chain (every popup from topmost down to the top-level menu),
-// not just the single topmost entry, for both outside-press dismissal and
-// hover delivery; and a left-flip for a submenu anchor that would overflow
-// the right edge, mirroring placePopup's existing above/below flip.
+// STILL PINNED (not addressed by chain-aware forwarding, since it's a
+// placement question, not a forwarding/dismissal one): the anchor's clamping
+// (via OverlayHost.placePopup's existing x-clamp) means a submenu opened
+// from a row near the host's RIGHT edge, wide enough to overflow, is clamped
+// back leftward rather than flipping to open on the LEFT of row instead — it
+// can end up overlapping row (and the parent popup) rather than sitting
+// cleanly beside it. Revisit (not done here): a left-flip for a submenu
+// anchor that would overflow the right edge, mirroring placePopup's existing
+// above/below flip.
 func (card *menuPopupCard) openSub(row *menuSubRow, sub *MenuItems, closeAll func()) {
 	if card.openSubRow == row {
 		return

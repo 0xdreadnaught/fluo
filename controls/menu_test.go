@@ -222,17 +222,14 @@ func openEditWithRecentSubmenu(t *testing.T, bar *MenuBar, host *OverlayHost, r 
 	return rows, card
 }
 
-// TestMenuOutsidePressWithSubmenuClosesOnlyTopmost PINS down current v0
-// behavior (see menuPopupCard.openSub's doc comment's "PINNED v0
-// consequences" paragraph): with a submenu open (two popups on the stack,
-// the submenu topmost), a single outside press light-dismisses ONLY the
-// topmost popup — via OverlayHost's outside-press CloseTopPopup swallow —
-// leaving the parent menu open and the bar's own state consistent with
-// that (openIdx still the parent's index, PopupCount 1). A SECOND outside
-// press is needed to close the parent too. This differs from WinUI's
-// close-the-whole-chain-on-outside-click convention; revisit = chain-aware
-// dismissal (walk the whole open chain, not just the topmost entry).
-func TestMenuOutsidePressWithSubmenuClosesOnlyTopmost(t *testing.T) {
+// TestMenuOutsidePressWithSubmenuClosesAll pins the NEW (Phase 8 Task 1)
+// chain-aware dismissal behavior (see OverlayHost.OnPointer's own doc
+// comment): with a submenu open (two popups on the stack, the submenu
+// topmost), a SINGLE outside press falls inside NO popup on the stack, so
+// OverlayHost.OnPointer's outside-press branch closes the WHOLE chain —
+// submenu AND parent menu — via CloseAllPopups, in one press. The bar's own
+// state (openIdx, reset by the parent's onDismiss) ends up fully closed too.
+func TestMenuOutsidePressWithSubmenuClosesAll(t *testing.T) {
 	bar, host, r, _ := newTestMenuBar(t)
 	openEditWithRecentSubmenu(t, bar, host, r)
 
@@ -240,33 +237,24 @@ func TestMenuOutsidePressWithSubmenuClosesOnlyTopmost(t *testing.T) {
 	r.PointerButton(input.ButtonLeft, true, outside, 0)
 	r.PointerButton(input.ButtonLeft, false, outside, 0)
 
-	if host.PopupCount() != 1 {
-		t.Fatalf("PopupCount after first outside press = %d, want 1 (submenu closed, parent still open — PINNED v0)", host.PopupCount())
-	}
-	if bar.openIdx != 1 {
-		t.Fatalf("openIdx after first outside press = %d, want 1 (parent menu still open, bar state consistent)", bar.openIdx)
-	}
-
-	// A second outside press closes the (now topmost) parent menu too.
-	r.PointerButton(input.ButtonLeft, true, outside, 0)
-	r.PointerButton(input.ButtonLeft, false, outside, 0)
-
 	if host.PopupCount() != 0 {
-		t.Fatalf("PopupCount after second outside press = %d, want 0", host.PopupCount())
+		t.Fatalf("PopupCount after outside press = %d, want 0 (whole chain closed in one press)", host.PopupCount())
 	}
 	if bar.openIdx != -1 {
-		t.Fatalf("openIdx after second outside press = %d, want -1", bar.openIdx)
+		t.Fatalf("openIdx after outside press = %d, want -1 (bar state reset)", bar.openIdx)
 	}
 }
 
-// TestMenuSiblingRowUnreachableWhileSubmenuOpen PINS down current v0
-// behavior (see menuPopupCard.openSub's doc comment): with a submenu open,
-// OverlayHost's forwarding targets ONLY the topmost popup (the submenu), so
-// a Move over a PARENT sibling row ("Undo", still visually in the
-// now-second-from-top parent popup) never reaches it at all — it neither
-// hovers nor un-hovers. Revisit = chain-aware forwarding (walk the whole
-// open chain, not just the topmost entry).
-func TestMenuSiblingRowUnreachableWhileSubmenuOpen(t *testing.T) {
+// TestMenuSiblingRowHoverAutoClosesSubmenu pins the NEW (Phase 8 Task 1)
+// chain-aware hover behavior (see OverlayHost.OnPointer's own doc comment):
+// with a submenu open, a Move over a PARENT sibling row ("Undo", still
+// visually in the now-second-from-top parent popup) is no longer
+// unreachable — popupAt finds the PARENT popup as the one actually
+// containing the pointer (the submenu, anchored beside its own trigger row,
+// does not cover Undo's position), so OnPointer closes the submenu above it
+// first (auto-close), then hovers/forwards the Move into the parent popup
+// normally: undoRow ends up hovered, and the submenu is gone.
+func TestMenuSiblingRowHoverAutoClosesSubmenu(t *testing.T) {
 	bar, host, r, _ := newTestMenuBar(t)
 	rows, _ := openEditWithRecentSubmenu(t, bar, host, r)
 
@@ -277,11 +265,17 @@ func TestMenuSiblingRowUnreachableWhileSubmenuOpen(t *testing.T) {
 	if undoRow.click.Hover() {
 		t.Fatal("undoRow.click.Hover() = true before the sibling Move, want false")
 	}
+	if host.PopupCount() != 2 {
+		t.Fatalf("PopupCount before sibling Move = %d, want 2 (submenu open)", host.PopupCount())
+	}
 
 	r.PointerMove(rectCenter(core.BoundsOf(undoRow)), 0)
 
-	if undoRow.click.Hover() {
-		t.Fatal("undoRow.click.Hover() = true after Move over it while the submenu is topmost, want false (sibling unreachable — PINNED v0)")
+	if !undoRow.click.Hover() {
+		t.Fatal("undoRow.click.Hover() = false after Move over it, want true (sibling reachable — chain-aware forwarding)")
+	}
+	if host.PopupCount() != 1 {
+		t.Fatalf("PopupCount after sibling Move = %d, want 1 (submenu auto-closed)", host.PopupCount())
 	}
 }
 
