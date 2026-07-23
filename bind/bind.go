@@ -26,6 +26,10 @@
 //     deletes from a map by id; setting OnChanged(nil) again is a no-op),
 //     so the composed cancel is idempotent too — calling it more than once
 //     is a harmless no-op.
+//
+// Rebind caveat: binding the same control twice without canceling the first
+// is undefined: the second bind takes over OnChanged ownership, and the
+// first bind's cancel will clear the second's hook.
 package bind
 
 import (
@@ -97,6 +101,10 @@ func ToggleChecked(p *core.Property[bool], tb *controls.ToggleButton) (cancel fu
 // Value two-way binds p to s (see the package doc comment for the shared
 // mechanics). While bound, Value OWNS s's OnChanged slot, replacing any
 // previously set callback.
+//
+// Clamp-divergence caveat: if p's value falls outside the control's valid
+// range, the control silently displays a clamped value while p retains the
+// unclamped one.
 func Value(p *core.Property[float32], s *controls.Slider) (cancel func()) {
 	s.SetValue(p.Get())
 	s.OnChanged(func(v float32) { p.Set(v) })
@@ -110,6 +118,10 @@ func Value(p *core.Property[float32], s *controls.Slider) (cancel func()) {
 // SelectedIndex two-way binds p to cb (see the package doc comment for the
 // shared mechanics). While bound, SelectedIndex OWNS cb's OnChanged slot,
 // replacing any previously set callback.
+//
+// Clamp-divergence caveat: if p's value falls outside the control's valid
+// range, the control silently displays a clamped value while p retains the
+// unclamped one.
 func SelectedIndex(p *core.Property[int], cb *controls.ComboBox) (cancel func()) {
 	cb.SetSelectedIndex(p.Get())
 	cb.OnChanged(func(v int) { p.Set(v) })
