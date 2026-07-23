@@ -8,6 +8,17 @@
 // Slider/ProgressBar/ComboBox/ToolTipArea), and the root becomes an
 // OverlayHost (controls.NewOverlayHost) so ComboBox's popup and
 // ToolTipArea's tip have somewhere to render above the rest of the tree.
+// Phase 6 adds a Binding demo to the Controls section: a
+// core.Property[string] two-way bound to the existing TextBox plus one-way
+// to a mirror TextBlock, a core.Property[float32] two-way bound to the
+// Slider and one-way to the ProgressBar (replacing Phase 5's direct
+// Slider.OnChanged wiring), and a bind.List[string] rendered into a
+// StackPanel via bind.Items, appended to by an "Add" Button. The three
+// models (textProp/sliderProp/itemList) are constructed once in main and
+// outlive every theme-toggle rebuild; buildUI only ever creates fresh
+// bindings onto them. Every binder buildUI creates returns a cancel func,
+// collected into main's cancels slice — see the T-key toggle in main for
+// the cancel-before-rebuild discipline this enables.
 package main
 
 import (
@@ -16,6 +27,7 @@ import (
 	"os"
 
 	"github.com/0xdreadnaught/fluo/app"
+	"github.com/0xdreadnaught/fluo/bind"
 	"github.com/0xdreadnaught/fluo/controls"
 	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/input"
@@ -171,19 +183,24 @@ var swatchPalette = []render.Color{
 // two can never drift out of sync.
 var swatchColorNames = []string{"Blue", "Yellow", "Green", "Red", "Purple", "Teal"}
 
-// buildControlsSection builds the Phase 5 Controls section: one HStack per
-// control family (Button/ToggleButton, CheckBox/RadioButton+Group/
-// ToggleSwitch, TextBox/ComboBox, Slider/ProgressBar), stacked vertically
-// with th's PaddingM gap, all styled from th like everything else buildUI
-// draws. tq (may be nil, e.g. before the app's first frame hands buildUI a
-// real timers.Queue) is threaded into the TextBox's caret blink and the
-// accent button's ToolTipArea dwell timer via their respective SetTimers —
-// nil disables the timing behavior but leaves both controls otherwise
-// functional (solid caret, immediate-show tooltip), matching each control's
-// own documented no-queue convention. counter/onToggle wire up the demo
-// button's click count and the theme-toggle shortcut respectively (onToggle
-// is consumed by galleryRoot, not here).
-func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *timers.Queue) core.Widget {
+// buildControlsSection builds the Controls section: one HStack per control
+// family (Button/ToggleButton, CheckBox/RadioButton+Group/ToggleSwitch,
+// TextBox/ComboBox, Slider/ProgressBar) plus a Phase 6 Binding demo (text
+// mirror, property-driven slider/progress, list-backed StackPanel), stacked
+// vertically with th's PaddingM gap, all styled from th like everything else
+// buildUI draws. tq (may be nil, e.g. before the app's first frame hands
+// buildUI a real timers.Queue) is threaded into the TextBox's caret blink
+// and the accent button's ToolTipArea dwell timer via their respective
+// SetTimers — nil disables the timing behavior but leaves both controls
+// otherwise functional (solid caret, immediate-show tooltip), matching each
+// control's own documented no-queue convention. counter/onToggle wire up the
+// demo button's click count and the theme-toggle shortcut respectively
+// (onToggle is consumed by galleryRoot, not here). textProp/sliderProp/
+// itemList are the Phase 6 binding models, constructed once in main and
+// threaded through every rebuild — every binder created here appends its
+// cancel func to *cancels so the caller can tear the OLD tree's bindings
+// down before the next buildUI call creates fresh ones on the new tree.
+func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *timers.Queue, textProp *core.Property[string], sliderProp *core.Property[float32], itemList *bind.List[string], cancels *[]func()) core.Widget {
 	// Row 1: Button (with click counter), accent Button (tooltipped),
 	// ToggleButton.
 	counterLabel := controls.NewTextBlock(body, fmt.Sprintf("Clicked %d times", *counter)).
@@ -211,31 +228,60 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 	row2 := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
 		Add(checkBox, radioA, radioB, toggleSwitch)
 
-	// Row 3: TextBox (placeholder + caret blink), ComboBox (swatch color
-	// names).
+	// Row 3: TextBox (placeholder + caret blink) two-way bound to textProp,
+	// a mirror TextBlock one-way bound to the same property (so typing in
+	// the TextBox updates the mirror live), and ComboBox (swatch color
+	// names, not yet bound).
 	textBox := controls.NewTextBox(body).SetPlaceholder("Type here…").SetTimers(tq)
 	textBox.SetWidth(200)
+	mirror := controls.NewTextBlock(body, "").SetColor(th.Color.TextSecondary)
 	comboBox := controls.NewComboBox(body).SetItems(swatchColorNames)
 
-	row3 := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
-		Add(textBox, comboBox)
+	*cancels = append(*cancels,
+		bind.Text(textProp, textBox),
+		bind.OneWay(textProp, func(s string) { mirror.SetText(s) }),
+	)
 
-	// Row 4: Slider (wired to drive a ProgressBar's value).
+	row3 := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
+		Add(textBox, mirror, comboBox)
+
+	// Row 4: Slider two-way bound to sliderProp, ProgressBar one-way bound
+	// to the same property — replacing Phase 5's direct
+	// slider.OnChanged(progressBar.SetValue) wiring. bind.Value seeds the
+	// Slider from sliderProp.Get() and bind.OneWay seeds the ProgressBar the
+	// same way, so both widgets start in sync with the model with no manual
+	// SetValue seeding needed here.
 	progressBar := controls.NewProgressBar()
 	slider := controls.NewSlider()
-	slider.OnChanged(func(v float32) { progressBar.SetValue(v) })
-	// Slider.SetValue is a silent programmatic setter (Phase 5 final fix:
-	// uniform setter convention) — it no longer fires OnChanged, so the
-	// initial seed above must set both widgets explicitly rather than
-	// relying on the OnChanged wiring to propagate it.
-	slider.SetValue(0.3)
-	progressBar.SetValue(0.3)
+
+	*cancels = append(*cancels,
+		bind.Value(sliderProp, slider),
+		bind.OneWay(sliderProp, func(v float32) { progressBar.SetValue(v) }),
+	)
 
 	row4 := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
 		Add(slider, progressBar)
 
+	// Row 5: ObservableList demo. An "Add" Button appends "Item N" to
+	// itemList; bind.Items keeps listPanel's TextBlock children in sync with
+	// itemList's contents via a full Clear+rebuild on every change (v0 —
+	// virtualization is Phase 7). itemList.Len() is read fresh from the
+	// model on every click, so the numbering stays correct even across a
+	// theme-toggle rebuild (itemList itself is never recreated).
+	listPanel := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingS)
+	*cancels = append(*cancels, bind.Items(itemList, listPanel, func(item string, _ int) core.Widget {
+		return controls.NewTextBlock(body, item).SetColor(th.Color.TextSecondary)
+	}))
+
+	addButton := controls.NewButton(body, "Add").OnClick(func() {
+		itemList.Add(fmt.Sprintf("Item %d", itemList.Len()+1))
+	})
+
+	row5 := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingS).
+		Add(addButton, listPanel)
+
 	return controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingM).
-		Add(row1, row2, row3, row4)
+		Add(row1, row2, row3, row4, row5)
 }
 
 // buildUI builds the gallery's entire widget tree from th's tokens — colors,
@@ -252,7 +298,13 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 // (OverlayHostFor walks up looking for one), so the host must sit above
 // everything that uses either control — see main's SetRouter wiring, which
 // an OverlayHost needs to drive its light-dismiss capture.
-func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq *timers.Queue) *controls.OverlayHost {
+//
+// textProp/sliderProp/itemList are the Phase 6 binding models (owned by
+// main, outliving every rebuild); cancels collects every binder's cancel
+// func created while building this tree — see buildControlsSection's doc
+// comment and main's theme-toggle path, which cancels the OLD tree's
+// bindings before calling buildUI again.
+func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq *timers.Queue, textProp *core.Property[string], sliderProp *core.Property[float32], itemList *bind.List[string], cancels *[]func()) *controls.OverlayHost {
 	title := text.NewFace(font, th.Type.SubtitleSize)
 	body := text.NewFace(font, th.Type.BodySize)
 
@@ -261,7 +313,7 @@ func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq
 		swatches.Add(newSwatch(72, 48, c, th.Color.Accent, th.Color.TextPrimary))
 	}
 
-	controlsSection := buildControlsSection(th, body, counter, tq)
+	controlsSection := buildControlsSection(th, body, counter, tq, textProp, sliderProp, itemList, cancels)
 
 	content := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingM).
 		Add(controlsSection, swatches)
@@ -323,8 +375,26 @@ func main() {
 	// filled in from the first frame's c.Timers below — see buildControlsSection's
 	// doc comment for why a nil queue is a safe, if less lively, fallback.
 	var timerQueue *timers.Queue
+
+	// Phase 6 binding models: constructed once here, so they outlive every
+	// theme-toggle rebuild below (buildUI only ever builds fresh WIDGETS and
+	// fresh BINDINGS onto these same three models — never fresh models).
+	textProp := new(core.Property[string])
+	textProp.Set("Hello, fluo!")
+	sliderProp := new(core.Property[float32])
+	sliderProp.Set(0.3)
+	itemList := bind.NewList[string]()
+
+	// cancels collects every binder's cancel func from the CURRENTLY BUILT
+	// tree (buildUI/buildControlsSection append to it). The theme toggle
+	// below calls each cancel and resets the slice before calling build()
+	// again, so the OLD tree's OnChanged ownership and property
+	// subscriptions are fully torn down before the new tree installs its own
+	// — otherwise two trees' worth of binders would both be live, with the
+	// older one silently fighting the newer one for OnChanged ownership.
+	var cancels []func()
 	build := func() *controls.OverlayHost {
-		return buildUI(theme.Active(), f, &counter, func() { togglePending = true }, timerQueue)
+		return buildUI(theme.Active(), f, &counter, func() { togglePending = true }, timerQueue, textProp, sliderProp, itemList, &cancels)
 	}
 
 	var root *controls.OverlayHost
@@ -346,6 +416,13 @@ func main() {
 				next = theme.FluentDark()
 			}
 			theme.SetActive(next)
+			// Cancel every binding on the OLD tree (about to be discarded)
+			// before build() creates the new tree's own bindings on the same
+			// models — see cancels' doc comment above.
+			for _, cancel := range cancels {
+				cancel()
+			}
+			cancels = cancels[:0]
 			root = build()
 			c.Input.SetRoot(root) // SetRoot resets hover/capture/focus by design
 			root.SetRouter(c.Input)

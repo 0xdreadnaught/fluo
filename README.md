@@ -54,6 +54,35 @@ setter/`OnChanged` contract: programmatic setters (`SetChecked`, `SetValue`,
 reports only user-driven changes (click, drag, typed input, keyboard
 activation).
 
+## Data binding
+
+Package `bind` connects `core.Property[T]` values to controls. `bind.OneWay`
+pushes a property's value into a control (or any `func(T)`) on every change.
+The six two-way binders (`bind.Text`, `bind.Checked`, `bind.SwitchChecked`,
+`bind.ToggleChecked`, `bind.Value`, `bind.SelectedIndex`) additionally OWN
+the bound control's `OnChanged` slot — user edits flow into the property via
+`p.Set`, and any OTHER change to the property flows back into the control
+via its silent setter (`SetText`/`SetChecked`/`SetValue`/`SetSelectedIndex`),
+which — per the uniform setter convention above — never re-fires `OnChanged`,
+so there is no feedback loop. `bind.Items` binds a `bind.List[T]` (an
+observable slice) to a `StackPanel` by clearing and rebuilding its children
+from scratch on every list change (v0 — virtualization is Phase 7).
+
+Every binder returns a `cancel func()` that detaches both directions
+(idempotent — safe to call more than once, and safe to skip if the control
+is being discarded anyway). Since `theme.SetActive` + rebuild throws away
+the entire old widget tree and builds a fresh one (see Theming below), any
+code that rebinds a rebuilt tree's controls MUST cancel the OLD tree's
+bindings first — otherwise the discarded tree's binders keep OWNing
+`OnChanged` on controls nobody can see anymore, fighting the new tree's
+binders for control of the same property. `fluo-gallery`'s Binding demo is
+the reference example: its three models (a `Property[string]`, a
+`Property[float32]`, and a `bind.List[string]`) are constructed once in
+`main` and never recreated, so they outlive every theme toggle; only the
+*bindings* onto them are rebuilt, and every one of buildUI's binder calls
+appends its cancel to a slice that main empties (calling each cancel) right
+before the next `buildUI` — models outlive views, bindings don't.
+
 ## Theming
 
 Every control is styled from `theme.Active()` — a `*theme.Theme` bundling

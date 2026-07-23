@@ -74,9 +74,18 @@ before its dependencies. Check items off as they land. Design spec:
       live caret blink and tooltip dwell.
 
 ## Phase 6 · Data binding
-- [ ] One-way bind (property → UI) via `Property` subscriptions
-- [ ] Two-way bind for inputs (`TextBox`/`CheckBox`/`Slider` ↔ `*T`)
-- [ ] `ItemsSource` / collection binding
+- [x] One-way bind (property → UI) via `Property` subscriptions
+- [x] Two-way bind for inputs (`TextBox`/`CheckBox`/`Slider` ↔ `*T`)
+- [x] `ItemsSource` / collection binding
+- [x] **MILESTONE: gallery Binding demo** — `fluo-gallery`'s Controls section
+      gains a `core.Property[string]` two-way bound to the TextBox (plus
+      one-way to a mirror TextBlock), a `core.Property[float32]` two-way
+      bound to the Slider and one-way to the ProgressBar (replacing the
+      Phase 5 direct `Slider.OnChanged` wiring), and a `bind.List[string]`
+      rendered into a StackPanel via `bind.Items`, appended to by an "Add"
+      Button. The three models outlive every theme-toggle rebuild; every
+      binder's cancel func is collected and invoked before the next
+      `buildUI` call — the package's first real cancel consumer.
 
 ## Phase 7 · Advanced controls
 - [ ] `ItemsControl` / `ListView` (+ virtualization)
