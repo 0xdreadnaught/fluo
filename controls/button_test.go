@@ -312,6 +312,30 @@ func TestToggleButtonOnClickPanics(t *testing.T) {
 	tb.OnClick(func() {})
 }
 
+func TestToggleButtonSetAccentPanics(t *testing.T) {
+	tb := NewToggleButton(nil, "T")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("ToggleButton.SetAccent did not panic, want it to (would desync chrome from Checked())")
+		}
+	}()
+	tb.SetAccent(true)
+}
+
+func TestButtonStateColorsAccentDisabledUsesAccentDisabledFill(t *testing.T) {
+	b := NewButton(nil, "X").SetAccent(true).SetEnabled(false)
+	fill, stroke, label := b.stateColors()
+	if fill != b.colors.AccentDisabled {
+		t.Fatalf("accent+disabled fill = %v, want AccentDisabled %v", fill, b.colors.AccentDisabled)
+	}
+	if stroke.A != 0 {
+		t.Fatalf("accent+disabled stroke = %v, want no stroke (zero alpha)", stroke)
+	}
+	if label != b.colors.TextDisabled {
+		t.Fatalf("accent+disabled label = %v, want TextDisabled %v", label, b.colors.TextDisabled)
+	}
+}
+
 func TestToggleButtonLabelParentSurvivesEmbedding(t *testing.T) {
 	// Regression for the copy-parent trap initButton's doc comment
 	// describes: the label's parent must be &tb.Button (the ToggleButton's

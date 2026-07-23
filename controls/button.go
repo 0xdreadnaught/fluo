@@ -259,9 +259,17 @@ func (b *Button) OnKey(e *input.KeyEvent) {
 // fight that, ToggleButton hooks its behavior through DATA the promoted
 // code already reads: the embedded ClickBehavior's OnClick function field.
 // NewToggleButton wires click.OnClick to a closure that toggles state, syncs
-// SetAccent, and fires the user's OnChanged. The one method ToggleButton
-// DOES shadow is OnClick itself (see below) — precisely because leaving it
-// promoted would let a caller silently clobber that wiring.
+// SetAccent, and fires the user's OnChanged. OnClick and SetAccent are the
+// two methods ToggleButton DOES shadow (see below) — precisely because
+// leaving them promoted would let a caller silently clobber that wiring or
+// desync the chrome from Checked().
+//
+// One more embedding nuance, for whoever next embeds a composite control by
+// value like this: input.Router.Detach walks a subtree via Children(), which
+// only ever sees tree nodes as actually added (the *ToggleButton), never the
+// embedded &tb.Button — so a ToggleButton removed mid-press (e.g. a popup
+// item closed while captured) leaks its pointer-capture entry, unlike a
+// plain Button, which Detach's subtree walk finds directly.
 type ToggleButton struct {
 	Button
 
@@ -292,6 +300,15 @@ func NewToggleButton(face *text.Face, label string) *ToggleButton {
 // Checked/OnChanged with no compile-time signal. Use OnChanged instead.
 func (t *ToggleButton) OnClick(fn func()) *ToggleButton {
 	panic("controls: ToggleButton.OnClick is not supported (it would replace the internal toggle wiring) — use OnChanged instead")
+}
+
+// SetAccent is shadowed (NOT promoted from Button) and panics: ToggleButton
+// has no independent accent flag — its chrome is driven entirely by Checked
+// (see the type doc comment) — so an external SetAccent call would silently
+// desync the rendered chrome from Checked() until the next toggle overwrites
+// it again. Use SetChecked instead.
+func (t *ToggleButton) SetAccent(a bool) *ToggleButton {
+	panic("controls: ToggleButton.SetAccent is not supported (checked state alone drives the accent chrome) — use SetChecked instead")
 }
 
 // Checked reports the current toggle state.
