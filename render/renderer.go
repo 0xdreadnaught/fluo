@@ -31,6 +31,19 @@ type Renderer interface {
 	// DrawShadow draws a soft shadow of a rounded rectangle.
 	DrawShadow(r Rect, radius, blur float32, c Color)
 
+	// DrawBackdropBlur draws an acrylic/mica-style backdrop-blur surface:
+	// it snapshots whatever has already been drawn beneath r, blurs it, and
+	// composites the result back into r (rounded by radius) tinted by c —
+	// approximating WinUI's acrylic material. Because it samples already-
+	// rendered content, callers must invoke it AFTER painting whatever
+	// should show through, and BEFORE drawing anything meant to sit on top
+	// of the acrylic surface (e.g. its children). An implementation that
+	// cannot obtain a true mid-frame snapshot may instead degrade to a
+	// flat, tinted, translucent rounded fill (equivalent to
+	// FillRoundedRect(r, radius, c)); any such degrade must be prominently
+	// documented at the implementation site.
+	DrawBackdropBlur(r Rect, radius float32, tint Color)
+
 	// CreateTexture creates a new texture from RGBA8 data.
 	// The rgba slice must have length w*h*4; if rgba is non-nil and shorter
 	// than that, implementations panic. A nil rgba allocates storage without

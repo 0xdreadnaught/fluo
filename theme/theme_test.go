@@ -110,3 +110,29 @@ func TestScrimBackgroundLightDarkDiffer(t *testing.T) {
 		t.Fatal("ScrimBackground should differ between light and dark")
 	}
 }
+
+func TestAcrylicTintPresent(t *testing.T) {
+	l := FluentLight()
+	d := FluentDark()
+
+	// Dark: RGBA(32, 32, 36, 180)
+	expectedDark := render.RGBA(32, 32, 36, 180)
+	if d.Color.AcrylicTint != expectedDark {
+		t.Fatalf("dark AcrylicTint = %v, want %v", d.Color.AcrylicTint, expectedDark)
+	}
+
+	// Light: RGBA(243, 243, 243, 180)
+	expectedLight := render.RGBA(243, 243, 243, 180)
+	if l.Color.AcrylicTint != expectedLight {
+		t.Fatalf("light AcrylicTint = %v, want %v", l.Color.AcrylicTint, expectedLight)
+	}
+}
+
+func TestAcrylicTintLightDarkDiffer(t *testing.T) {
+	l := FluentLight()
+	d := FluentDark()
+
+	if l.Color.AcrylicTint == d.Color.AcrylicTint {
+		t.Fatal("AcrylicTint should differ between light and dark")
+	}
+}

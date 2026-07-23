@@ -31,6 +31,7 @@ func (m *mockRenderer) FillRect(r render.Rect, c render.Color)                  
 func (m *mockRenderer) FillRoundedRect(r render.Rect, radius float32, c render.Color)               {}
 func (m *mockRenderer) StrokeRoundedRect(r render.Rect, radius, width float32, c render.Color)      {}
 func (m *mockRenderer) DrawShadow(r render.Rect, radius, blur float32, c render.Color)              {}
+func (m *mockRenderer) DrawBackdropBlur(r render.Rect, radius float32, tint render.Color)           {}
 func (m *mockRenderer) CreateTexture(w, h int, rgba []byte) render.TextureID                        { return render.NoTexture }
 func (m *mockRenderer) UpdateTexture(id render.TextureID, x, y, w, h int, rgba []byte)              {}
 func (m *mockRenderer) DeleteTexture(id render.TextureID)                                           {}

@@ -23,6 +23,13 @@ type Renderer struct {
 	fbW, fbH              int
 	scale                 float32
 	clips                 []render.Rect
+
+	// blur is the lazily-compiled separable-Gaussian program used by
+	// DrawBackdropBlur (see blur.go). blurFailed remembers a one-time
+	// compile/link failure so later calls degrade straight to a tinted fill
+	// instead of retrying a doomed shader compile every frame.
+	blur       *blurProgram
+	blurFailed bool
 }
 
 var _ render.Renderer = (*Renderer)(nil)

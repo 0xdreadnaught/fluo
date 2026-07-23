@@ -189,6 +189,8 @@ func (r *recordRenderer) FillRoundedRect(rect render.Rect, radius float32, c ren
 func (r *recordRenderer) StrokeRoundedRect(rect render.Rect, radius, width float32, c render.Color) {
 }
 func (r *recordRenderer) DrawShadow(rect render.Rect, radius, blur float32, c render.Color) {}
+func (r *recordRenderer) DrawBackdropBlur(rect render.Rect, radius float32, tint render.Color) {
+}
 func (r *recordRenderer) CreateTexture(w, h int, rgba []byte) render.TextureID {
 	return render.NoTexture
 }

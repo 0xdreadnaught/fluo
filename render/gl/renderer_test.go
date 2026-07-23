@@ -697,6 +697,46 @@ func TestTitleBar(t *testing.T) {
 	})
 }
 
+// TestAcrylic is the Phase 8 Task 5 golden: an AcrylicSurface panel (radius
+// 8, 140x80) laid over three colored vertical stripes that together span
+// the whole 200x120 frame, so the panel straddles both stripe boundaries —
+// proving the backdrop shows through blurred (colors softened/mixed across
+// the boundaries under the panel) rather than a flat opaque tint. A small
+// white Fixed swatch is nested inside the surface to prove children still
+// render on top of the acrylic background. See DrawBackdropBlur in
+// render/gl/blur.go for which path shipped (real snapshot+blur, not a tint
+// degrade).
+func TestAcrylic(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+
+	testFrame(t, "acrylic", 200, 120, func(r *glr.Renderer) {
+		stripes := controls.NewCanvas().
+			Add(controls.NewFixed(67, 120, render.RGB(0, 120, 215)), 0, 0).
+			Add(controls.NewFixed(67, 120, render.RGB(255, 185, 0)), 67, 0).
+			Add(controls.NewFixed(66, 120, render.RGB(16, 124, 16)), 133, 0)
+
+		swatch := controls.NewFixed(30, 14, render.RGB(255, 255, 255))
+		swatch.SetAlign(core.Center, core.Center)
+
+		panel := controls.NewAcrylicSurface().
+			SetRadius(8).
+			SetChild(swatch)
+		panel.SetWidth(140)
+		panel.SetHeight(80)
+
+		root := controls.NewCanvas().
+			Add(stripes, 0, 0).
+			Add(panel, 30, 20)
+
+		frame := render.Rect{X: 0, Y: 0, W: 200, H: 120}
+
+		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(root, frame)
+		core.RenderWidget(root, r)
+	})
+}
+
 func TestDialog(t *testing.T) {
 	theme.SetActive(theme.FluentLight())
 	defer theme.SetActive(nil)

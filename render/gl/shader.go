@@ -45,7 +45,16 @@ void main(){
         float d = sdRoundBox(vPos - vRect.xy, vRect.zw, vExtra.x);
         if (vMode == 3) c.a *= clamp(0.5 - d, 0.0, 1.0);
         else if (vMode == 4) { float w = vExtra.y; c.a *= clamp(0.5 - (abs(d + w*0.5) - w*0.5), 0.0, 1.0); }
-        else c.a *= 1.0 - smoothstep(-vExtra.y, vExtra.y, d);
+        else if (vMode == 5) c.a *= 1.0 - smoothstep(-vExtra.y, vExtra.y, d);
+        else {
+            // Mode 6: backdrop-blur acrylic composite. uTex holds the
+            // already-blurred backdrop snapshot; mix in the tint color by
+            // its own alpha, then use the rounded-rect SDF only to mask the
+            // corners (the panel itself is opaque wherever it covers).
+            vec4 tex = texture(uTex, vUV);
+            c.rgb = mix(tex.rgb, vColor.rgb, vColor.a);
+            c.a = clamp(0.5 - d, 0.0, 1.0);
+        }
     }
     if (c.a <= 0.001) discard;
     frag = c;

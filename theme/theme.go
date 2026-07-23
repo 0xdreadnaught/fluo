@@ -21,6 +21,9 @@ type ColorTokens struct {
 	// uses for its hover/pressed fill (Fluent convention), same value in
 	// both bundled themes — RGBA(232,17,35,255).
 	CloseButtonHover render.Color
+	// AcrylicTint is the translucent tint composited over a backdrop-blur
+	// acrylic/mica surface (see controls.AcrylicSurface).
+	AcrylicTint render.Color
 }
 
 // MetricTokens holds the layout and sizing values for a theme.
