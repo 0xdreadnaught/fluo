@@ -11,9 +11,12 @@
 // into the nearest OverlayHost ancestor, which also implements light-
 // dismiss capture via SetRouter. Advanced controls — ListView, TreeView,
 // TabControl, Expander, MenuBar, Dialog (ShowDialog), DataGrid, TitleBar,
-// and AcrylicSurface — round out the set: ListView and DataGrid are
-// virtualized and, uniquely, own an external subscription that must be
-// released via Dispose when their tree is discarded. Package bind connects
-// core.Property[T] and bind.List[T] values to these controls; cmd/
-// fluo-gallery is the reference composition of the whole set.
+// and AcrylicSurface — round out the set: ListView and DataGrid are both
+// virtualized, but only ListView owns an external subscription that must
+// be released via Dispose when its tree is discarded — DataGrid's Dispose
+// exists purely as a documented no-op, so a cancel path can call Dispose
+// uniformly on every virtualized control without a type switch. Package
+// bind connects core.Property[T] and bind.List[T] values to these
+// controls; cmd/fluo-gallery is the reference composition of the whole
+// set.
 package controls
