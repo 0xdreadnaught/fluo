@@ -347,7 +347,16 @@ func (l *ListView) MeasureContent(available render.Size) render.Size {
 // re-text below, since a selection change alone — no text change — must
 // still repaint the right rows the next time this runs).
 func (l *ListView) ArrangeContent(bounds render.Rect) {
-	viewport := bounds.Inset(render.Thickness{Right: l.gutter})
+	// Reserve the thumb gutter only when the content actually scrolls. When
+	// it fits (no thumb), the viewport is the full bounds so rows and the
+	// selection band reach the right edge; when it scrolls, the gutter keeps
+	// the band clear of the (translucent) thumb so the highlight sits fully
+	// beside the scrollbar rather than bleeding through it.
+	gutter := float32(0)
+	if l.totalHeight() > bounds.H {
+		gutter = l.gutter
+	}
+	viewport := bounds.Inset(render.Thickness{Right: gutter})
 	if viewport.W < 0 {
 		viewport.W = 0
 	}
@@ -441,15 +450,14 @@ func (l *ListView) Render(r render.Renderer) {
 	if l.selected < l.visibleFirst || l.selected >= last {
 		return
 	}
-	// The band spans the ListView's FULL width (edge to edge), not the
-	// gutter-inset viewport: the selection highlight reaches both edges of
-	// the row while the text stays padded within it (the scroll thumb, drawn
-	// in RenderOverlay, sits on top of the band's right end when present).
-	b := l.Bounds()
+	// The band spans the viewport width. When the list doesn't scroll the
+	// viewport is the full bounds (ArrangeContent reserves no gutter), so the
+	// band is edge-to-edge; when it scrolls, the band stops at the gutter so
+	// it stays clear of the translucent thumb rather than showing through it.
 	rowRect := render.Rect{
-		X: b.X,
+		X: l.viewport.X,
 		Y: l.viewport.Y + float32(l.selected)*l.rowH - l.offset,
-		W: b.W,
+		W: l.viewport.W,
 		H: l.rowH,
 	}
 	r.FillRect(rowRect, l.colors.SelectionBackground)
