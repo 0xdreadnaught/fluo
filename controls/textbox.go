@@ -1,9 +1,11 @@
 package controls
 
 import (
+	"strings"
 	"time"
 
 	"github.com/0xdreadnaught/fluo/core"
+	"github.com/0xdreadnaught/fluo/input"
 	"github.com/0xdreadnaught/fluo/render"
 	"github.com/0xdreadnaught/fluo/text"
 	"github.com/0xdreadnaught/fluo/theme"
@@ -28,15 +30,15 @@ const caretBlinkPeriod = 530 * time.Millisecond
 // wider than a hairline 1px rule so it stays visible after SDF/AA rounding).
 const caretWidth float32 = 1.5
 
-// TextBox is a single-line, focusable, token-styled text input. This is the
-// Phase 5 Task 5 slice: the data model (text/caret/selection, rune-indexed)
-// and rendering (chrome, selection highlight, caret, horizontal scroll,
-// placeholder) are complete, but no pointer/keyboard EDITING is wired yet —
-// that is Task 6 (OnKey/OnPointer/CursorShaper). TextBox already implements
+// TextBox is a single-line, focusable, token-styled text input. The data
+// model (text/caret/selection, rune-indexed) and rendering (chrome,
+// selection highlight, caret, horizontal scroll, placeholder) were built in
+// Phase 5 Task 5; Task 6 added the interaction layer: OnKey (the normative
+// keyboard map — rune insertion, Backspace/Delete, arrow/Home/End caret
+// movement with Shift-extend, Ctrl+A/C/X/V) and OnPointer (click-to-caret,
+// drag-to-select, CursorShaper's CursorIBeam). TextBox implements
 // input.Focusable and input.FocusHandler (AcceptsFocus/OnFocusChanged) since
-// focus is purely a rendering concern here (the focus-ring overlay and the
-// focused border color); a router can already Focus() a TextBox today, it
-// just can't yet edit it.
+// focus also drives the focus-ring overlay and the focused border color.
 //
 // Rune indices throughout (Caret, Selection, SetCaret, Select) are RUNE
 // indices into Text(), not byte offsets — text is stored as []rune
@@ -105,14 +107,26 @@ func (t *TextBox) Text() string {
 }
 
 // SetText replaces the text content, resets the caret to the end, and
-// clears any selection. Normative: unlike most SetX setters in this package,
-// SetText DOES fire OnChanged (even when s equals the current text) — giving
-// programmatic SetText the same notification parity as typing, which
-// Phase 6's data-binding work depends on.
+// clears any selection. Task 6 carry-in fix B: SetText is a complete no-op —
+// no callback, no invalidation, caret/selection left untouched — when s
+// already equals the current text; this makes it safe for an OnChanged
+// handler to call SetText with the same value it was just notified of (a
+// common data-binding pattern) without recursing into another notification
+// or triggering pointless re-layout. When the text does change, SetText
+// fires OnChanged (matching every editing mutation's notification parity —
+// programmatic and user-driven changes look the same to a listener) and
+// calls InvalidateArrange (carry-in fix A) so hscroll re-clamps to the new
+// caret position on the next layout pass; InvalidateMeasure is NOT needed
+// since MeasureContent's desired size (textBoxDefaultWidth, fixed) never
+// depends on the text content.
 func (t *TextBox) SetText(s string) *TextBox {
+	if s == string(t.runes) {
+		return t
+	}
 	t.runes = []rune(s)
 	t.caret = len(t.runes)
 	t.anchor = t.caret
+	t.InvalidateArrange()
 	if t.onChanged != nil {
 		t.onChanged(s)
 	}
@@ -127,18 +141,18 @@ func (t *TextBox) SetPlaceholder(s string) *TextBox {
 	return t
 }
 
-// SetEnabled toggles whether the box accepts focus and (once Task 6 wires
-// it) pointer/keyboard editing. Purely visual/behavioral: no invalidation
-// needed.
+// SetEnabled toggles whether the box accepts focus and pointer/keyboard
+// editing (OnKey/OnPointer both ignore all input while disabled). Purely
+// visual/behavioral: no invalidation needed.
 func (t *TextBox) SetEnabled(v bool) *TextBox {
 	t.enabled = v
 	return t
 }
 
-// OnChanged sets the callback fired with the new text whenever it changes —
-// today, only via SetText (Task 6 will additionally fire it from every
-// editing operation). Replaces any previously set callback; a nil fn is a
-// valid, silent no-op.
+// OnChanged sets the callback fired with the new text whenever it changes:
+// SetText (when the text actually changes — see its no-op-on-equal doc) and
+// every editing mutation (typing, Backspace/Delete, Ctrl+X, Ctrl+V). Replaces
+// any previously set callback; a nil fn is a valid, silent no-op.
 func (t *TextBox) OnChanged(fn func(string)) *TextBox {
 	t.onChanged = fn
 	return t
@@ -181,11 +195,14 @@ func (t *TextBox) Selection() (start, end int) {
 }
 
 // SetCaret moves the caret to rune index i (clamped to [0, len(runes)]) and
-// clears any selection (anchor becomes equal to the new caret).
+// clears any selection (anchor becomes equal to the new caret). Carry-in fix
+// A: calls InvalidateArrange so hscroll re-clamps to the new caret position
+// on the next layout pass, under the gallery's NeedsLayout guard.
 func (t *TextBox) SetCaret(i int) *TextBox {
 	i = clampInt(i, 0, len(t.runes))
 	t.caret = i
 	t.anchor = i
+	t.InvalidateArrange()
 	return t
 }
 
@@ -193,11 +210,173 @@ func (t *TextBox) SetCaret(i int) *TextBox {
 // to [0, len(runes)]); anchor may be greater than caret (Selection() always
 // normalizes), and Caret() reports the raw caret argument afterward — it is
 // the actual caret position, which is not necessarily the normalized range
-// start.
+// start. Carry-in fix A: calls InvalidateArrange so hscroll re-clamps to the
+// new caret position on the next layout pass.
 func (t *TextBox) Select(anchor, caret int) *TextBox {
 	t.anchor = clampInt(anchor, 0, len(t.runes))
 	t.caret = clampInt(caret, 0, len(t.runes))
+	t.InvalidateArrange()
 	return t
+}
+
+// replaceRange replaces runes[start:end] with s (both rune indices; callers
+// are responsible for passing a valid 0<=start<=end<=len(runes) range —
+// every call site below derives start/end from Selection() or an
+// already-clamped caret, so no further clamping happens here), moves the
+// caret to just after the inserted text and clears the selection (anchor
+// follows caret), invalidates arrange (carry-in fix A, so hscroll re-clamps
+// next layout pass), and fires OnChanged with the new full text (carry-in
+// fix B's notification parity: every mutation notifies).
+//
+// replaceRange is the single mutation primitive every editing operation
+// below is built from: plain insertion is start==end (nothing removed),
+// plain deletion is s=="" (nothing inserted), and typing/paste-over-a-
+// selection is both at once — which is exactly the "selection-first delete"
+// convention the Task 6 keyboard map specifies (delete-or-replace the
+// selection is the SAME code path as an unselected edit, just with a
+// non-empty [start,end)).
+//
+// Callers only invoke replaceRange when a real change is happening (e.g.
+// deleteBackward checks there is something to delete before calling it), so
+// OnChanged is fired unconditionally here rather than re-checking for a
+// no-op — unlike SetText, which the caller invokes for arbitrary (possibly
+// unchanged) input and must guard itself.
+func (t *TextBox) replaceRange(start, end int, s string) {
+	ins := []rune(s)
+	next := make([]rune, 0, len(t.runes)-(end-start)+len(ins))
+	next = append(next, t.runes[:start]...)
+	next = append(next, ins...)
+	next = append(next, t.runes[end:]...)
+	t.runes = next
+	t.caret = start + len(ins)
+	t.anchor = t.caret
+	t.InvalidateArrange()
+	if t.onChanged != nil {
+		t.onChanged(string(t.runes))
+	}
+}
+
+// insertText replaces the current selection (if any; a no-op range [caret,
+// caret) when there is none) with s — the shared implementation for both
+// rune-input insertion (s is a single rune) and Ctrl+V paste (s is the
+// clipboard text, newlines already stripped by the caller).
+func (t *TextBox) insertText(s string) {
+	start, end := t.Selection()
+	t.replaceRange(start, end, s)
+}
+
+// deleteBackward implements Backspace: delete the selection if one is
+// active (selection-first convention), else delete the single rune before
+// the caret; a no-op (no mutation, no OnChanged) at the very start of the
+// text with no selection.
+func (t *TextBox) deleteBackward() {
+	if start, end := t.Selection(); start != end {
+		t.replaceRange(start, end, "")
+		return
+	}
+	if t.caret > 0 {
+		t.replaceRange(t.caret-1, t.caret, "")
+	}
+}
+
+// deleteForward implements Delete: delete the selection if one is active
+// (selection-first convention), else delete the single rune after the
+// caret; a no-op at the very end of the text with no selection.
+func (t *TextBox) deleteForward() {
+	if start, end := t.Selection(); start != end {
+		t.replaceRange(start, end, "")
+		return
+	}
+	if t.caret < len(t.runes) {
+		t.replaceRange(t.caret, t.caret+1, "")
+	}
+}
+
+// moveCaret shifts the caret by delta runes (clamped to [0, len(runes)]):
+// with extend==false (no Shift) it collapses to the new position via
+// SetCaret; with extend==true (Shift held) it extends the selection from
+// the CURRENT anchor to the new position via Select, so anchor stays fixed
+// across a run of Shift+Left/Right presses (the "extend selection from
+// anchor" bullet of the keyboard map).
+func (t *TextBox) moveCaret(delta int, extend bool) {
+	t.moveCaretTo(t.caret+delta, extend)
+}
+
+// moveCaretTo moves the caret to rune index pos (clamped by SetCaret/Select),
+// either collapsing (extend==false) or extending the selection from the
+// current anchor (extend==true) — shared by Left/Right (delta ±1) and
+// Home/End (pos 0/len(runes)).
+func (t *TextBox) moveCaretTo(pos int, extend bool) {
+	if extend {
+		t.Select(t.anchor, pos)
+		return
+	}
+	t.SetCaret(pos)
+}
+
+// stripCRLF removes \r and \n from s — Ctrl+V paste strips newlines per the
+// keyboard map's "single-line" rule, so a multi-line clipboard string pastes
+// as one run rather than being silently truncated at the first line or
+// corrupting the single-line layout.
+func stripCRLF(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// copySelection implements Ctrl+C: copies the selected text to r's
+// clipboard. No-op (no mutation either way — Copy never edits the text) if
+// there is no active selection or the router has no clipboard wired
+// (headless/test routers, or a host that hasn't set one up yet).
+func (t *TextBox) copySelection(r *input.Router) {
+	clip := r.Clipboard()
+	if clip == nil {
+		return
+	}
+	start, end := t.Selection()
+	if start == end {
+		return
+	}
+	clip.Set(string(t.runes[start:end]))
+}
+
+// cutSelection implements Ctrl+X: copies the selected text to r's clipboard,
+// then deletes it. No-op (nothing copied, nothing deleted) under the same
+// conditions as copySelection (no selection, or no clipboard) — a cut that
+// can't reach the clipboard must not destroy the selection.
+func (t *TextBox) cutSelection(r *input.Router) {
+	clip := r.Clipboard()
+	if clip == nil {
+		return
+	}
+	start, end := t.Selection()
+	if start == end {
+		return
+	}
+	clip.Set(string(t.runes[start:end]))
+	t.replaceRange(start, end, "")
+}
+
+// pasteClipboard implements Ctrl+V: reads r's clipboard, strips \r\n (single-
+// line rule), and replaces the current selection (or inserts at the caret
+// when there is none) with the result. No-op if the router has no clipboard
+// wired. Also a no-op — no mutation, no OnChanged — when the clipboard text
+// is empty AND there is no selection to collapse: pasting nothing onto
+// nothing is not a change.
+func (t *TextBox) pasteClipboard(r *input.Router) {
+	clip := r.Clipboard()
+	if clip == nil {
+		return
+	}
+	s := stripCRLF(clip.Get())
+	start, end := t.Selection()
+	if s == "" && start == end {
+		return
+	}
+	t.replaceRange(start, end, s)
 }
 
 // AcceptsFocus implements input.Focusable: a disabled textbox never accepts
@@ -230,6 +409,38 @@ func (t *TextBox) xOf(i int) float32 {
 		return 0
 	}
 	return t.face.Measure(string(t.runes[:i])).W
+}
+
+// caretIndexAtX returns the rune index whose boundary is nearest to x, an
+// x-coordinate already in the same "local text" space as xOf (logical px
+// from the start of the text, i.e. hscroll already subtracted — see
+// localTextX, which converts a pointer event's window-space x into this
+// space). Implements the keyboard-map's click-to-caret rule: for each
+// candidate rune boundary i (0..len(runes)-1), compare x against the
+// midpoint between xOf(i) and xOf(i+1) — a click left of that midpoint is
+// nearer to i, so i is returned; a click past every midpoint lands after the
+// last rune, so len(runes) (the end) is returned. Returns 0 for a nil face
+// (xOf(anything) is 0 there, every midpoint is 0, so any x>=0 falls through
+// to len(runes) instead — deliberately not special-cased, since a nil-face
+// TextBox has no glyphs to click between anyway).
+func (t *TextBox) caretIndexAtX(x float32) int {
+	n := len(t.runes)
+	for i := 0; i < n; i++ {
+		mid := (t.xOf(i) + t.xOf(i+1)) / 2
+		if x < mid {
+			return i
+		}
+	}
+	return n
+}
+
+// localTextX converts a pointer event's window-space x (e.Pos.X) into the
+// "local text" space xOf/caretIndexAtX operate in: the padding-inset text
+// origin is at bounds.X+PaddingM-hscroll (see Render's textX), so subtracting
+// that from the window-space x yields the x offset from the start of the
+// text, in the same units xOf returns.
+func (t *TextBox) localTextX(windowX float32) float32 {
+	return windowX - t.Bounds().X - t.metrics.PaddingM + t.hscroll
 }
 
 // displayText resolves what Render actually draws as the main text run and
@@ -375,6 +586,127 @@ func (t *TextBox) RenderOverlay(r render.Renderer) {
 		return
 	}
 	drawFocusRing(r, t.Bounds(), t.metrics.ControlCornerRadius, t.colors, t.metrics)
+}
+
+// OnKey implements input.KeyHandler, the normative Task 6 keyboard map.
+// Ignored entirely (no mutation, Handled left false) while disabled or
+// unfocused, and for anything but Action==Press — glfw's Repeat action
+// arrives as a second Press while a key is held, so held Backspace/Delete/
+// arrows correctly auto-repeat via the host's own key-repeat timer, not
+// anything TextBox does itself.
+//
+// Every recognized combination below sets e.Handled = true, even when the
+// specific operation ends up being a no-op (e.g. Ctrl+C with no selection,
+// Backspace at position 0, Ctrl+V with no clipboard wired) — a focused
+// TextBox owns all of these keys and must not let them bubble further
+// (e.g. into a Router.KeyDown Tab-navigation-style fallback) just because
+// there happened to be nothing to do.
+func (t *TextBox) OnKey(e *input.KeyEvent) {
+	if !t.enabled || !t.focused || e.Action != input.Press {
+		return
+	}
+
+	if e.Mods&input.ModCtrl != 0 {
+		switch e.Key {
+		case input.KeyA:
+			t.Select(0, len(t.runes))
+			e.Handled = true
+			return
+		case input.KeyC:
+			t.copySelection(e.Router)
+			e.Handled = true
+			return
+		case input.KeyX:
+			t.cutSelection(e.Router)
+			e.Handled = true
+			return
+		case input.KeyV:
+			t.pasteClipboard(e.Router)
+			e.Handled = true
+			return
+		}
+	}
+
+	shift := e.Mods&input.ModShift != 0
+	switch e.Key {
+	case input.KeyBackspace:
+		t.deleteBackward()
+		e.Handled = true
+		return
+	case input.KeyDelete:
+		t.deleteForward()
+		e.Handled = true
+		return
+	case input.KeyLeft:
+		t.moveCaret(-1, shift)
+		e.Handled = true
+		return
+	case input.KeyRight:
+		t.moveCaret(1, shift)
+		e.Handled = true
+		return
+	case input.KeyHome:
+		t.moveCaretTo(0, shift)
+		e.Handled = true
+		return
+	case input.KeyEnd:
+		t.moveCaretTo(len(t.runes), shift)
+		e.Handled = true
+		return
+	}
+
+	// Rune input: any produced character not accompanied by Ctrl (Ctrl+<key>
+	// combos above either matched and returned already, or aren't part of the
+	// v0 keyboard map — either way, a bare Ctrl+letter must not ALSO insert
+	// the letter as text).
+	if e.Rune != 0 && e.Mods&input.ModCtrl == 0 {
+		t.insertText(string(e.Rune))
+		e.Handled = true
+	}
+}
+
+// OnPointer implements input.PointerHandler: click-to-caret and drag-to-
+// select. Ignored entirely while disabled (not handled, so pointer events
+// bubble past a disabled TextBox rather than being swallowed by it).
+//
+// Press moves the caret to the nearest rune boundary to the click x (via
+// caretIndexAtX/localTextX) — which also clears any existing selection and
+// sets the drag anchor, since SetCaret sets anchor==caret — and captures the
+// pointer so the drag survives leaving the TextBox's bounds. Move, only
+// while this TextBox holds the capture, extends the selection from that
+// same anchor to the new nearest boundary (Select(t.anchor, idx): t.anchor
+// is left untouched by Select's own reassignment since the same value is
+// passed back in, so it stays pinned at the press position across an entire
+// drag). Release, only while captured, ends the drag.
+func (t *TextBox) OnPointer(e *input.PointerEvent) {
+	if !t.enabled {
+		return
+	}
+	switch e.Action {
+	case input.Press:
+		idx := t.caretIndexAtX(t.localTextX(e.Pos.X))
+		t.SetCaret(idx)
+		e.Router.Capture(t)
+		e.Handled = true
+	case input.Move:
+		if e.Router.Captured() == t {
+			idx := t.caretIndexAtX(t.localTextX(e.Pos.X))
+			t.Select(t.anchor, idx)
+			e.Handled = true
+		}
+	case input.Release:
+		if e.Router.Captured() == t {
+			e.Router.Release()
+			e.Handled = true
+		}
+	}
+}
+
+// Cursor implements input.CursorShaper: TextBox always shapes an I-beam
+// cursor over its bounds (matching the platform convention for text-input
+// fields), independent of enabled/focused state.
+func (t *TextBox) Cursor() input.Cursor {
+	return input.CursorIBeam
 }
 
 // clampInt clamps v into [lo, hi].
