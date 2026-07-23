@@ -457,6 +457,9 @@ func (card *comboPopupCard) Render(r render.Renderer) {
 	radius := card.metrics.CornerRadius
 	r.DrawShadow(bounds, radius, card.metrics.ShadowBlur, card.colors.Shadow)
 	r.FillRoundedRect(bounds, radius, card.colors.CardBackground)
+	// Hairline border for edge contrast over a same-toned backdrop (see
+	// menuPopupCard.Render for the rationale).
+	r.StrokeRoundedRect(bounds, radius, card.metrics.StrokeWidth, card.colors.ControlStroke)
 }
 
 // comboRow is one item row inside an open ComboBox's popup: a left-aligned

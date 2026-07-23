@@ -8,6 +8,11 @@ import (
 	"github.com/0xdreadnaught/fluo/theme"
 )
 
+// menuMinWidth is a menu popup's minimum width so short-label menus
+// ("New"/"Open"/"Exit") aren't cramped — WinUI context menus keep a
+// comfortable minimum regardless of their widest item.
+const menuMinWidth = 140
+
 // menuRowPadding returns a menu popup row's content inset: PaddingM
 // horizontal, PaddingS vertical — identical to ComboBox's comboRow padding
 // (rows are stacked one after another, so the same compact vertical rhythm
@@ -172,7 +177,11 @@ func newMenuPopupCard(child core.Widget, colors theme.ColorTokens, metrics theme
 // identical to comboPopupCard.MeasureContent.
 func (card *menuPopupCard) MeasureContent(available render.Size) render.Size {
 	core.MeasureWidget(card.child, available)
-	return core.DesiredSizeOf(card.child)
+	d := core.DesiredSizeOf(card.child)
+	if d.W < menuMinWidth {
+		d.W = menuMinWidth
+	}
+	return d
 }
 
 // ArrangeContent arranges the child to fill the card's own bounds exactly.
@@ -197,6 +206,10 @@ func (card *menuPopupCard) Render(r render.Renderer) {
 	radius := card.metrics.CornerRadius
 	r.DrawShadow(bounds, radius, card.metrics.ShadowBlur, card.colors.Shadow)
 	r.FillRoundedRect(bounds, radius, card.colors.CardBackground)
+	// A hairline border so the card edge is visible against a same-toned
+	// backdrop (a dark CardBackground over the dark Window background is
+	// otherwise near-invisible; the shadow alone doesn't separate them).
+	r.StrokeRoundedRect(bounds, radius, card.metrics.StrokeWidth, card.colors.ControlStroke)
 }
 
 // openSub opens sub's popup anchored to the right of row (a no-op if row's
