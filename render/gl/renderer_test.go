@@ -600,3 +600,54 @@ func TestMenuOpen(t *testing.T) {
 		core.RenderWidget(host, r)
 	})
 }
+
+// TestDialog is the Phase 7 Task 7 golden: a ShowDialog modal — scrim
+// dimming two colored Fixed blocks sitting behind it in the host's own
+// content, a centered shadowed Card with "Delete file?" / "This cannot be
+// undone.", and a right-aligned "Cancel" (default)/"Delete" (accent) button
+// row — inside a 280x180 frame.
+func TestDialog(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "dialog", 280, 180, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		// Content behind the scrim, so the dim is visible in the golden.
+		content := controls.NewCanvas().
+			Add(controls.NewFixed(120, 80, render.RGB(0, 120, 215)), 10, 10).
+			Add(controls.NewFixed(100, 60, render.RGB(16, 124, 16)), 150, 100)
+
+		host := controls.NewOverlayHost()
+		router := input.NewRouter()
+		host.SetRouter(router)
+		host.SetContent(content)
+		router.SetRoot(host)
+
+		frame := render.Rect{X: 0, Y: 0, W: 280, H: 180}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		// First layout pass: gives the host (and its content) real arranged
+		// bounds, so ShowDialog's anchor (core.BoundsOf(host)) is correct.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		controls.ShowDialog(host, face, controls.DialogSpec{
+			Title:     "Delete file?",
+			Body:      "This cannot be undone.",
+			Secondary: "Cancel",
+			Primary:   "Delete",
+		})
+
+		// Second layout pass: arranges the now-open dialog's scrim/card/rows.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		core.RenderWidget(host, r)
+	})
+}
