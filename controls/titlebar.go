@@ -8,10 +8,10 @@ import (
 	"github.com/0xdreadnaught/fluo/theme"
 )
 
-// titleBarHeight is TitleBar's normative fixed height (Fluent custom
-// titlebars run ~32px). captionButtonWidth is each of the three caption
-// buttons' fixed width — noticeably wider than tall, matching Fluent's own
-// caption button proportions — at the bar's full height.
+// titleBarHeight is TitleBar's normative fixed height (custom titlebars
+// conventionally run ~32px). captionButtonWidth is each of the three
+// caption buttons' fixed width — noticeably wider than tall, matching
+// conventional caption button proportions — at the bar's full height.
 const (
 	titleBarHeight     float32 = 32
 	captionButtonWidth float32 = 46
@@ -69,7 +69,7 @@ func (b *captionButton) MeasureContent(available render.Size) render.Size {
 // fill resolves the cell's background: fully transparent at rest, else
 // ControlFillHover/ControlFillPressed for minimize/maximize, or the
 // distinct CloseButtonHover red for close — for BOTH its hover and pressed
-// states, matching Fluent's own close button (which uses one red for both,
+// states, matching the conventional close button (which uses one red for both,
 // relying on the OS compositor's press-flash for pressed feedback, not a
 // second red shade — fluo does not attempt to reproduce that flash here).
 func (b *captionButton) fill() render.Color {
@@ -87,7 +87,7 @@ func (b *captionButton) fill() render.Color {
 }
 
 // glyphColor is TextPrimary normally, or AccentText (white, in both bundled
-// Fluent themes) while the close button's red fill is showing, for contrast.
+// themes) while the close button's red fill is showing, for contrast.
 func (b *captionButton) glyphColor() render.Color {
 	if b.kind == captionClose && (b.click.Hover() || b.click.Pressed()) {
 		return b.colors.AccentText
@@ -273,8 +273,8 @@ func (t *TitleBar) MeasureContent(available render.Size) render.Size {
 
 // ArrangeContent arranges the three caption buttons right-aligned at the
 // bar's full height (close rightmost, then maximize, then minimize, each
-// captionButtonWidth wide and abutting the next with no gap, matching
-// Fluent's own flush caption-button row) and the title at the bar's left
+// captionButtonWidth wide and abutting the next with no gap, matching a
+// conventional flush caption-button row) and the title at the bar's left
 // edge, inset by PaddingL and vertically centered, occupying whatever width
 // remains before the caption buttons begin.
 func (t *TitleBar) ArrangeContent(bounds render.Rect) {

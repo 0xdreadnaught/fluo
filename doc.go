@@ -1,5 +1,5 @@
 // Package fluo is the module root for github.com/0xdreadnaught/fluo, a
-// retained-mode, Fluent/WinUI-styled GUI toolkit for OpenGL apps in Go. It
+// retained-mode, classic Windows-styled GUI toolkit for OpenGL apps in Go. It
 // declares no exported symbols of its own — every usable package lives in
 // a subdirectory (render, text, core, input, theme, controls, bind, anim,
 // timers, app) — this file exists solely to give `go doc .`/pkg.go.dev a
@@ -37,8 +37,7 @@
 //	            and the reactive Property[T].
 //	input     — hit-testing, event bubbling, capture, and focus over a
 //	            core.Widget tree.
-//	theme     — the color/metric/typography token model (FluentLight/
-//	            FluentDark).
+//	theme     — the color/metric/typography token model (Light/Dark).
 //	controls  — the built-in widget set, styled from theme and wired to
 //	            input.
 //	bind      — one-way/two-way binding between core.Property[T]/

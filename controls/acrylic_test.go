@@ -62,7 +62,7 @@ func TestAcrylicSurfaceNoChild(t *testing.T) {
 }
 
 func TestAcrylicSurfaceDefaultTintFromTheme(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 
 	a := NewAcrylicSurface()

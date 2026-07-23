@@ -36,7 +36,7 @@ func TestScrollViewerThemeMetrics(t *testing.T) {
 	defer theme.SetActive(nil)
 
 	// Use a custom theme with a distinctive ScrollGutter value to prove token wiring.
-	customTheme := theme.FluentDark()
+	customTheme := theme.Dark()
 	customTheme.Metric.ScrollGutter = 20
 	theme.SetActive(customTheme)
 

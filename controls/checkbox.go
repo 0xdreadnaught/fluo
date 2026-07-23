@@ -259,7 +259,7 @@ func (c *CheckBox) Render(r render.Renderer) {
 
 // drawCheckmark draws the U+2713 glyph centered in the box (if c.checkGlyph)
 // or the fallback inner rounded square otherwise. Both paths use AccentText
-// (white in both bundled Fluent themes) as the checkmark color.
+// (white in both bundled themes) as the checkmark color.
 func (c *CheckBox) drawCheckmark(r render.Renderer) {
 	glyphColor := c.colors.AccentText
 	if !c.enabled {

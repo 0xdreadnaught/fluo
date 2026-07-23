@@ -72,14 +72,14 @@ func layoutListView(l *ListView, x, y, w, h float32) {
 // --- RowHeight ---
 
 func TestListViewDefaultRowHeight(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 
 	face := testFace(t)
 	items := newFakeListItems("a", "b")
 	l := NewListView(face, items)
 
-	want := face.LineHeight() + 2*theme.FluentLight().Metric.PaddingS
+	want := face.LineHeight() + 2*theme.Light().Metric.PaddingS
 	if got := l.RowHeight(); got != want {
 		t.Fatalf("RowHeight() = %v, want %v", got, want)
 	}
@@ -484,7 +484,7 @@ func TestListViewSelectLastRowAutoScrollsIntoView(t *testing.T) {
 // --- Selection: pool re-color ---
 
 func TestListViewPoolRecolorsSelectedRow(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -511,7 +511,7 @@ func TestListViewPoolRecolorsAfterSelectionChangesWithoutRetext(t *testing.T) {
 	// Guards ArrangeContent's unconditional-recolor requirement: a selection
 	// change alone (no text change) must still repaint the right rows on the
 	// NEXT arrange pass, even though re-texting itself stays conditional.
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 

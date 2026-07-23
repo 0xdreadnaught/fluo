@@ -2,7 +2,7 @@
 // phases land. Phase 3: interactive swatches (pointer/focus/cursor) plus a
 // ScrollViewer over a taller-than-viewport content stack. Phase 4: the whole
 // tree is built from theme.Active()'s tokens (buildUI), plus a live T-key
-// toggle between Fluent Light and Dark. Phase 5: a Controls section at the
+// toggle between classic Light and Dark. Phase 5: a Controls section at the
 // top of the scroll content exercises every core control built this phase
 // (Button/ToggleButton/CheckBox/RadioButton+Group/ToggleSwitch/TextBox/
 // Slider/ProgressBar/ComboBox/ToolTipArea), and the root becomes an
@@ -633,9 +633,9 @@ func main() {
 	// FLUO_THEME is a dev convenience for manual light/dark verification
 	// (e.g. `FLUO_THEME=light go run ./cmd/fluo-gallery`), not a supported
 	// runtime API — the real toggle is the T key.
-	initial := theme.FluentDark()
+	initial := theme.Dark()
 	if os.Getenv("FLUO_THEME") == "light" {
-		initial = theme.FluentLight()
+		initial = theme.Light()
 	}
 	theme.SetActive(initial)
 
@@ -721,9 +721,9 @@ func main() {
 		}
 		if togglePending {
 			togglePending = false
-			next := theme.FluentLight()
-			if theme.Active().Name == "fluent-light" {
-				next = theme.FluentDark()
+			next := theme.Light()
+			if theme.Active().Name == "classic-light" {
+				next = theme.Dark()
 			}
 			theme.SetActive(next)
 			// Cancel every binding on the OLD tree (about to be discarded)

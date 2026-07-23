@@ -605,7 +605,7 @@ func TestTreeViewMeasureContentReflectsCurrentExpandState(t *testing.T) {
 // --- Theming: real face, real colors (sanity that nothing panics) ---
 
 func TestTreeViewWithRealFaceAndTheme(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 
 	face := testFace(t)
