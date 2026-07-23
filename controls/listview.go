@@ -109,10 +109,7 @@ func NewListView(face *text.Face, items ListItems) *ListView {
 	t := theme.Active()
 
 	l := &ListView{face: face, items: items, selected: -1, colors: t.Color, metrics: t.Metric}
-	l.gutter = t.Metric.ScrollGutter
-	l.thumbColor = t.Color.ScrollThumb
-	l.thumbRadius = t.Metric.ControlCornerRadius
-	l.rowH = defaultRowHeight(face, t)
+	initVirtualizer(&l.virtualizer, face, t)
 	l.count = func() int {
 		if l.items == nil {
 			return 0

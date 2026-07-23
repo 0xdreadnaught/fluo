@@ -302,6 +302,76 @@ func TestDataGridClickOnHeaderDoesNotSelect(t *testing.T) {
 	}
 }
 
+// --- Row hover ---
+
+// TestDataGridHoverClearedOnWheel guards against hoverRow going stale: it is
+// an absolute row index, so scrolling via Wheel without a fresh Move to
+// re-hit-test against must clear it rather than leave the ControlFillHover
+// band painting on whatever row now occupies that index's new on-screen
+// position (see hoverRow's field doc comment).
+func TestDataGridHoverClearedOnWheel(t *testing.T) {
+	g := NewDataGrid(nil)
+	g.SetColumns(Column{Width: Px(50)})
+	g.SetRowCount(20)
+	g.rowH = 48
+
+	layoutDataGrid(g, 0, 0, 100, 148) // headerH=48; rows 0,1,2 visible
+
+	r := input.NewRouter()
+	move := &input.PointerEvent{Action: input.Move, Pos: render.Point{X: 10, Y: 48 + 10}, Router: r} // row 0
+	g.OnPointer(move)
+	if g.hoverRow != 0 {
+		t.Fatalf("hoverRow after Move = %d, want 0", g.hoverRow)
+	}
+
+	wheel := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -1}, Router: r}
+	g.OnPointer(wheel)
+	if !wheel.Handled {
+		t.Fatal("wheel event not marked Handled")
+	}
+	if g.hoverRow != -1 {
+		t.Fatalf("hoverRow after Wheel = %d, want -1 (cleared, stale after scroll)", g.hoverRow)
+	}
+}
+
+// TestDataGridHoverClearedOnThumbDrag mirrors the Wheel case above for the
+// other offset-changing-without-a-fresh-hit-test path: dragging the thumb.
+func TestDataGridHoverClearedOnThumbDrag(t *testing.T) {
+	g := NewDataGrid(nil)
+	g.SetColumns(Column{Width: Px(50)})
+	g.SetRowCount(20)
+	g.rowH = 48
+
+	layoutDataGrid(g, 0, 0, 100, 148) // headerH=48; rows 0,1,2 visible; content 960 > viewport 100 -> thumb present
+
+	r := input.NewRouter()
+	move := &input.PointerEvent{Action: input.Move, Pos: render.Point{X: 10, Y: 48 + 10}, Router: r} // row 0
+	g.OnPointer(move)
+	if g.hoverRow != 0 {
+		t.Fatalf("hoverRow after Move = %d, want 0", g.hoverRow)
+	}
+
+	rect, ok := g.thumbRect()
+	if !ok {
+		t.Fatal("expected a thumb (content taller than viewport)")
+	}
+
+	press := &input.PointerEvent{Action: input.Press, Pos: render.Point{X: rect.X, Y: rect.Y}, Router: r}
+	g.OnPointer(press) // captures g on the real router (OnPointer's own e.Router.Capture(g))
+	if !press.Handled {
+		t.Fatal("press on the thumb not marked Handled")
+	}
+
+	drag := &input.PointerEvent{Action: input.Move, Pos: render.Point{X: rect.X, Y: rect.Y + 20}, Router: r}
+	g.OnPointer(drag)
+	if !drag.Handled {
+		t.Fatal("drag move not marked Handled")
+	}
+	if g.hoverRow != -1 {
+		t.Fatalf("hoverRow after thumb drag = %d, want -1 (cleared, stale after scroll)", g.hoverRow)
+	}
+}
+
 // --- Selection: keyboard Up/Down ---
 
 func TestDataGridKeyboardUpDownWhenFocused(t *testing.T) {

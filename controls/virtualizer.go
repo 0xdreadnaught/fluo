@@ -4,6 +4,8 @@ import (
 	"math"
 
 	"github.com/0xdreadnaught/fluo/render"
+	"github.com/0xdreadnaught/fluo/text"
+	"github.com/0xdreadnaught/fluo/theme"
 )
 
 // virtualizer owns the uniform-row scroll/viewport math shared by any
@@ -195,4 +197,20 @@ func (v *virtualizer) dragTo(posY float32) {
 		frac = (thumbY - track.Y) / span
 	}
 	v.rawOffset = frac * maxOffset
+}
+
+// initVirtualizer captures the theme-derived fields every virtualizer-owning
+// control sets identically at construction (ListView, DataGrid — both
+// embed a virtualizer by value and call this from their own New* func):
+// the thumb gutter/color/radius (ScrollViewer's own conventions, per the
+// type doc comment above) and the default row height
+// (defaultRowHeight(face, t), in listview.go). v.count is deliberately left
+// for the caller to set afterward — that closure differs per owner (it
+// reads items.Len() for ListView, g.rowCount for DataGrid) and has no
+// theme-derived default to share.
+func initVirtualizer(v *virtualizer, face *text.Face, t *theme.Theme) {
+	v.gutter = t.Metric.ScrollGutter
+	v.thumbColor = t.Color.ScrollThumb
+	v.thumbRadius = t.Metric.ControlCornerRadius
+	v.rowH = defaultRowHeight(face, t)
 }

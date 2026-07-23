@@ -89,7 +89,15 @@ type DataGrid struct {
 	header render.Rect
 
 	selected int // -1 == none
-	hoverRow int // -1 == no row hovered
+
+	// hoverRow is the row index last reported under the pointer by a Move
+	// (-1 == none). It is an ABSOLUTE row index, not a screen position, so
+	// any offset change that happens without a fresh Move to re-hit-test
+	// against (Wheel, thumb dragTo) would otherwise leave it naming a row
+	// that has since scrolled to a different on-screen position —
+	// OnPointer clears it to -1 in both of those cases rather than let the
+	// hover band paint on the wrong row.
+	hoverRow int
 	focused  bool
 
 	onChanged func(int)
@@ -105,10 +113,7 @@ func NewDataGrid(face *text.Face) *DataGrid {
 	t := theme.Active()
 
 	g := &DataGrid{face: face, selected: -1, hoverRow: -1, colors: t.Color, metrics: t.Metric}
-	g.gutter = t.Metric.ScrollGutter
-	g.thumbColor = t.Color.ScrollThumb
-	g.thumbRadius = t.Metric.ControlCornerRadius
-	g.rowH = defaultRowHeight(face, t)
+	initVirtualizer(&g.virtualizer, face, t)
 	g.count = func() int { return g.rowCount }
 	return g
 }
@@ -476,6 +481,12 @@ func (g *DataGrid) OnPointer(e *input.PointerEvent) {
 	switch e.Action {
 	case input.Wheel:
 		g.scrollBy(-e.Delta.Y * scrollWheelStep)
+		// The offset just moved but this isn't a Move (no fresh pointer
+		// position to re-hit-test against), so whatever row hoverRow named
+		// no longer necessarily sits under the pointer on screen — clear it
+		// rather than paint ControlFillHover on the wrong row (see the row
+		// hover doc comment on hoverRow's field).
+		g.hoverRow = -1
 		g.InvalidateArrange()
 		e.Handled = true
 	case input.Press:
@@ -490,6 +501,10 @@ func (g *DataGrid) OnPointer(e *input.PointerEvent) {
 	case input.Move:
 		if e.Router.Captured() == g {
 			g.dragTo(e.Pos.Y)
+			// Same reasoning as Wheel above: a thumb drag also moves the
+			// offset independent of any row hit test, so any previously
+			// tracked hover row is now stale.
+			g.hoverRow = -1
 			g.InvalidateArrange()
 			e.Handled = true
 		} else if idx, ok := g.rowAt(e.Pos); ok {
