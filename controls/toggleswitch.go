@@ -68,7 +68,8 @@ func (s *ToggleSwitch) Checked() bool { return s.checked }
 // SetChecked sets the on/off state programmatically. Normative: unlike a
 // click, SetChecked does NOT fire OnChanged (matching CheckBox/
 // ToggleButton's convention) and is a no-op when v already matches the
-// current state.
+// current state. Fluo's uniform contract, restated: programmatic setters
+// are silent; OnChanged reports only user-driven changes.
 func (s *ToggleSwitch) SetChecked(v bool) *ToggleSwitch {
 	if s.checked == v {
 		return s
@@ -79,8 +80,9 @@ func (s *ToggleSwitch) SetChecked(v bool) *ToggleSwitch {
 
 // OnChanged sets the callback fired with the new checked value whenever the
 // user flips the switch (click or Space/Enter) — never for a programmatic
-// SetChecked. Replaces any previously set callback; a nil fn is a valid,
-// silent no-op.
+// SetChecked (fluo's uniform contract: programmatic setters are silent;
+// OnChanged reports only user-driven changes). Replaces any previously set
+// callback; a nil fn is a valid, silent no-op.
 func (s *ToggleSwitch) OnChanged(fn func(bool)) *ToggleSwitch {
 	s.onChanged = fn
 	return s

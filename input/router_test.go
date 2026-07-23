@@ -745,6 +745,27 @@ func TestDetachUnrelatedUntouched(t *testing.T) {
 	}
 }
 
+// TestDetachNilIsNoop is a one-liner regression for Detach's nil guard: a
+// nil w (e.g. a caller passing a not-yet-set popup reference) must return
+// immediately rather than panicking on the nil core.Widget interface value,
+// and must leave all router state untouched.
+func TestDetachNilIsNoop(t *testing.T) {
+	other := &probe{name: "other", focusable: true}
+	other.SetWidth(50)
+	other.SetHeight(50)
+	layout(other, 50, 50)
+
+	r := input.NewRouter()
+	r.SetRoot(other)
+	r.Focus(other)
+
+	r.Detach(nil) // must not panic
+
+	if r.Focused() != core.Widget(other) {
+		t.Fatalf("Focused() after Detach(nil) = %v, want other (untouched)", r.Focused())
+	}
+}
+
 // fakeClipboard is a minimal input.Clipboard for TestClipboardAccessors: a
 // single in-memory string, no host/OS involvement.
 type fakeClipboard struct{ text string }

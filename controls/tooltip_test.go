@@ -150,6 +150,67 @@ func TestToolTipNestedInPopupStaysOpen(t *testing.T) {
 	}
 }
 
+// TestToolTipRealRouterMoveShowsLeaveHidesPressPassesThrough is the Phase 5
+// final-fix integration test for Important #1 (non-modal tooltips), driven
+// entirely through a REAL input.Router (no direct OnPointer calls, unlike
+// every other test in this file): a ToolTipArea-wrapped widget lives beside
+// an unrelated probe under a real OverlayHost. Moving onto the wrapped
+// widget shows the tip immediately (no timers.Queue wired); moving away
+// hides it — Router's own ordinary (uncaptured) hover-diffing delivering
+// Enter/Leave is what makes both of these work now that ShowPopupNonModal
+// engages no capture at all. And, the key regression: with the tip open, a
+// press on the unrelated probe reaches it directly — it is NOT swallowed by
+// a light-dismiss capture, because there is none to swallow it (a modally
+// captured tooltip, by contrast, WOULD eat that first click).
+func TestToolTipRealRouterMoveShowsLeaveHidesPressPassesThrough(t *testing.T) {
+	child := NewFixed(60, 20, render.RGB(1, 2, 3))
+	ta := NewToolTipArea(child, nil, "hint") // no SetTimers: immediate show/hide
+
+	probe := &ovProbe{}
+	probe.SetWidth(60)
+	probe.SetHeight(20)
+
+	canvas := NewCanvas().Add(ta, 0, 0).Add(probe, 200, 0)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(canvas)
+	r.SetRoot(host)
+	layoutOverlay(host, 400, 200)
+
+	taBounds := core.BoundsOf(ta)
+	inside := render.Point{X: taBounds.X + 5, Y: taBounds.Y + 5}
+	neutral := render.Point{X: 150, Y: 5} // outside both ta and probe entirely
+	probeBounds := core.BoundsOf(probe)
+	onProbe := render.Point{X: probeBounds.X + 5, Y: probeBounds.Y + 5}
+
+	r.PointerMove(inside, 0) // Enter -> immediate show
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after Move onto the tooltipped widget = %v, want 1", got)
+	}
+
+	r.PointerMove(neutral, 0) // Leave (ta) -> hides; doesn't touch probe
+	if got := host.PopupCount(); got != 0 {
+		t.Fatalf("PopupCount after Move away = %v, want 0 (Leave closed it)", got)
+	}
+
+	r.PointerMove(inside, 0) // re-show for the press check below
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after re-showing = %v, want 1", got)
+	}
+
+	// probe has received no events yet (moves above never touched it): a
+	// press on it now is the whole regression this test targets.
+	r.PointerButton(input.ButtonLeft, true, onProbe, 0)
+	if got := probe.events; len(got) != 1 || got[0] != "press" {
+		t.Fatalf("probe.events = %v, want [press] (not swallowed by the open, non-modal tip)", got)
+	}
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after the press elsewhere = %v, want 1 (press doesn't light-dismiss a non-modal popup)", got)
+	}
+}
+
 func TestToolTipWrapperTransparentToChildLayout(t *testing.T) {
 	child := NewFixed(40, 20, render.RGB(1, 2, 3))
 	ta := NewToolTipArea(child, nil, "hint")

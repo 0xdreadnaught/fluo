@@ -62,14 +62,24 @@ func TestTextBoxSetTextResetsCaretAndClearsSelection(t *testing.T) {
 	}
 }
 
-func TestTextBoxSetTextFiresOnChanged(t *testing.T) {
+// TestTextBoxSetTextIsSilent is the Phase 5 final-fix regression for the
+// uniform silent-setter convention (Important #3, controller decision
+// option A): SetText joins CheckBox/ToggleSwitch/ToggleButton/ComboBox/
+// Slider in never firing OnChanged from a programmatic setter — even when
+// it produces a REAL change to Text(). Only user-driven edits (typing,
+// Backspace/Delete, Ctrl+X, Ctrl+V — see TestTextBoxRuneInsertsAtCaret for
+// the fires-on-user-input half of this contract) notify.
+func TestTextBoxSetTextIsSilent(t *testing.T) {
 	tb := NewTextBox(nil)
 	var got []string
 	tb.OnChanged(func(s string) { got = append(got, s) })
 
 	tb.SetText("hi")
-	if len(got) != 1 || got[0] != "hi" {
-		t.Fatalf("OnChanged calls = %v, want [%q] (SetText fires OnChanged, programmatic parity with typing)", got, "hi")
+	if len(got) != 0 {
+		t.Fatalf("OnChanged calls = %v, want none (SetText is a silent programmatic setter)", got)
+	}
+	if tb.Text() != "hi" {
+		t.Fatalf("Text() = %q, want %q (SetText still mutates, just silently)", tb.Text(), "hi")
 	}
 }
 
@@ -434,6 +444,40 @@ func TestTextBoxLeftRightClampAtEdges(t *testing.T) {
 	}
 }
 
+// TestTextBoxLeftRightCollapsesSelectionToEdgeWPFParity is a Phase 5
+// final-fix triage fold: an unshifted Left/Right press with an ACTIVE
+// selection collapses the caret straight to that selection's start/end
+// (standard desktop-text-box, WPF-parity convention), rather than moving
+// delta runes from the raw caret position (which would additionally step
+// past the selection's edge on the very first press).
+func TestTextBoxLeftRightCollapsesSelectionToEdgeWPFParity(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "hello world")
+
+	tb.Select(2, 7) // caret=7 (raw), normalized selection (2,7)
+	r.KeyDown(input.KeyLeft, 0, 0)
+	if c := tb.Caret(); c != 2 {
+		t.Fatalf("Left with selection (2,7): Caret() = %d, want 2 (selection start, not 6)", c)
+	}
+	if s, e := tb.Selection(); s != e {
+		t.Fatalf("Left with selection: Selection() = (%d,%d), want collapsed", s, e)
+	}
+
+	tb.Select(2, 7)
+	r.KeyDown(input.KeyRight, 0, 0)
+	if c := tb.Caret(); c != 7 {
+		t.Fatalf("Right with selection (2,7): Caret() = %d, want 7 (selection end, not 8)", c)
+	}
+	if s, e := tb.Selection(); s != e {
+		t.Fatalf("Right with selection: Selection() = (%d,%d), want collapsed", s, e)
+	}
+
+	// Once collapsed, a further unshifted press moves by 1 as usual.
+	r.KeyDown(input.KeyLeft, 0, 0)
+	if c := tb.Caret(); c != 6 {
+		t.Fatalf("Left after collapse: Caret() = %d, want 6 (plain -1 move)", c)
+	}
+}
+
 func TestTextBoxShiftLeftRightExtendFromAnchor(t *testing.T) {
 	tb, r := newFocusedTextBox(t, "hello world")
 	tb.SetCaret(4) // anchor==caret==4
@@ -769,6 +813,48 @@ func TestTextBoxDisabledIgnoresPointer(t *testing.T) {
 	tb.OnPointer(e)
 	if e.Handled {
 		t.Fatal("Press on a disabled TextBox set Handled = true, want false")
+	}
+}
+
+// TestTextBoxSetEnabledFalseMidDragReleasesCapture is the Phase 5 final-fix
+// regression for the mid-drag disable wedge (Important #2, joint with
+// Slider): capturing a drag-to-select via Press, then disabling the box
+// WHILE still captured, must release the router's capture — otherwise every
+// subsequent pointer event keeps routing to this now-disabled, unwilling
+// TextBox forever (deliverCaptured, never hit-testing again), wedging the
+// whole app's pointer input. Proven end-to-end: after the disable+release,
+// Captured() is nil and a fresh press actually reaches an unrelated probe.
+func TestTextBoxSetEnabledFalseMidDragReleasesCapture(t *testing.T) {
+	tb := NewTextBox(buttonFace(t))
+	tb.SetText("hello world")
+	tb.SetWidth(300)
+	tb.SetHeight(30)
+
+	probe := &ovProbe{}
+	probe.SetWidth(50)
+	probe.SetHeight(50)
+
+	canvas := NewCanvas().Add(tb, 0, 0).Add(probe, 350, 0)
+
+	r := input.NewRouter()
+	r.SetRoot(canvas)
+	layoutButton(canvas, render.Rect{X: 0, Y: 0, W: 500, H: 60})
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 15}, 0) // press: captures for drag-to-select
+	if got := r.Captured(); got != core.Widget(tb) {
+		t.Fatalf("Captured() after Press = %v, want tb", got)
+	}
+
+	tb.SetEnabled(false) // disabled WHILE still mid-drag
+
+	r.PointerButton(input.ButtonLeft, false, render.Point{X: 10, Y: 15}, 0) // Release, delivered captured
+	if got := r.Captured(); got != nil {
+		t.Fatalf("Captured() after Release while disabled mid-drag = %v, want nil (no wedge)", got)
+	}
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 360, Y: 10}, 0) // must reach the probe now
+	if got := probe.events; len(got) != 1 || got[0] != "press" {
+		t.Fatalf("probe.events = %v, want [press] (pointer flow restored, not permanently wedged)", got)
 	}
 }
 

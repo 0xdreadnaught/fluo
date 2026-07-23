@@ -35,12 +35,19 @@ const tooltipDelay = 600 * time.Millisecond
 // underlying feature (blink there, delay here) still degrades to something
 // reasonable" convention.
 //
-// The tip popup, once shown, is closed on Leave — not on light-dismiss: it
-// carries no onDismiss-driven state of its own beyond the same open/popup
-// bookkeeping ComboBox uses (see showTip/hideTip), and is itself
-// non-interactive (see newTipPopup), so a stray outside press closing it via
-// OverlayHost's light-dismiss swallow is a harmless side effect, never the
-// intended close path.
+// The tip popup is opened via OverlayHost.ShowPopupNonModal, not ShowPopup:
+// it is NEVER light-dismissed (no capture is engaged on its account, so a
+// press elsewhere in the app reaches its actual target normally — it is
+// not swallowed the way it would be if the tip captured the router
+// modally) and carries no onDismiss-driven state of its own beyond the
+// same open/popup bookkeeping ComboBox uses (see showTip/hideTip). It is
+// closed exclusively on Leave: with no modal capture in play, input.Router's
+// own ordinary (uncaptured) hover-diffing keeps delivering Enter/Leave to
+// this ToolTipArea exactly as it would to any other widget, which is what
+// makes the close-on-Leave path here reliable — see OverlayHost's own type
+// doc comment ("Modal vs non-modal popups") for why a non-modal popup needs
+// none of the capture-forwarding machinery a modal one (ComboBox's dropdown)
+// does.
 type ToolTipArea struct {
 	core.Element
 
@@ -108,7 +115,9 @@ func (ta *ToolTipArea) Children() []core.Widget {
 
 // showTip opens the tip popup (a no-op if already open, or if this
 // ToolTipArea isn't attached beneath an OverlayHost), anchored at the
-// wrapper's own bounds (equal to child's, per the type doc comment).
+// wrapper's own bounds (equal to child's, per the type doc comment). Uses
+// ShowPopupNonModal, not ShowPopup — see the type doc comment's
+// non-modal/close-on-Leave paragraph for why.
 func (ta *ToolTipArea) showTip() {
 	if ta.open {
 		return
@@ -122,7 +131,7 @@ func (ta *ToolTipArea) showTip() {
 	popup := newTipPopup(ta.face, ta.tip, ta.colors, ta.metrics)
 	ta.popup = popup
 
-	host.ShowPopup(popup, ta.Bounds(), func() {
+	host.ShowPopupNonModal(popup, ta.Bounds(), func() {
 		ta.open = false
 		ta.popup = nil
 	})

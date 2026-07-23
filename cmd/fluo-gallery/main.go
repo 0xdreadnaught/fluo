@@ -111,13 +111,16 @@ func (s *swatch) Cursor() input.Cursor { return input.CursorHand }
 // sits as buildUI's OverlayHost's content, one level below the host (see
 // buildUI). input.Router.dispatchKey delivers to the focused widget's own
 // core.ParentOf chain (which still includes galleryRoot, and above it the
-// host) whenever something is focused, but falls back to the bare router
-// root ALONE — the OverlayHost, which implements no KeyHandler — when
-// nothing is (e.g. immediately after SetRoot, which always clears focus).
-// So the T-key toggle fires reliably once any focusable control has been
-// interacted with, but not from a pristine, nothing-yet-focused launch — a
-// documented v0 tradeoff of routing ComboBox/ToolTipArea popups through a
-// single OverlayHost root, not an oversight.
+// host) whenever something is focused, and content sits on that chain, so
+// the T-key toggle reaches galleryRoot's OnKey via the ordinary bubble in
+// that case. With NOTHING focused (e.g. immediately after SetRoot, which
+// always clears focus), dispatchKey would otherwise deliver only to the
+// bare router root — the OverlayHost — alone; but OverlayHost.OnKey DOES
+// delegate an unfocused key to its own content whenever content implements
+// input.KeyHandler, which galleryRoot does (see OverlayHost.OnKey's own doc
+// comment). So the T-key toggle fires reliably even from a pristine,
+// nothing-yet-focused launch — the single-OverlayHost-root tradeoff noted
+// here in earlier revisions of this comment no longer applies.
 type galleryRoot struct {
 	core.Element
 
@@ -221,7 +224,12 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 	progressBar := controls.NewProgressBar()
 	slider := controls.NewSlider()
 	slider.OnChanged(func(v float32) { progressBar.SetValue(v) })
-	slider.SetValue(0.3) // fires OnChanged above, seeding progressBar to match
+	// Slider.SetValue is a silent programmatic setter (Phase 5 final fix:
+	// uniform setter convention) — it no longer fires OnChanged, so the
+	// initial seed above must set both widgets explicitly rather than
+	// relying on the OnChanged wiring to propagate it.
+	slider.SetValue(0.3)
+	progressBar.SetValue(0.3)
 
 	row4 := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
 		Add(slider, progressBar)

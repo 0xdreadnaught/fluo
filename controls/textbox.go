@@ -108,20 +108,23 @@ func (t *TextBox) Text() string {
 
 // SetText replaces the text content, resets the caret to the end, and
 // clears any selection. Task 6 carry-in fix B: SetText is a complete no-op —
-// no callback, no invalidation, caret/selection left untouched — when s
-// already equals the current text; this makes it safe for an OnChanged
-// handler to call SetText with the same value it was just notified of (a
-// common data-binding pattern) without recursing into another notification
-// or triggering pointless re-layout. When the text does change, SetText
-// fires OnChanged (matching every editing mutation's notification parity —
-// programmatic and user-driven changes look the same to a listener) and
-// calls InvalidateArrange (carry-in fix A) so hscroll re-clamps to the new
-// caret position on the next layout pass; InvalidateMeasure is NOT needed
-// since MeasureContent's desired size (textBoxDefaultWidth, fixed) never
-// depends on the text content. Also restarts the caret blink phase
-// (restartBlink), matching every other caret-moving mutation — but only on
-// the real-change path; the no-op-on-equal path above leaves the blink
-// phase (like everything else) untouched.
+// no invalidation, caret/selection left untouched — when s already equals
+// the current text; this makes it safe for an OnChanged handler to call
+// SetText with the same value it was just notified of (a common
+// data-binding pattern) without triggering pointless re-layout. SetText is
+// SILENT (never fires OnChanged) regardless of whether the text actually
+// changes — fluo's uniform setter convention (matching CheckBox/
+// ToggleSwitch/ToggleButton/ComboBox/Slider): programmatic setters are
+// silent, OnChanged reports only user-driven changes (typing, Backspace/
+// Delete, Ctrl+X, Ctrl+V — every path that funnels through replaceRange).
+// When the text does change, SetText calls InvalidateArrange (carry-in fix
+// A) so hscroll re-clamps to the new caret position on the next layout
+// pass; InvalidateMeasure is NOT needed since MeasureContent's desired size
+// (textBoxDefaultWidth, fixed) never depends on the text content. Also
+// restarts the caret blink phase (restartBlink), matching every other
+// caret-moving mutation — but only on the real-change path; the
+// no-op-on-equal path above leaves the blink phase (like everything else)
+// untouched.
 func (t *TextBox) SetText(s string) *TextBox {
 	if s == string(t.runes) {
 		return t
@@ -131,9 +134,6 @@ func (t *TextBox) SetText(s string) *TextBox {
 	t.anchor = t.caret
 	t.InvalidateArrange()
 	t.restartBlink()
-	if t.onChanged != nil {
-		t.onChanged(s)
-	}
 	return t
 }
 
@@ -153,10 +153,12 @@ func (t *TextBox) SetEnabled(v bool) *TextBox {
 	return t
 }
 
-// OnChanged sets the callback fired with the new text whenever it changes:
-// SetText (when the text actually changes — see its no-op-on-equal doc) and
-// every editing mutation (typing, Backspace/Delete, Ctrl+X, Ctrl+V). Replaces
-// any previously set callback; a nil fn is a valid, silent no-op.
+// OnChanged sets the callback fired with the new text whenever the USER
+// changes it — every editing mutation (typing, Backspace/Delete, Ctrl+X,
+// Ctrl+V) — but never for a programmatic SetText (fluo's uniform setter
+// convention: programmatic setters are silent, OnChanged reports only
+// user-driven changes). Replaces any previously set callback; a nil fn is a
+// valid, silent no-op.
 func (t *TextBox) OnChanged(fn func(string)) *TextBox {
 	t.onChanged = fn
 	return t
@@ -249,8 +251,12 @@ func (t *TextBox) Select(anchor, caret int) *TextBox {
 // already-clamped caret, so no further clamping happens here), moves the
 // caret to just after the inserted text and clears the selection (anchor
 // follows caret), invalidates arrange (carry-in fix A, so hscroll re-clamps
-// next layout pass), and fires OnChanged with the new full text (carry-in
-// fix B's notification parity: every mutation notifies).
+// next layout pass), and fires OnChanged with the new full text — every
+// editing mutation is USER-driven (the keyboard/pointer handlers below are
+// replaceRange's only callers), so it notifies unconditionally, per fluo's
+// uniform setter convention (OnChanged reports user-driven changes;
+// programmatic setters like SetText are silent — see SetText's doc
+// comment).
 //
 // replaceRange is the single mutation primitive every editing operation
 // below is built from: plain insertion is start==end (nothing removed),
@@ -264,7 +270,8 @@ func (t *TextBox) Select(anchor, caret int) *TextBox {
 // deleteBackward checks there is something to delete before calling it), so
 // OnChanged is fired unconditionally here rather than re-checking for a
 // no-op — unlike SetText, which the caller invokes for arbitrary (possibly
-// unchanged) input and must guard itself.
+// unchanged) input and must guard its own caret/invalidation side effects
+// (though never OnChanged, which it never fires at all).
 //
 // Also restarts the caret blink phase (restartBlink): every edit moves the
 // caret, so — matching SetCaret/Select — the caret must be immediately
@@ -328,7 +335,26 @@ func (t *TextBox) deleteForward() {
 // the CURRENT anchor to the new position via Select, so anchor stays fixed
 // across a run of Shift+Left/Right presses (the "extend selection from
 // anchor" bullet of the keyboard map).
+//
+// WPF-parity carry-in fix: with extend==false AND an active selection
+// (start != end), Left/Right (delta < 0 / > 0 respectively) collapses
+// straight to that selection's start/end instead of moving delta runes from
+// the raw caret — the standard desktop-text-box convention where an
+// unshifted arrow key on a selection dismisses it at the near edge rather
+// than additionally stepping past it. Only the FIRST unshifted arrow press
+// after a selection exists behaves this way; once collapsed (start==end),
+// subsequent presses fall through to the plain delta-from-caret move below.
 func (t *TextBox) moveCaret(delta int, extend bool) {
+	if !extend {
+		if start, end := t.Selection(); start != end {
+			if delta < 0 {
+				t.SetCaret(start)
+			} else {
+				t.SetCaret(end)
+			}
+			return
+		}
+	}
 	t.moveCaretTo(t.caret+delta, extend)
 }
 
@@ -714,7 +740,14 @@ func (t *TextBox) OnKey(e *input.KeyEvent) {
 
 // OnPointer implements input.PointerHandler: click-to-caret and drag-to-
 // select. Ignored entirely while disabled (not handled, so pointer events
-// bubble past a disabled TextBox rather than being swallowed by it).
+// bubble past a disabled TextBox rather than being swallowed by it) — but a
+// SetEnabled(false) landing MID-DRAG (this box still holds the router's
+// capture from an earlier Press) releases that capture first, before the
+// disabled early-return, matching Slider's OnPointer: otherwise every
+// subsequent pointer event would keep routing here via deliverCaptured
+// (never hit-testing) and find a disabled TextBox unwilling to do anything
+// with it — a permanent wedge with no widget reachable by the pointer at
+// all, not merely this one ignoring input as intended.
 //
 // Press moves the caret to the nearest rune boundary to the click x (via
 // caretIndexAtX/localTextX) — which also clears any existing selection and
@@ -727,6 +760,9 @@ func (t *TextBox) OnKey(e *input.KeyEvent) {
 // drag). Release, only while captured, ends the drag.
 func (t *TextBox) OnPointer(e *input.PointerEvent) {
 	if !t.enabled {
+		if e.Router != nil && e.Router.Captured() == t {
+			e.Router.Release()
+		}
 		return
 	}
 	switch e.Action {

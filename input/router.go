@@ -110,6 +110,20 @@ func (r *Router) Clipboard() Clipboard {
 // — leaving Captured() == w even after the caller believes it fully
 // released, permanently wedging pointer dispatch. Capture with a genuinely
 // DIFFERENT widget than the current top still nests normally.
+//
+// CAVEAT: the idempotence check above only looks at the CURRENT top, not
+// the whole stack — so a stack shaped h→w→h (h captured, then w nested over
+// it, then h re-asserts its own capture again while w is still on top,
+// e.g. OverlayHost.ShowPopup opening a second modal popup while a
+// popup-internal drag from the first is still in progress) is NOT
+// deduplicated: h is pushed again, genuinely nesting a THIRD entry over w,
+// and until that duplicate h is popped back off, w's own capture is no
+// longer the one events are delivered to even though nothing about w's
+// drag ended. A single Release from w's own Release handler only pops the
+// duplicate h, restoring w — not the outer h a caller might expect. This
+// is a known, currently undefended edge case (no v0 caller triggers it: it
+// requires opening a NEW modal popup from inside an active popup-internal
+// drag), not something Capture guards against beyond the same-top check.
 func (r *Router) Capture(w core.Widget) {
 	if len(r.captureStack) > 0 && r.captureStack[len(r.captureStack)-1] == w {
 		return

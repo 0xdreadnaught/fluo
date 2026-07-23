@@ -39,17 +39,15 @@ const (
 // pos/width mapping would let the thumb's edge overhang the track by a full
 // radius at either extreme.
 //
-// Normative OnChanged parity (a deliberate DEPARTURE from CheckBox/
-// ToggleSwitch/ToggleButton's "SetChecked never fires OnChanged" rule):
-// SetValue (and SetRange's re-clamp of the current value) DOES fire
-// OnChanged, but only when the clamped result actually differs from the
-// current value — see setValue, the single mutation primitive both SetValue
-// and SetRange funnel through. A slider's value is data a caller commonly
-// binds bidirectionally (e.g. a paired numeric readout), so — unlike a
-// boolean toggle's checked state — programmatic and user-driven changes are
-// meant to look identical to a listener, matching TextBox.SetText's
-// notify-on-real-change convention rather than the toggle family's
-// always-silent one.
+// OnChanged parity follows fluo's uniform setter convention (matching
+// CheckBox/ToggleSwitch/ToggleButton/ComboBox/TextBox): programmatic
+// setters are silent, OnChanged reports only user-driven changes. SetValue
+// and SetRange's re-clamp of the current value both go through
+// setValueSilent and never fire OnChanged, even when the clamped result
+// differs from the current value. Only USER-driven paths — drag,
+// click-on-track, and the arrow-key handler, all funneled through setValue
+// — fire OnChanged, and only when the clamped result actually differs from
+// the current value.
 type Slider struct {
 	core.Element
 
@@ -87,45 +85,53 @@ func (s *Slider) Max() float32 { return s.max }
 func (s *Slider) Value() float32 { return s.value }
 
 // SetRange sets the [min, max] range and re-clamps the current value into
-// it via setValue — see the type doc comment for why that re-clamp fires
-// OnChanged when the value actually moves (e.g. shrinking Max below the
-// current Value). Passing max < min is not guarded here; clampF (the
-// underlying clamp primitive) resolves that degenerate case by collapsing
-// to min, matching every other clampF caller in this package.
+// it via setValueSilent — silent, matching SetValue and the package's
+// uniform setter convention (see the type doc comment), even when the
+// re-clamp actually moves the value (e.g. shrinking Max below the current
+// Value). Passing max < min is not guarded here; clampF (the underlying
+// clamp primitive) resolves that degenerate case by collapsing to min,
+// matching every other clampF caller in this package.
 func (s *Slider) SetRange(min, max float32) *Slider {
 	s.min = min
 	s.max = max
-	s.setValue(s.value)
+	s.setValueSilent(s.value)
 	return s
 }
 
-// SetValue sets the value programmatically, clamped into [Min, Max]. Fires
-// OnChanged if (and only if) the clamped result differs from the current
-// value — see the type doc comment's OnChanged-parity note.
+// SetValue sets the value programmatically, clamped into [Min, Max].
+// Silent: never fires OnChanged, even when the clamped result differs from
+// the current value — see the type doc comment's OnChanged-parity note.
 func (s *Slider) SetValue(v float32) *Slider {
-	s.setValue(v)
+	s.setValueSilent(v)
 	return s
 }
 
-// setValue is the single mutation primitive SetValue, SetRange, drag
-// (setValueFromWindowX), click-on-track, and the arrow-key handler all
-// funnel through: clamp into [min, max], and fire OnChanged only if that
-// clamped value differs from the current one.
+// setValueSilent is the shared mutation primitive SetValue and SetRange's
+// re-clamp both funnel through: clamp v into [min, max] and assign the
+// result to s.value, WITHOUT ever firing OnChanged — the programmatic,
+// always-silent half of the type doc comment's OnChanged-parity note. An
+// equal-value call is a harmless no-op (assigning s.value its own current
+// value).
+func (s *Slider) setValueSilent(v float32) {
+	s.value = clampF(v, s.min, s.max)
+}
+
+// setValue is the USER-driven mutation primitive drag (setValueFromWindowX),
+// click-on-track, and the arrow-key handler all funnel through: clamp into
+// [min, max] via setValueSilent, then fire OnChanged if (and only if) that
+// clamped value differs from the value beforehand.
 func (s *Slider) setValue(v float32) {
-	v = clampF(v, s.min, s.max)
-	if v == s.value {
-		return
-	}
-	s.value = v
-	if s.onChanged != nil {
-		s.onChanged(v)
+	before := s.value
+	s.setValueSilent(v)
+	if s.value != before && s.onChanged != nil {
+		s.onChanged(s.value)
 	}
 }
 
-// OnChanged sets the callback fired with the new value whenever it changes
-// — by drag, click-on-track, arrow keys, SetValue, or SetRange's re-clamp
-// (see the type doc comment). Replaces any previously set callback; a nil
-// fn is a valid, silent no-op.
+// OnChanged sets the callback fired with the new value whenever the user
+// changes it — by drag, click-on-track, or arrow keys — but never for a
+// programmatic SetValue or SetRange (see the type doc comment). Replaces
+// any previously set callback; a nil fn is a valid, silent no-op.
 func (s *Slider) OnChanged(fn func(float32)) *Slider {
 	s.onChanged = fn
 	return s
@@ -285,9 +291,19 @@ func (s *Slider) OnFocusChanged(focused bool) {
 // bounds — Move only updates the value while this slider holds the
 // capture, matching TextBox's click-to-caret/drag-to-select pattern.
 // Ignored entirely while disabled (not handled, so pointer events bubble
-// past a disabled slider rather than being swallowed by it).
+// past a disabled slider rather than being swallowed by it) — but a
+// SetEnabled(false) landing MID-DRAG (this slider still holds the router's
+// capture from an earlier Press) releases that capture first, before the
+// disabled early-return: otherwise every subsequent pointer event would
+// keep routing here via deliverCaptured (never hit-testing) and find a
+// disabled slider unwilling to do anything with it — a permanent wedge with
+// no widget reachable by the pointer at all, not merely this one ignoring
+// input as intended.
 func (s *Slider) OnPointer(e *input.PointerEvent) {
 	if !s.enabled {
+		if e.Router != nil && e.Router.Captured() == s {
+			e.Router.Release()
+		}
 		return
 	}
 	switch e.Action {

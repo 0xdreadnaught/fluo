@@ -268,6 +268,20 @@ func (b *Button) OnKey(e *input.KeyEvent) {
 // embedded &tb.Button — so a ToggleButton removed mid-press (e.g. a popup
 // item closed while captured) leaks its pointer-capture entry, unlike a
 // plain Button, which Detach's subtree walk finds directly.
+//
+// Outermost-capture identity trap, same root cause: Button.OnPointer calls
+// b.click.HandlePointer(e, b), passing the promoted method's OWN receiver —
+// which, reached through a *ToggleButton, is &tb.Button (the embedded
+// field's address), never tb itself (see ClickBehavior.HandlePointer's doc
+// comment on owner). So input.Router.Captured() during a ToggleButton's
+// press-drag reports &tb.Button, NOT the *ToggleButton a caller likely holds
+// a reference to — comparing Captured() against the outer widget identity
+// (e.g. `router.Captured() == myToggleButton`) will never match this
+// control, only `== &myToggleButton.Button` would. This is harmless
+// internally (Capture and the matching Release/comparison inside
+// HandlePointer always use that same &tb.Button value), but it is a trap
+// for any OTHER code that tries to recognize "is this ToggleButton
+// currently capturing?" by outer identity.
 type ToggleButton struct {
 	Button
 
@@ -320,6 +334,8 @@ func (t *ToggleButton) Checked() bool {
 // convention (SetText, SetAccent, ...), while OnChanged is reserved for
 // user-driven changes (clicks, keyboard activation). A no-op (no re-render
 // implications either way) when v already matches the current state.
+// Fluo's uniform contract, restated: programmatic setters are silent;
+// OnChanged reports only user-driven changes.
 func (t *ToggleButton) SetChecked(v bool) *ToggleButton {
 	if t.checked == v {
 		return t
@@ -331,8 +347,9 @@ func (t *ToggleButton) SetChecked(v bool) *ToggleButton {
 
 // OnChanged sets the callback fired with the new checked value whenever the
 // user toggles the button (click or Space/Enter) — never for a programmatic
-// SetChecked. Replaces any previously set callback; a nil fn is a valid,
-// silent no-op.
+// SetChecked (fluo's uniform contract: programmatic setters are silent;
+// OnChanged reports only user-driven changes). Replaces any previously set
+// callback; a nil fn is a valid, silent no-op.
 func (t *ToggleButton) OnChanged(fn func(bool)) *ToggleButton {
 	t.onChanged = fn
 	return t

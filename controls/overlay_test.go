@@ -356,6 +356,82 @@ func TestMultiPopupCloseRestoresPointerFlow(t *testing.T) {
 	}
 }
 
+// TestNonModalPopupDoesNotEngageCapture is the Phase 5 final-fix regression
+// for Important #1 (non-modal popups): ShowPopupNonModal must never engage
+// the host's router capture — with only a non-modal popup open, Captured()
+// stays nil, and an ordinary press elsewhere reaches content normally (not
+// swallowed by light-dismiss, because there is no light-dismiss to speak
+// of without a capture).
+func TestNonModalPopupDoesNotEngageCapture(t *testing.T) {
+	probe := &ovProbe{}
+	probe.SetWidth(400)
+	probe.SetHeight(300)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(probe)
+	r.SetRoot(host)
+
+	popup := NewFixed(60, 30, render.RGB(4, 5, 6))
+	anchor := render.Rect{X: 300, Y: 50, W: 10, H: 10}
+	host.ShowPopupNonModal(popup, anchor, nil)
+	layoutOverlay(host, 400, 300)
+
+	if got := r.Captured(); got != nil {
+		t.Fatalf("Captured() with only a non-modal popup open = %v, want nil", got)
+	}
+
+	// A press well outside the popup (but inside the probe's full-host
+	// coverage) must reach the probe normally — no light-dismiss swallow.
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0)
+
+	if got := probe.events; len(got) != 1 || got[0] != "press" {
+		t.Fatalf("probe.events = %v, want [press] (non-modal popup must not swallow it)", got)
+	}
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after outside press = %v, want 1 (non-modal popup is never light-dismissed)", got)
+	}
+}
+
+// TestMixedModalNonModalCaptureGovernedByModal proves the two popup kinds
+// coexist correctly on the same stack: the modal capture stays engaged as
+// long as ANY modal popup remains — closing the non-modal one first leaves
+// it untouched, and only closing the modal one actually releases it.
+func TestMixedModalNonModalCaptureGovernedByModal(t *testing.T) {
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(NewFixed(400, 300, render.RGB(1, 2, 3)))
+	r.SetRoot(host)
+
+	modalPopup := NewFixed(60, 30, render.RGB(4, 5, 6))
+	nonModalPopup := NewFixed(40, 20, render.RGB(7, 8, 9))
+	host.ShowPopup(modalPopup, render.Rect{X: 10, Y: 10, W: 10, H: 10}, nil)
+	host.ShowPopupNonModal(nonModalPopup, render.Rect{X: 200, Y: 10, W: 10, H: 10}, nil)
+	layoutOverlay(host, 400, 300)
+
+	if got := r.Captured(); got != core.Widget(host) {
+		t.Fatalf("Captured() with modal+non-modal open = %v, want host", got)
+	}
+
+	host.CloseTopPopup() // closes nonModalPopup (topmost); modalPopup still open
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after closing the non-modal one = %v, want 1", got)
+	}
+	if got := r.Captured(); got != core.Widget(host) {
+		t.Fatalf("Captured() after closing the non-modal popup = %v, want host (modal still open)", got)
+	}
+
+	host.CloseTopPopup() // closes modalPopup; no modal popup left
+	if got := host.PopupCount(); got != 0 {
+		t.Fatalf("PopupCount after closing both = %v, want 0", got)
+	}
+	if got := r.Captured(); got != nil {
+		t.Fatalf("Captured() after closing the modal popup = %v, want nil (fully released)", got)
+	}
+}
+
 func TestOverlayClosePopupIdempotentAndDismissOnce(t *testing.T) {
 	host := NewOverlayHost()
 	popup := NewFixed(60, 30, render.RGB(4, 5, 6))

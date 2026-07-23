@@ -8,12 +8,17 @@ import (
 
 // popupEntry is one entry in an OverlayHost's popup stack: the popup widget
 // itself, the screen-space anchor rect it was opened against (re-used every
-// arrange pass to recompute its position), and the callback (may be nil) to
-// fire when it's dismissed.
+// arrange pass to recompute its position), the callback (may be nil) to fire
+// when it's dismissed, and whether it's MODAL (opened via ShowPopup) or not
+// (opened via ShowPopupNonModal) — see the type doc comment's "Modal vs
+// non-modal popups" paragraph. Every OTHER aspect of a popup (rendering,
+// hit-testing z-order, Detach-on-close) is identical regardless of modal;
+// only capture engagement and light-dismiss depend on it.
 type popupEntry struct {
 	w         core.Widget
 	anchor    render.Rect
 	onDismiss func()
+	modal     bool
 }
 
 // OverlayHost hosts the app content plus a stack of popups rendered above it.
@@ -27,33 +32,59 @@ type popupEntry struct {
 // nothing — Render is the inherited core.Element no-op; content and popups
 // render entirely as children.
 //
+// Modal vs non-modal popups: ShowPopup opens a MODAL popup (ComboBox's
+// dropdown); ShowPopupNonModal opens one that is NOT (ToolTipArea's tip).
+// The two are otherwise identical — same stack, same z-order for hit-testing
+// and rendering, same Detach-on-close via ClosePopup — but only a modal
+// popup engages the capture-based light-dismiss machinery described below;
+// a non-modal popup relies entirely on the router's ORDINARY (uncaptured)
+// hit-testing and hover-diffing to place it above content (it hit-tests and
+// renders topmost purely because of its position in Children(), same as
+// any popup) and to close it (its owner, e.g. ToolTipArea, closes it itself
+// on Leave — see ToolTipArea's own doc comment). If a modal popup is ALSO
+// open at the same time, a non-modal one behaves exactly as it would if it
+// were modal for the purpose of EVENT delivery: the modal capture governs
+// all pointer routing regardless of which popup happens to be topmost, per
+// the paragraph below.
+//
 // Light dismiss (see OnPointer) needs a way to stop a stray press from
-// reaching content underneath an open popup, and content's own widgets are
-// always deeper in the bubble path than OverlayHost (the root), so they'd
-// receive a Press before OverlayHost — the standard bubble order — ever ran.
-// To pre-empt that, OverlayHost captures the router (SetRouter must be
-// wired) for as long as at least one popup is open: every pointer event
-// routes directly to OverlayHost.OnPointer while a popup is showing,
-// completely bypassing hit-testing into content. OnPointer re-hit-tests and
-// forwards into the topmost popup's own subtree (input.HitPath + input.Bubble)
-// when the event falls inside it, so popup-internal controls (ComboBox item
-// rows, etc.) still receive Press/Release/Move/Wheel normally. Content (and
-// any popup beneath the topmost one) is the part that stays inert while a
-// popup is open — only the topmost popup's interior and the
-// dismiss-on-outside-Press decision are live. Documented v0 simplification,
-// not an oversight.
+// reaching content underneath an open MODAL popup, and content's own
+// widgets are always deeper in the bubble path than OverlayHost (the
+// root), so they'd receive a Press before OverlayHost — the standard
+// bubble order — ever ran. To pre-empt that, OverlayHost captures the
+// router (SetRouter must be wired) for as long as at least one MODAL popup
+// is open: every pointer event routes directly to OverlayHost.OnPointer
+// while a modal popup is showing, completely bypassing hit-testing into
+// content. OnPointer re-hit-tests and forwards into the topmost popup's own
+// subtree (input.HitPath + input.Bubble) when the event falls inside it, so
+// popup-internal controls (ComboBox item rows, etc.) still receive
+// Press/Release/Move/Wheel normally. Content (and any popup beneath the
+// topmost one) is the part that stays inert while a modal popup is open —
+// only the topmost popup's interior and the dismiss-on-outside-Press
+// decision are live. Documented v0 simplification, not an oversight. A
+// non-modal popup with no modal popup open engages none of this: it is
+// never light-dismissed (nothing captures on its account), and the
+// ordinary uncaptured dispatch path below (hit-testing, hover-diffing,
+// bubbling) reaches it and everything else exactly as if it weren't a
+// popup at all.
 //
 // Hover (Enter/Leave) is the one exception to "forwarded like any other
-// event": input.Router's own hover-diffing (the mechanism that normally
-// turns hit-test-path changes between successive Move events into Enter/
-// Leave pairs) lives entirely in Router.PointerMove's UNCAPTURED branch, so
-// it never runs at all while OverlayHost holds the capture — a captured Move
-// only ever reaches OverlayHost.OnPointer as a bare Move, with no Enter/Leave
-// synthesized anywhere. Popup-internal controls that drive their hover state
-// off Enter/Leave (e.g. ComboBox's item rows) would therefore never actually
+// event" while a MODAL popup holds the capture: input.Router's own
+// hover-diffing (the mechanism that normally turns hit-test-path changes
+// between successive Move events into Enter/Leave pairs) lives entirely in
+// Router.PointerMove's UNCAPTURED branch, so it never runs at all while
+// OverlayHost holds the capture — a captured Move only ever reaches
+// OverlayHost.OnPointer as a bare Move, with no Enter/Leave synthesized
+// anywhere. Popup-internal controls that drive their hover state off
+// Enter/Leave (e.g. ComboBox's item rows) would therefore never actually
 // hover from real mouse movement, only from Press/Release — so OnPointer
 // replicates Router.updateHover's diff-and-notify algorithm itself, scoped to
-// the topmost popup's own subtree, via popupHover/diffPopupHover.
+// the topmost popup's own subtree, via popupHover/diffPopupHover. A
+// non-modal popup with no modal capture engaged needs none of this
+// replication: Router's own hover-diffing runs normally (it was never
+// bypassed), so Enter/Leave reach it exactly as they would any other widget
+// in the tree — this is what restores ToolTipArea's documented
+// close-on-Leave path (see its own type doc comment).
 type OverlayHost struct {
 	core.Element
 
@@ -102,7 +133,7 @@ func (h *OverlayHost) SetContent(w core.Widget) *OverlayHost {
 }
 
 // SetRouter wires the input.Router that dispatches to this tree. It is used
-// for two things: capturing pointer input for the duration any popup is
+// for two things: capturing pointer input for the duration any MODAL popup is
 // open (see OnPointer's doc comment) and clearing stale focus/capture/hover
 // into a popup's subtree via router.Detach when it closes (see ClosePopup).
 // SetRouter is normally called once, e.g. by the host application right
@@ -114,25 +145,52 @@ func (h *OverlayHost) SetRouter(r *input.Router) {
 	h.router = r
 }
 
-// ShowPopup opens popup, placing it near anchor (a screen-space rect,
-// typically the opener's own bounds): the preferred position is directly
-// below anchor, left-aligned with it; the popup flips to sit above anchor
-// instead when it would overflow the host's bottom edge, and is always
-// clamped horizontally so it stays within the host's bounds (see
-// placePopup for the exact placement math). popup becomes the new topmost
-// popup (last in the stack), so it hit-tests and renders above every
-// existing popup and the content.
+// ShowPopup opens popup as a MODAL popup, placing it near anchor (a
+// screen-space rect, typically the opener's own bounds): the preferred
+// position is directly below anchor, left-aligned with it; the popup flips
+// to sit above anchor instead when it would overflow the host's bottom
+// edge, and is always clamped horizontally so it stays within the host's
+// bounds (see placePopup for the exact placement math). popup becomes the
+// new topmost popup (last in the stack), so it hit-tests and renders above
+// every existing popup and the content.
 //
 // onDismiss (may be nil) fires exactly once, when popup is later removed via
 // ClosePopup/CloseTopPopup — whether that happens via light-dismiss or an
 // explicit close call made by whoever opened the popup.
 //
-// While at least one popup is open, ShowPopup captures the wired router (see
-// SetRouter) on this host, so pointer input routes to OnPointer instead of
-// hit-testing into content — re-engaging the capture is a no-op if it's
-// already held by this host.
+// While at least one MODAL popup is open, ShowPopup captures the wired
+// router (see SetRouter) on this host, so pointer input routes to
+// OnPointer instead of hit-testing into content — re-engaging the capture
+// is a no-op if it's already held by this host (see input.Router.Capture's
+// doc comment on idempotence, and its caveat about a capture stack shaped
+// h→w→h). Use ShowPopupNonModal for a popup that should NOT engage any of
+// this (e.g. ToolTipArea's tip) — see the type doc comment's "Modal vs
+// non-modal popups" paragraph.
 func (h *OverlayHost) ShowPopup(popup core.Widget, anchor render.Rect, onDismiss func()) {
-	h.popups = append(h.popups, popupEntry{w: popup, anchor: anchor, onDismiss: onDismiss})
+	h.showPopup(popup, anchor, onDismiss, true)
+}
+
+// ShowPopupNonModal opens popup exactly like ShowPopup — same placement,
+// same stacking, same onDismiss-once-on-close contract, same
+// Detach-on-close — except it never engages the router: no capture is
+// taken on this host on its account, so it is never light-dismissed (it
+// hit-tests/renders topmost purely from its position in the popup stack,
+// and closing it is entirely up to its owner, e.g. ToolTipArea closing its
+// own tip on Leave). If a MODAL popup is ALSO open (from a prior or later
+// ShowPopup call), that modal capture still governs event routing for
+// EVERY popup regardless of which is topmost — see the type doc comment's
+// "Modal vs non-modal popups" paragraph.
+func (h *OverlayHost) ShowPopupNonModal(popup core.Widget, anchor render.Rect, onDismiss func()) {
+	h.showPopup(popup, anchor, onDismiss, false)
+}
+
+// showPopup is ShowPopup/ShowPopupNonModal's shared implementation: append
+// the entry (recording modal so ClosePopup's capture-release decision and
+// hasModalPopup can tell modal and non-modal popups apart), re-parent, reset
+// the stale popupHover (see the field's doc comment and popupHoverGen's),
+// invalidate measure, and — modal only — capture the wired router.
+func (h *OverlayHost) showPopup(popup core.Widget, anchor render.Rect, onDismiss func(), modal bool) {
+	h.popups = append(h.popups, popupEntry{w: popup, anchor: anchor, onDismiss: onDismiss, modal: modal})
 	core.SetParent(popup, h)
 	// popup is now topmost: whatever popupHover was tracking (if anything)
 	// belonged to the previous topmost (or nothing, if this is the first
@@ -143,10 +201,26 @@ func (h *OverlayHost) ShowPopup(popup core.Widget, anchor render.Rect, onDismiss
 	// its own pending final write is now stale and must not clobber this.
 	h.popupHover = nil
 	h.popupHoverGen++
-	if h.router != nil {
+	if modal && h.router != nil {
 		h.router.Capture(h)
 	}
 	h.InvalidateMeasure()
+}
+
+// hasModalPopup reports whether any popup currently on the stack is modal
+// (opened via ShowPopup, as opposed to ShowPopupNonModal) — used by
+// ClosePopup to decide whether releasing this host's router capture is due
+// yet: it must stay engaged as long as even one modal popup remains, not
+// merely until the stack is entirely empty (a non-modal popup, e.g. a
+// tooltip, may still be open and must not have the capture linger on its
+// account).
+func (h *OverlayHost) hasModalPopup() bool {
+	for _, p := range h.popups {
+		if p.modal {
+			return true
+		}
+	}
+	return false
 }
 
 // ClosePopup removes popup from the stack, wherever it sits in it (not just
@@ -158,9 +232,12 @@ func (h *OverlayHost) ShowPopup(popup core.Widget, anchor render.Rect, onDismiss
 // router (if any, see SetRouter) has Detach(popup) called on it — clearing
 // any stale focus/capture/hover the router held into popup's subtree, since
 // popup is about to become unreachable — onDismiss fires (if non-nil), and
-// measure is invalidated. If this empties the stack entirely, and this host
-// currently holds the router's pointer capture (see ShowPopup), the capture
-// is released so ordinary hit-testing into content resumes.
+// measure is invalidated. If NO popup on the stack is modal afterward (see
+// hasModalPopup — a stack that's merely empty qualifies trivially, but so
+// does one that still holds non-modal popups, e.g. a tooltip left open),
+// and this host currently holds the router's pointer capture (see
+// ShowPopup), the capture is released so ordinary hit-testing into content
+// resumes.
 func (h *OverlayHost) ClosePopup(popup core.Widget) {
 	idx := -1
 	for i, p := range h.popups {
@@ -192,7 +269,7 @@ func (h *OverlayHost) ClosePopup(popup core.Widget) {
 	}
 	h.InvalidateMeasure()
 
-	if len(h.popups) == 0 && h.router != nil && h.router.Captured() == core.Widget(h) {
+	if !h.hasModalPopup() && h.router != nil && h.router.Captured() == core.Widget(h) {
 		h.router.Release()
 	}
 }
@@ -352,12 +429,17 @@ func (h *OverlayHost) OnKey(e *input.KeyEvent) {
 }
 
 // OnPointer implements input.PointerHandler. See the OverlayHost doc comment
-// for why the router is captured while any popup is open, which is what
-// makes this the exclusive receiver of every pointer event during that
-// window: with no root set (or no popups open), this is never called via
-// capture at all — only ever via ordinary bubbling, if it happens to be on
-// the hit path, in which case there's nothing to do (len(h.popups) == 0
-// short-circuits below).
+// for why the router is captured while any MODAL popup is open, which is
+// what makes this the exclusive receiver of every pointer event during that
+// window: with no root set (or no modal popup open), this is never called
+// via capture at all — only ever via ordinary bubbling, if it happens to be
+// on the hit path, in which case there's nothing to do (len(h.popups) == 0
+// short-circuits below). Note top (below) is simply the LAST entry on the
+// stack regardless of its modal flag: a non-modal popup opened while a
+// modal one is already active is forwarded into (or dismisses, per the
+// outside-Press branch) exactly like a modal one would, since it's the
+// modal capture that got this call routed here at all — see the type doc
+// comment's "Modal vs non-modal popups" paragraph.
 //
 // When e.Pos falls inside the topmost popup's bounds, the event is forwarded
 // into that popup's own subtree — input.HitPath(topmost, e.Pos) finds the
@@ -393,7 +475,21 @@ func (h *OverlayHost) OnKey(e *input.KeyEvent) {
 // dismiss-on-Press decision are live. This is a documented v0
 // simplification, not an oversight.
 func (h *OverlayHost) OnPointer(e *input.PointerEvent) {
-	if len(h.popups) == 0 {
+	// Guard on hasModalPopup, NOT merely len(h.popups) == 0: OverlayHost is
+	// the root, so it sits on EVERY hit-test path and is reached via the
+	// ordinary (uncaptured) bubble whenever nothing before it in the path
+	// sets e.Handled — including whenever only NON-modal popups are open
+	// (no capture is ever engaged on their account, so this call, when it
+	// happens at all, is exactly that ordinary bubble, not the captured
+	// forwarding call the rest of this method is written for). Without this
+	// guard, a plain uncaptured press elsewhere in content would still
+	// reach here, find e.Pos outside the topmost (non-modal) popup's
+	// bounds, and wrongly light-dismiss it via the outside-Press branch
+	// below — exactly the swallow this whole feature exists to avoid. Once
+	// hasModalPopup() is true, this IS always the captured-forwarding call
+	// (ShowPopup guarantees the capture is held for as long as any modal
+	// popup remains), so the rest of the method proceeds exactly as before.
+	if !h.hasModalPopup() {
 		return
 	}
 	top := h.popups[len(h.popups)-1].w

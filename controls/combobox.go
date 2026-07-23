@@ -105,7 +105,9 @@ func (c *ComboBox) labelText() string {
 // SetItems replaces the item list, re-clamping the current selection into
 // the new range (see clampSelectedIndex) and refreshing the field's label.
 // Does NOT fire OnChanged, even if the clamp changes SelectedIndex() — like
-// SetSelectedIndex, this is a silent, programmatic setter.
+// SetSelectedIndex, this is a silent, programmatic setter (fluo's uniform
+// contract: programmatic setters are silent; OnChanged reports only
+// user-driven changes).
 func (c *ComboBox) SetItems(items []string) *ComboBox {
 	c.items = append([]string(nil), items...)
 	c.selected = clampSelectedIndex(c.selected, len(c.items))
@@ -124,7 +126,9 @@ func (c *ComboBox) SelectedIndex() int {
 // explicit "no selection" value, not merely a clamp target. Silent: never
 // fires OnChanged, matching the CheckBox/ToggleButton/RadioButton
 // SetChecked convention (programmatic changes are silent; only user-driven
-// ones — a click or Space/Enter/Down-then-click — notify).
+// ones — a click or Space/Enter/Down-then-click — notify). Fluo's uniform
+// contract, restated: programmatic setters are silent; OnChanged reports
+// only user-driven changes.
 func (c *ComboBox) SetSelectedIndex(i int) *ComboBox {
 	c.selected = clampSelectedIndex(i, len(c.items))
 	c.label.SetText(c.labelText())
@@ -148,8 +152,11 @@ func (c *ComboBox) selectUser(i int) {
 }
 
 // OnChanged sets the callback fired with the new index whenever the user
-// selects a (different) item by clicking a popup row. Replaces any
-// previously set callback; a nil fn is a valid, silent no-op.
+// selects a (different) item by clicking a popup row — never for a
+// programmatic SetSelectedIndex or SetItems (fluo's uniform contract:
+// programmatic setters are silent; OnChanged reports only user-driven
+// changes). Replaces any previously set callback; a nil fn is a valid,
+// silent no-op.
 func (c *ComboBox) OnChanged(fn func(int)) *ComboBox {
 	c.onChanged = fn
 	return c

@@ -74,30 +74,49 @@ func TestSliderSetRangeReClampsValue(t *testing.T) {
 	}
 }
 
-func TestSliderOnChangedFiresOnUserAndProgrammaticChange(t *testing.T) {
+// TestSliderSetValueAndSetRangeAreSilent is the Phase 5 final-fix regression
+// for the uniform silent-setter convention (Important #3, controller
+// decision option A): Slider joins CheckBox/ToggleSwitch/ToggleButton/
+// ComboBox/TextBox in never firing OnChanged from a programmatic setter —
+// SetValue and SetRange's re-clamp are both silent even when they produce a
+// REAL change to Value().
+func TestSliderSetValueAndSetRangeAreSilent(t *testing.T) {
 	s := NewSlider().SetRange(0, 10)
 
 	var got []float32
 	s.OnChanged(func(v float32) { got = append(got, v) })
 
-	s.SetValue(3)    // programmatic, real change: fires
+	s.SetValue(3)    // programmatic, real change: silent
 	s.SetValue(3)    // programmatic, no-op: silent
-	s.SetRange(0, 2) // re-clamp, real change (3 -> 2): fires
+	s.SetRange(0, 2) // re-clamp, real change (3 -> 2): silent
 
-	if len(got) != 2 || got[0] != 3 || got[1] != 2 {
-		t.Fatalf("OnChanged calls = %v, want [3 2]", got)
+	if len(got) != 0 {
+		t.Fatalf("OnChanged calls = %v, want none (SetValue/SetRange are silent)", got)
+	}
+	if s.Value() != 2 {
+		t.Fatalf("Value() after SetValue(3) then SetRange(0,2) = %v, want 2 (still clamps/mutates, just silently)", s.Value())
 	}
 }
 
-func TestSliderOnChangedSilentOnNoOpSetValue(t *testing.T) {
-	s := NewSlider()
+// TestSliderOnChangedFiresOnUserDrivenChange proves the OTHER half of the
+// uniform contract: user-driven paths (here, click-on-track) still fire
+// OnChanged, only when the value actually changes.
+func TestSliderOnChangedFiresOnUserDrivenChange(t *testing.T) {
+	s := NewSlider().SetRange(0, 200)
+	layoutSlider(s, render.Rect{X: 0, Y: 0, W: 160, H: 24})
 
-	fired := false
-	s.OnChanged(func(float32) { fired = true })
+	var got []float32
+	s.OnChanged(func(v float32) { got = append(got, v) })
 
-	s.SetValue(0) // already 0: no-op
-	if fired {
-		t.Fatal("SetValue to the already-current value fired OnChanged, want silent no-op")
+	r := input.NewRouter()
+	r.SetRoot(s)
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 8, Y: 12}, 0) // left edge: 0 (no-op, already 0)
+	r.PointerButton(input.ButtonLeft, false, render.Point{X: 8, Y: 12}, 0)
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 152, Y: 12}, 0) // right edge: 200 (real change)
+	r.PointerButton(input.ButtonLeft, false, render.Point{X: 152, Y: 12}, 0)
+
+	if len(got) != 1 || got[0] != 200 {
+		t.Fatalf("OnChanged calls = %v, want [200] (fires once, only on the real user-driven change)", got)
 	}
 }
 
@@ -244,6 +263,44 @@ func TestSliderDisabledIgnoresPointerAndKeyAndFocus(t *testing.T) {
 	}
 	if s.Value() != 0 {
 		t.Fatalf("Value() after Right key on disabled slider = %v, want 0 (unaffected)", s.Value())
+	}
+}
+
+// TestSliderSetEnabledFalseMidDragReleasesCapture is the Phase 5 final-fix
+// regression for the mid-drag disable wedge (Important #2, joint with
+// TextBox): capturing a drag via Press, then disabling the slider WHILE
+// still captured, must release the router's capture — otherwise every
+// subsequent pointer event keeps routing to this now-disabled, unwilling
+// slider forever (deliverCaptured, never hit-testing again), wedging the
+// whole app's pointer input. Proven end-to-end: after the disable+release,
+// Captured() is nil and a fresh press actually reaches an unrelated probe.
+func TestSliderSetEnabledFalseMidDragReleasesCapture(t *testing.T) {
+	s := NewSlider().SetRange(0, 100)
+	probe := &ovProbe{}
+	probe.SetWidth(50)
+	probe.SetHeight(50)
+
+	canvas := NewCanvas().Add(s, 0, 0).Add(probe, 200, 0)
+
+	r := input.NewRouter()
+	r.SetRoot(canvas)
+	layoutSlider(canvas, render.Rect{X: 0, Y: 0, W: 400, H: 60})
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 80, Y: 12}, 0) // press on the slider: captures
+	if got := r.Captured(); got != core.Widget(s) {
+		t.Fatalf("Captured() after Press = %v, want slider", got)
+	}
+
+	s.SetEnabled(false) // disabled WHILE still mid-drag
+
+	r.PointerButton(input.ButtonLeft, false, render.Point{X: 80, Y: 12}, 0) // Release, delivered captured
+	if got := r.Captured(); got != nil {
+		t.Fatalf("Captured() after Release while disabled mid-drag = %v, want nil (no wedge)", got)
+	}
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 210, Y: 10}, 0) // must reach the probe now
+	if got := probe.events; len(got) != 1 || got[0] != "press" {
+		t.Fatalf("probe.events = %v, want [press] (pointer flow restored, not permanently wedged)", got)
 	}
 }
 

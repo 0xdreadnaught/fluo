@@ -48,7 +48,11 @@ off the same `app.Ctx.Timers` queue (`SetTimers`); a nil queue degrades each
 to a reasonable default (solid caret, immediate-show tooltip) rather than
 breaking. `TextBox` also wires up `Ctrl+C`/`Ctrl+X`/`Ctrl+V` against
 `input.Router`'s clipboard (backed by glfw's clipboard API), so cut/copy/
-paste works out of the box.
+paste works out of the box. Every control follows the same uniform
+setter/`OnChanged` contract: programmatic setters (`SetChecked`, `SetValue`,
+`SetText`, `SetSelectedIndex`, `SetRange`, ...) are silent, while `OnChanged`
+reports only user-driven changes (click, drag, typed input, keyboard
+activation).
 
 ## Theming
 

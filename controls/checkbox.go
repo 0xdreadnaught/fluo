@@ -158,6 +158,8 @@ func (c *CheckBox) Checked() bool { return c.checked }
 // SetChecked sets the toggle state programmatically. Normative: unlike a
 // click, SetChecked does NOT fire OnChanged (matching ToggleButton's
 // convention) and is a no-op when v already matches the current state.
+// Fluo's uniform contract, restated: programmatic setters are silent;
+// OnChanged reports only user-driven changes.
 func (c *CheckBox) SetChecked(v bool) *CheckBox {
 	if c.checked == v {
 		return c
@@ -168,8 +170,9 @@ func (c *CheckBox) SetChecked(v bool) *CheckBox {
 
 // OnChanged sets the callback fired with the new checked value whenever the
 // user toggles the box (click or Space/Enter) — never for a programmatic
-// SetChecked. Replaces any previously set callback; a nil fn is a valid,
-// silent no-op.
+// SetChecked (fluo's uniform contract: programmatic setters are silent;
+// OnChanged reports only user-driven changes). Replaces any previously set
+// callback; a nil fn is a valid, silent no-op.
 func (c *CheckBox) OnChanged(fn func(bool)) *CheckBox {
 	c.onChanged = fn
 	return c
@@ -406,7 +409,9 @@ func (rb *RadioButton) Checked() bool { return rb.checked }
 // OnChanged, matching CheckBox/ToggleButton's convention). A no-op when v
 // already matches the current state. Setting true on a grouped button also
 // silently deselects its siblings, preserving the group's mutual-exclusion
-// invariant even under direct programmatic control.
+// invariant even under direct programmatic control. Fluo's uniform
+// contract, restated: programmatic setters are silent; OnChanged reports
+// only user-driven changes.
 func (rb *RadioButton) SetChecked(v bool) *RadioButton {
 	if rb.checked == v {
 		return rb
@@ -421,8 +426,9 @@ func (rb *RadioButton) SetChecked(v bool) *RadioButton {
 // OnChanged sets the callback fired with true whenever the user selects
 // this radio button (click or Space/Enter) — never for a programmatic
 // SetChecked, and never when this button is deselected as a side effect of
-// a sibling being selected. Replaces any previously set callback; a nil fn
-// is a valid, silent no-op.
+// a sibling being selected (fluo's uniform contract: programmatic setters
+// are silent; OnChanged reports only user-driven changes). Replaces any
+// previously set callback; a nil fn is a valid, silent no-op.
 func (rb *RadioButton) OnChanged(fn func(bool)) *RadioButton {
 	rb.onChanged = fn
 	return rb
@@ -589,8 +595,9 @@ func (g *RadioGroup) Add(rb *RadioButton) *RadioGroup {
 // OnChanged sets the callback fired with the newly selected member's index
 // whenever the user selects a DIFFERENT member of the group than the one
 // currently checked (never when re-selecting the same one, and never for a
-// programmatic SetChecked). Replaces any previously set callback; a nil fn
-// is a valid, silent no-op.
+// programmatic SetChecked — fluo's uniform contract: programmatic setters
+// are silent; OnChanged reports only user-driven changes). Replaces any
+// previously set callback; a nil fn is a valid, silent no-op.
 func (g *RadioGroup) OnChanged(fn func(int)) *RadioGroup {
 	g.onChanged = fn
 	return g
