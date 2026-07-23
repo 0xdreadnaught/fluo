@@ -312,6 +312,45 @@ func (h *OverlayHost) Children() []core.Widget {
 	return out
 }
 
+// OnKey implements input.KeyHandler: it delegates to content's own OnKey
+// (if content implements input.KeyHandler), but ONLY when no widget in the
+// tree currently holds keyboard focus (e.Router.Focused() == nil).
+//
+// OverlayHost is a purely structural root — it draws nothing itself
+// (Render is the inherited core.Element no-op) and exists to give popups
+// somewhere to hit-test and render above content. But input.Router.dispatchKey
+// delivers an unfocused key event to the bare router root ALONE, walking no
+// further into the tree (see its doc comment); for an app whose root is an
+// OverlayHost, that means a window-level accelerator hosted on content (or
+// somewhere in content's own subtree, reachable via content's OnKey) would
+// silently never fire until something happened to be focused. Delegating
+// here restores that: whatever content would have received had IT been the
+// router's root gets delivered exactly as before.
+//
+// The focused-widget case needs no such forwarding — dispatchKey already
+// bubbles a focused key event up the ancestor chain from the focused widget
+// to the root, and content sits on that chain (between the focused widget
+// and this host, being its parent) whenever the focused widget is under
+// content at all — so content already receives the event once through the
+// ordinary bubble. Delegating unconditionally here (without the
+// Focused()==nil guard) would deliver that same event to content a SECOND
+// time. The guard is what keeps this a pure "unfocused-only" fallback rather
+// than a duplicate delivery path.
+//
+// Popups are deliberately excluded: this never forwards into h.popups. A
+// popup that needs Esc-to-close (ComboBox) or similar already gets it via
+// the ordinary focused path, since the field that opened the popup stays
+// focused for the popup's entire lifetime (see ComboBox's type doc comment)
+// — there is no unfocused-popup-key scenario that needs a separate route.
+func (h *OverlayHost) OnKey(e *input.KeyEvent) {
+	if e.Router != nil && e.Router.Focused() != nil {
+		return
+	}
+	if kh, ok := h.content.(input.KeyHandler); ok {
+		kh.OnKey(e)
+	}
+}
+
 // OnPointer implements input.PointerHandler. See the OverlayHost doc comment
 // for why the router is captured while any popup is open, which is what
 // makes this the exclusive receiver of every pointer event during that

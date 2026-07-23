@@ -543,3 +543,78 @@ func TestPopupHoverEnterLeaveSynthesis(t *testing.T) {
 		t.Fatalf("PopupCount after moving outside (no press) = %d, want 1 (popup stays open)", host.PopupCount())
 	}
 }
+
+// ovKeyProbe is a minimal widget for OverlayHost.OnKey delegation tests: it
+// counts every OnKey delivery (so a test can assert a key reached it exactly
+// once — never zero, never twice) and optionally exposes a single child (so
+// a test can build a focused-widget-under-content shape without pulling in
+// a whole real container type).
+type ovKeyProbe struct {
+	core.Element
+
+	child core.Widget
+	keys  int
+}
+
+func (p *ovKeyProbe) OnKey(e *input.KeyEvent) {
+	p.keys++
+}
+
+func (p *ovKeyProbe) Children() []core.Widget {
+	if p.child == nil {
+		return nil
+	}
+	return []core.Widget{p.child}
+}
+
+// TestOverlayDelegatesUnfocusedKeyToContent is the regression test for
+// OverlayHost.OnKey: with NO widget in the tree focused,
+// input.Router.dispatchKey would otherwise deliver a key event to the bare
+// router root alone (see dispatchKey's doc comment) — which, for a tree
+// rooted at OverlayHost, is the host itself, never content. Without OnKey's
+// delegation, a window-level accelerator hosted on content (fluo-gallery's
+// T-key theme toggle, for instance) would never fire from a pristine,
+// nothing-yet-focused launch. Confirms delegation happens, and exactly once.
+func TestOverlayDelegatesUnfocusedKeyToContent(t *testing.T) {
+	host := NewOverlayHost()
+	content := &ovKeyProbe{}
+	host.SetContent(content)
+
+	r := input.NewRouter()
+	host.SetRouter(r)
+	r.SetRoot(host)
+
+	r.KeyDown(input.KeyT, 0, 0)
+
+	if content.keys != 1 {
+		t.Fatalf("content.keys = %d, want exactly 1 (unfocused delegation)", content.keys)
+	}
+}
+
+// TestOverlayDoesNotDoubleDeliverFocusedKey is the companion regression: with
+// some widget under content (not content itself) focused,
+// input.Router.dispatchKey already bubbles the key event up the focused
+// widget's own ancestor chain — content sits on that chain (it is the
+// focused child's parent) and receives the event that way, before dispatchKey
+// ever reaches the host. OverlayHost.OnKey's delegation must recognize this
+// (via e.Router.Focused() != nil) and skip re-delivering to content, or
+// content would see the very same key event twice.
+func TestOverlayDoesNotDoubleDeliverFocusedKey(t *testing.T) {
+	host := NewOverlayHost()
+	content := &ovKeyProbe{}
+	child := &ovProbe{focusable: true}
+	content.child = child
+	core.SetParent(child, content)
+	host.SetContent(content)
+
+	r := input.NewRouter()
+	host.SetRouter(r)
+	r.SetRoot(host)
+	r.Focus(child)
+
+	r.KeyDown(input.KeyT, 0, 0)
+
+	if content.keys != 1 {
+		t.Fatalf("content.keys = %d, want exactly 1 (bubbled once via the focused chain, not double-delivered by OnKey's delegation)", content.keys)
+	}
+}
