@@ -606,6 +606,57 @@ func TestMenuOpen(t *testing.T) {
 // content, a centered shadowed Card with "Delete file?" / "This cannot be
 // undone.", and a right-aligned "Cancel" (default)/"Delete" (accent) button
 // row — inside a 280x180 frame.
+// TestDataGrid is the Phase 7 Task 8 golden: a DataGrid with 3 columns
+// ("Name" Px 80, "Email" Star, "Age" Px 60) and 20 rows ("User NN",
+// "uNN@x.io", 20+NN), row 2 selected — showing the SelectionBackground/
+// SelectionForeground row band — scrolled to the top (offset 0, the
+// zero-value default; no explicit scroll needed) so the header (fixed,
+// LayerBackground fill + TextSecondary titles + its own bottom border) sits
+// above the first several body rows, each with its own 1px ControlStroke
+// grid line, with the scroll thumb showing (20 rows taller than the visible
+// body), inside a 300x180 frame. Sized and positioned exactly like
+// TestListView's own ScrollTo(0)-pinned golden: explicit SetWidth/SetHeight,
+// placed via Canvas at a fixed (10,10) offset.
+func TestDataGrid(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "datagrid", 300, 180, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		dg := controls.NewDataGrid(face)
+		dg.SetColumns(
+			controls.Column{Title: "Name", Width: controls.Px(80), Value: func(row int) string {
+				return fmt.Sprintf("User %d", row)
+			}},
+			controls.Column{Title: "Email", Width: controls.Star(1), Value: func(row int) string {
+				return fmt.Sprintf("u%d@x.io", row)
+			}},
+			controls.Column{Title: "Age", Width: controls.Px(60), Value: func(row int) string {
+				return fmt.Sprintf("%d", 20+row)
+			}},
+		)
+		dg.SetRowCount(20)
+		dg.SetWidth(280)
+		dg.SetHeight(160)
+		dg.SetSelectedIndex(2)
+
+		root := controls.NewCanvas().Add(dg, 10, 10)
+
+		frame := render.Rect{X: 0, Y: 0, W: 300, H: 180}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(root, frame)
+		core.RenderWidget(root, r)
+	})
+}
+
 func TestDialog(t *testing.T) {
 	theme.SetActive(theme.FluentLight())
 	defer theme.SetActive(nil)
