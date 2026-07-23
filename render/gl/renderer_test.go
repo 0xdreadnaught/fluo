@@ -223,3 +223,46 @@ func TestButtons(t *testing.T) {
 		core.RenderWidget(row, r)
 	})
 }
+
+// TestToggles is the Phase 5 Task 4 golden: a checkbox (unchecked, checked),
+// a radio button (off, on), and a toggle switch (off, on), side by side in
+// a StackPanel. Normative: all six show bare glyphs with no labels (empty
+// label strings), so the row's only spacing is the outer StackPanel's
+// PaddingM gap between the six controls — the composites' own internal
+// label gap never triggers, per glyphMeasure/glyphArrange's "no gap for an
+// empty label" rule.
+func TestToggles(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "toggles", 360, 60, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		cbOff := controls.NewCheckBox(face, "")
+		cbOn := controls.NewCheckBox(face, "").SetChecked(true)
+		rbOff := controls.NewRadioButton(face, "")
+		rbOn := controls.NewRadioButton(face, "").SetChecked(true)
+		swOff := controls.NewToggleSwitch()
+		swOn := controls.NewToggleSwitch().SetChecked(true)
+
+		row := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
+			Add(cbOff, cbOn, rbOff, rbOn, swOff, swOn)
+
+		frame := render.Rect{X: 0, Y: 0, W: 360, H: 60}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(row, render.Size{W: frame.W, H: frame.H})
+		desired := core.DesiredSizeOf(row)
+		bounds := render.Rect{
+			X: (frame.W - desired.W) / 2, Y: (frame.H - desired.H) / 2,
+			W: desired.W, H: desired.H,
+		}
+		core.ArrangeWidget(row, bounds)
+		core.RenderWidget(row, r)
+	})
+}

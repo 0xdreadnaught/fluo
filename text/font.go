@@ -70,6 +70,18 @@ func (f *Font) glyphIndex(r rune) (sfnt.GlyphIndex, bool) {
 	return gi, true
 }
 
+// HasGlyph reports whether f actually has a glyph for r, as opposed to
+// silently falling back to glyph index 0 (.notdef) the way Face.Measure and
+// Face.Draw do. Callers that want to draw a specific rune (e.g. a Unicode
+// symbol used as an icon) only when the font can really render it — falling
+// back to a drawn shape otherwise — should gate on this rather than
+// Measure's advance width, since a .notdef glyph can still have a nonzero
+// advance.
+func (f *Font) HasGlyph(r rune) bool {
+	_, ok := f.glyphIndex(r)
+	return ok
+}
+
 // advance returns the horizontal advance width of gi at sizePx, in
 // logical pixels.
 func (f *Font) advance(gi sfnt.GlyphIndex, sizePx float32) float32 {

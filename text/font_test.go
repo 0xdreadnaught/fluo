@@ -34,6 +34,30 @@ func TestLoadAndMetrics(t *testing.T) {
 	}
 }
 
+// TestHasGlyph exercises the glyph-presence decision procedure controls
+// (e.g. CheckBox's checkmark) use at construction time to choose between
+// drawing a real glyph or falling back to a drawn shape. 'A' must be
+// present in any real text font; U+E0000 is a Unicode private-use codepoint
+// (Supplementary Private Use Area-B) that no font — least of all goregular,
+// a plain Latin text face — assigns, giving a reliable "definitely absent"
+// case. The test also logs whether goregular has U+2713 (the checkmark
+// candidate glyph): as of this font, it does not (glyphIndex resolves to
+// the notdef glyph 0), which is the fact that decides CheckBox's checkmark
+// fallback path — see controls/checkbox.go.
+func TestHasGlyph(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.HasGlyph('A') {
+		t.Error("HasGlyph('A') = false, want true (goregular is a Latin text font)")
+	}
+	if f.HasGlyph(0xE0000) {
+		t.Error("HasGlyph(U+E0000) = true, want false (unassigned private-use codepoint)")
+	}
+	t.Logf("goregular HasGlyph(U+2713 checkmark) = %v", f.HasGlyph('✓'))
+}
+
 func TestRasterGlyph(t *testing.T) {
 	f, _ := Load(goregular.TTF)
 	mask, bx, by, err := f.rasterGlyph(mustGlyph(t, f, 'A'), 48, 4)
