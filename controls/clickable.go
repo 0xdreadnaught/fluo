@@ -84,12 +84,19 @@ func (c *ClickBehavior) Activate() {
 }
 
 // drawFocusRing draws the focus-ring overlay shared by every focusable
-// composite control (Button, CheckBox, RadioButton, ToggleSwitch): a
-// StrokeRoundedRect on bounds inflated by 2, at radius+2, using
-// FocusStrokeWidth and FocusStroke from the caller's own captured tokens.
-// Callers are expected to have already checked their own focused flag; this
-// helper only centralizes the "inflate by 2, ring color/width from theme
-// tokens" geometry so all four controls draw an identical ring.
+// control (Button, CheckBox, RadioButton, ToggleSwitch, TextBox, Slider,
+// ListView, tabStrip): a StrokeRoundedRect drawn just INSIDE the widget's
+// own bounds, using FocusStrokeWidth and FocusStroke from the caller's own
+// captured tokens. Callers pass their own bounds and corner radius and are
+// expected to have already checked their focused flag.
+//
+// The ring is inset (drawn on bounds, stroked inward) rather than outset
+// (bounds inflated outward) so it always falls WITHIN the widget's own
+// rectangle. An outset ring's outer band lies outside the widget and is
+// cropped by any clipping ancestor a focusable sits flush against — e.g. the
+// leftmost tab or a list flush against a ScrollViewer's clip edge would lose
+// the ring's left side. Keeping the ring inside the bounds makes it immune to
+// ancestor clipping without needing a separate adorner layer.
 func drawFocusRing(r render.Renderer, bounds render.Rect, radius float32, colors theme.ColorTokens, metrics theme.MetricTokens) {
-	r.StrokeRoundedRect(bounds.Inflate(2), radius+2, metrics.FocusStrokeWidth, colors.FocusStroke)
+	r.StrokeRoundedRect(bounds, radius, metrics.FocusStrokeWidth, colors.FocusStroke)
 }
