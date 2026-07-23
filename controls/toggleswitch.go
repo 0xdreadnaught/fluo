@@ -106,7 +106,11 @@ func (s *ToggleSwitch) ArrangeContent(bounds render.Rect) {}
 func (s *ToggleSwitch) Children() []core.Widget { return nil }
 
 // stateColors resolves the pill fill, stroke (zero-alpha means "no
-// stroke"), and thumb color for the current checked/enabled state.
+// stroke"), and thumb color for the current checked/enabled state, applying
+// the same hover/pressed feedback as Button/CheckBox to the track fill:
+// off walks ControlFill -> ControlFillHover -> ControlFillPressed, on walks
+// Accent -> AccentHover -> AccentPressed. The thumb color is unaffected by
+// hover/pressed — only the track responds.
 func (s *ToggleSwitch) stateColors() (fill, stroke, thumb render.Color) {
 	th := s.colors
 	if !s.enabled {
@@ -115,10 +119,26 @@ func (s *ToggleSwitch) stateColors() (fill, stroke, thumb render.Color) {
 		}
 		return th.ControlFillDisabled, th.ControlStrokeDisabled, th.TextDisabled
 	}
+
 	if s.checked {
-		return th.Accent, render.Color{}, th.AccentText
+		fill = th.Accent
+		switch {
+		case s.click.Pressed():
+			fill = th.AccentPressed
+		case s.click.Hover():
+			fill = th.AccentHover
+		}
+		return fill, render.Color{}, th.AccentText
 	}
-	return th.ControlFill, th.ControlStroke, th.TextSecondary
+
+	fill = th.ControlFill
+	switch {
+	case s.click.Pressed():
+		fill = th.ControlFillPressed
+	case s.click.Hover():
+		fill = th.ControlFillHover
+	}
+	return fill, th.ControlStroke, th.TextSecondary
 }
 
 // Render paints the 40x20 pill (fill + optional stroke, radius 10) and the
@@ -148,9 +168,7 @@ func (s *ToggleSwitch) RenderOverlay(r render.Renderer) {
 	if !s.focused {
 		return
 	}
-	bounds := s.Bounds().Inflate(2)
-	radius := switchRadius + 2
-	r.StrokeRoundedRect(bounds, radius, s.metrics.FocusStrokeWidth, s.colors.FocusStroke)
+	drawFocusRing(r, s.Bounds(), switchRadius, s.colors, s.metrics)
 }
 
 // AcceptsFocus implements input.Focusable: a disabled switch never accepts

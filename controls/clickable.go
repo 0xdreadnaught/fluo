@@ -3,6 +3,8 @@ package controls
 import (
 	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/input"
+	"github.com/0xdreadnaught/fluo/render"
+	"github.com/0xdreadnaught/fluo/theme"
 )
 
 // ClickBehavior implements the standard press state machine shared by every
@@ -79,4 +81,15 @@ func (c *ClickBehavior) Activate() {
 	if c.OnClick != nil {
 		c.OnClick()
 	}
+}
+
+// drawFocusRing draws the focus-ring overlay shared by every focusable
+// composite control (Button, CheckBox, RadioButton, ToggleSwitch): a
+// StrokeRoundedRect on bounds inflated by 2, at radius+2, using
+// FocusStrokeWidth and FocusStroke from the caller's own captured tokens.
+// Callers are expected to have already checked their own focused flag; this
+// helper only centralizes the "inflate by 2, ring color/width from theme
+// tokens" geometry so all four controls draw an identical ring.
+func drawFocusRing(r render.Renderer, bounds render.Rect, radius float32, colors theme.ColorTokens, metrics theme.MetricTokens) {
+	r.StrokeRoundedRect(bounds.Inflate(2), radius+2, metrics.FocusStrokeWidth, colors.FocusStroke)
 }

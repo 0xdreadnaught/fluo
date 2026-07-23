@@ -205,7 +205,10 @@ func (c *CheckBox) Children() []core.Widget {
 }
 
 // stateColors resolves the fill and stroke (zero-alpha means "no stroke")
-// for the current checked/enabled state.
+// for the current checked/enabled state, applying the same hover/pressed
+// feedback as Button.stateColors: unchecked walks ControlFill ->
+// ControlFillHover -> ControlFillPressed, checked walks Accent ->
+// AccentHover -> AccentPressed, both keyed off the embedded ClickBehavior.
 func (c *CheckBox) stateColors() (fill, stroke render.Color) {
 	th := c.colors
 	if !c.enabled {
@@ -214,10 +217,26 @@ func (c *CheckBox) stateColors() (fill, stroke render.Color) {
 		}
 		return th.ControlFillDisabled, th.ControlStrokeDisabled
 	}
+
 	if c.checked {
-		return th.Accent, render.Color{}
+		fill = th.Accent
+		switch {
+		case c.click.Pressed():
+			fill = th.AccentPressed
+		case c.click.Hover():
+			fill = th.AccentHover
+		}
+		return fill, render.Color{}
 	}
-	return th.ControlFill, th.ControlStroke
+
+	fill = th.ControlFill
+	switch {
+	case c.click.Pressed():
+		fill = th.ControlFillPressed
+	case c.click.Hover():
+		fill = th.ControlFillHover
+	}
+	return fill, th.ControlStroke
 }
 
 // Render paints the 18x18 box (fill + optional stroke, radius 4) and, when
@@ -266,9 +285,7 @@ func (c *CheckBox) RenderOverlay(r render.Renderer) {
 	if !c.focused {
 		return
 	}
-	bounds := c.box.Inflate(2)
-	radius := c.metrics.ControlCornerRadius + 2
-	r.StrokeRoundedRect(bounds, radius, c.metrics.FocusStrokeWidth, c.colors.FocusStroke)
+	drawFocusRing(r, c.box, c.metrics.ControlCornerRadius, c.colors, c.metrics)
 }
 
 // AcceptsFocus implements input.Focusable: a disabled checkbox never
@@ -442,19 +459,45 @@ func (rb *RadioButton) Children() []core.Widget {
 
 // stateColors resolves the fill, ring stroke, ring stroke width, and inner
 // dot color (zero-alpha dot means "no dot", i.e. unchecked) for the current
-// checked/enabled state.
+// checked/enabled state, applying the same hover/pressed feedback as
+// Button/CheckBox: the base circle fill always walks ControlFill ->
+// ControlFillHover -> ControlFillPressed (per the embedded ClickBehavior),
+// and when checked the ring+dot additionally walk Accent -> AccentHover ->
+// AccentPressed together (they're both "the accent chrome").
+//
+// Disabled marker note: the inner dot uses TextDisabled (not AccentDisabled)
+// when disabled+checked, matching CheckBox's disabled checkmark and
+// ToggleSwitch's disabled thumb — both put a TextDisabled marker on top of
+// an otherwise-disabled-accent-colored chrome, for contrast. The ring itself
+// stays AccentDisabled, since it IS that chrome, not the marker on it.
 func (rb *RadioButton) stateColors() (fill, ring render.Color, ringWidth float32, dot render.Color) {
 	th := rb.colors
 	if !rb.enabled {
 		if rb.checked {
-			return th.ControlFillDisabled, th.AccentDisabled, radioRingWidth, th.AccentDisabled
+			return th.ControlFillDisabled, th.AccentDisabled, radioRingWidth, th.TextDisabled
 		}
 		return th.ControlFillDisabled, th.ControlStrokeDisabled, rb.metrics.StrokeWidth, render.Color{}
 	}
-	if rb.checked {
-		return th.ControlFill, th.Accent, radioRingWidth, th.Accent
+
+	fill = th.ControlFill
+	switch {
+	case rb.click.Pressed():
+		fill = th.ControlFillPressed
+	case rb.click.Hover():
+		fill = th.ControlFillHover
 	}
-	return th.ControlFill, th.ControlStroke, rb.metrics.StrokeWidth, render.Color{}
+
+	if rb.checked {
+		accent := th.Accent
+		switch {
+		case rb.click.Pressed():
+			accent = th.AccentPressed
+		case rb.click.Hover():
+			accent = th.AccentHover
+		}
+		return fill, accent, radioRingWidth, accent
+	}
+	return fill, th.ControlStroke, rb.metrics.StrokeWidth, render.Color{}
 }
 
 // Render paints the 18x18 circle (fill + ring stroke) and, when checked,
@@ -480,9 +523,7 @@ func (rb *RadioButton) RenderOverlay(r render.Renderer) {
 	if !rb.focused {
 		return
 	}
-	bounds := rb.box.Inflate(2)
-	radius := bounds.W / 2
-	r.StrokeRoundedRect(bounds, radius, rb.metrics.FocusStrokeWidth, rb.colors.FocusStroke)
+	drawFocusRing(r, rb.box, rb.box.W/2, rb.colors, rb.metrics)
 }
 
 // AcceptsFocus implements input.Focusable: a disabled radio button never
@@ -521,6 +562,11 @@ func (rb *RadioButton) OnKey(e *input.KeyEvent) {
 // selecting one (via click, Space/Enter, or SetChecked(true)) deselects
 // every other member, and OnChanged fires with the newly selected member's
 // index (its position in Add call order).
+//
+// v0 caveat: RadioGroup holds plain *RadioButton pointers in members and has
+// no Remove — a button, once Add-ed, stays a member (and keeps its index)
+// for the group's lifetime. Building a group whose membership changes at
+// runtime is out of scope for now; construct a fresh RadioGroup instead.
 type RadioGroup struct {
 	members   []*RadioButton
 	onChanged func(int)

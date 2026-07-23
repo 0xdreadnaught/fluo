@@ -196,9 +196,7 @@ func (b *Button) RenderOverlay(r render.Renderer) {
 	if !b.focused {
 		return
 	}
-	bounds := b.Bounds().Inflate(2)
-	radius := b.metrics.ControlCornerRadius + 2
-	r.StrokeRoundedRect(bounds, radius, b.metrics.FocusStrokeWidth, b.colors.FocusStroke)
+	drawFocusRing(r, b.Bounds(), b.metrics.ControlCornerRadius, b.colors, b.metrics)
 }
 
 // Children returns the label as the button's sole child.

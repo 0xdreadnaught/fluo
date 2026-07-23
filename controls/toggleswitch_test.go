@@ -131,6 +131,16 @@ func TestToggleSwitchFocusRingTracked(t *testing.T) {
 	}
 }
 
+func TestToggleSwitchHoverFillDiffersFromRestFill(t *testing.T) {
+	s := NewToggleSwitch()
+	restFill, _, _ := s.stateColors()
+	s.click.hover = true
+	hoverFill, _, _ := s.stateColors()
+	if hoverFill == restFill {
+		t.Fatalf("hover fill == rest fill (%v), want ControlFillHover to differ from ControlFill", hoverFill)
+	}
+}
+
 func TestToggleSwitchMeasuresToFixedPillSize(t *testing.T) {
 	s := NewToggleSwitch()
 	core.MeasureWidget(s, render.Size{W: 1000, H: 1000})

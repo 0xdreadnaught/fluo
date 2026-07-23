@@ -161,6 +161,16 @@ func TestCheckBoxFocusRingTracked(t *testing.T) {
 	}
 }
 
+func TestCheckBoxHoverFillDiffersFromRestFill(t *testing.T) {
+	c := NewCheckBox(nil, "")
+	rest, _ := c.stateColors()
+	c.click.hover = true
+	hover, _ := c.stateColors()
+	if hover == rest {
+		t.Fatalf("hover fill == rest fill (%v), want ControlFillHover to differ from ControlFill", hover)
+	}
+}
+
 func TestCheckBoxEmptyLabelMeasuresToGlyphOnly(t *testing.T) {
 	// Normative: no label text means no PaddingM gap reserved either — the
 	// golden (six bare glyphs) depends on this.
@@ -272,6 +282,16 @@ func TestRadioButtonFocusRingTracked(t *testing.T) {
 	rb.OnFocusChanged(false)
 	if rb.focused {
 		t.Fatal("focused = true after OnFocusChanged(false), want false")
+	}
+}
+
+func TestRadioButtonHoverFillDiffersFromRestFill(t *testing.T) {
+	rb := NewRadioButton(nil, "")
+	restFill, _, _, _ := rb.stateColors()
+	rb.click.hover = true
+	hoverFill, _, _, _ := rb.stateColors()
+	if hoverFill == restFill {
+		t.Fatalf("hover fill == rest fill (%v), want ControlFillHover to differ from ControlFill", hoverFill)
 	}
 }
 
