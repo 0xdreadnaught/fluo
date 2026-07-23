@@ -121,10 +121,17 @@ Run any of them with `go run`, e.g. `go run ./examples/todo` or
 
 ## Status
 
-fluo is at **v0.1** (pre-1.0): the full layer stack above is implemented
-and tested (headless layout/binding tests plus GL golden-image tests,
-auto-skipped without a GPU), and `fluo-gallery` exercises every control
-together. Known, deliberately deferred gaps:
+**v0.1 — ready to publish.** The full layer stack above is implemented,
+tested (headless layout/binding tests plus GL golden-image tests, auto-skipped
+without a GPU), and live-verified: `fluo-gallery` now opens as an undecorated
+window with a custom `TitleBar` (drag-to-move, min/max/close), an
+`AcrylicSurface` content pane, and animated demo buttons, exercising every
+control in the toolkit together. `go vet`, `gofmt`, `go build`, and
+`go test` (including the golden suite) are all clean. Publishing the tagged
+release itself (creating the GitHub repo, pushing, tagging `v0.1.0`) is an
+operator action — see
+[`docs/superpowers/RELEASE-CHECKLIST.md`](docs/superpowers/RELEASE-CHECKLIST.md).
+Known, deliberately deferred gaps:
 
 - Shape (rounded-rect/stroke/shadow) anti-aliasing softens at display
   scale > 1 and can alias at scale < 1 — text stays crisp at any scale

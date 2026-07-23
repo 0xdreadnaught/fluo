@@ -20,6 +20,29 @@
 // collected into main's cancels slice — see the T-key toggle in main for
 // the cancel-before-rebuild discipline this enables.
 //
+// Phase 8 gives the gallery real window chrome: app.Config.Undecorated is
+// set, and buildUI's dock gains a controls.TitleBar (DockTop, replacing the
+// old plain-Border title strip) wired to Ctx.Minimize/ToggleMaximize/Close.
+// Dragging the bar isn't the TitleBar's own job (DragRegion is a pure
+// geometry query — see its doc comment); main's frame callback does the
+// press-edge check itself each frame (current Ctx.Mouse.Down true, previous
+// frame's false, and the press position inside the CURRENT titleBar's
+// DragRegion), calling Ctx.BeginDrag exactly once per press rather than
+// every frame a button stays held (which would keep re-arming the drag's
+// start position and cancel out all movement — see BeginDrag's own doc
+// comment on window.go's Run). Because every rebuild (theme toggle, page
+// change) replaces the whole tree, buildUI now returns the fresh TitleBar
+// alongside the OverlayHost root so main's build() can keep a live
+// reference for that per-frame check. The content pane's plain
+// WindowBackground Border is replaced by a controls.AcrylicSurface, so the
+// translucent backdrop-blur (or its tinted-fallback degrade — see
+// AcrylicSurface's own doc comment) shows behind the page content instead of
+// a flat fill. The Controls page's four Button-family widgets (Click me,
+// Accent, Toggle, Add) opt into SetAnimated(true) + SetTimers(tq) so their
+// fill cross-fades instead of snapping between rest/hover/pressed — the
+// other Controls-page widgets (CheckBox/RadioButton/ToggleSwitch) have no
+// SetAnimated of their own to opt into (see anim/controls.animation.go).
+//
 // Phase 7 turns the nav sidebar into a real page switcher: the three static
 // "Layout"/"Panels"/"Text" TextBlocks are replaced by a ListView of page
 // names ("Controls"/"Advanced") — dogfooding ListView itself as the nav
@@ -216,11 +239,13 @@ var swatchColorNames = []string{"Blue", "Yellow", "Green", "Red", "Purple", "Tea
 // mirror, property-driven slider/progress, list-backed StackPanel), stacked
 // vertically with th's PaddingM gap, all styled from th like everything else
 // buildUI draws. tq (may be nil, e.g. before the app's first frame hands
-// buildUI a real timers.Queue) is threaded into the TextBox's caret blink
-// and the accent button's ToolTipArea dwell timer via their respective
-// SetTimers — nil disables the timing behavior but leaves both controls
-// otherwise functional (solid caret, immediate-show tooltip), matching each
-// control's own documented no-queue convention. counter/onToggle wire up the
+// buildUI a real timers.Queue) is threaded into the TextBox's caret blink,
+// the accent button's ToolTipArea dwell timer, and (Phase 8) every
+// Button-family widget's SetAnimated(true) cross-fade via their respective
+// SetTimers — nil disables the timing behavior but leaves every control
+// otherwise functional (solid caret, immediate-show tooltip, instant-snap
+// fill instead of a cross-fade), matching each control's own documented
+// no-queue convention. counter/onToggle wire up the
 // demo button's click count and the theme-toggle shortcut respectively
 // (onToggle is consumed by galleryRoot, not here). textProp/sliderProp/
 // itemList are the Phase 6 binding models, constructed once in main and
@@ -236,9 +261,12 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 		*counter++
 		counterLabel.SetText(fmt.Sprintf("Clicked %d times", *counter))
 	})
+	demoButton.SetAnimated(true).SetTimers(tq)
 	accentButton := controls.NewButton(body, "Accent").SetAccent(true)
+	accentButton.SetAnimated(true).SetTimers(tq)
 	accentTip := controls.NewToolTipArea(accentButton, body, "Accent button").SetTimers(tq)
 	toggleButton := controls.NewToggleButton(body, "Toggle")
+	toggleButton.SetAnimated(true).SetTimers(tq)
 
 	row1 := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
 		Add(demoButton, counterLabel, accentTip, toggleButton)
@@ -303,6 +331,7 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 	addButton := controls.NewButton(body, "Add").OnClick(func() {
 		itemList.Add(fmt.Sprintf("Item %d", itemList.Len()+1))
 	})
+	addButton.SetAnimated(true).SetTimers(tq)
 
 	row5 := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingS).
 		Add(addButton, listPanel)
@@ -521,7 +550,19 @@ func buildAdvancedPage(th *theme.Theme, body *text.Face, host *controls.OverlayH
 // buildAdvancedPage's doc comments, and main's rebuild paths (T-key toggle,
 // page-change), both of which cancel the OLD tree's bindings before calling
 // buildUI again.
-func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq *timers.Queue, textProp *core.Property[string], sliderProp *core.Property[float32], itemList *bind.List[string], pageProp *core.Property[int], advSelectedProp *core.Property[int], advDialogResultProp *core.Property[string], cancels *[]func()) *controls.OverlayHost {
+//
+// Phase 8 replaces the old plain-Border title strip with a
+// controls.TitleBar (see the package doc comment's Phase 8 paragraph):
+// onMinimize/onMaximize/onClose are wired straight to the host's
+// Ctx.Minimize/Ctx.ToggleMaximize/Ctx.Close (main captures those once, on
+// the app's first frame, and passes the same three func values into every
+// later rebuild — they never change across frames). buildUI now returns the
+// fresh *controls.TitleBar alongside the host so main can keep a live
+// reference for its per-frame DragRegion press-edge check (dragging itself
+// is not this function's concern; see the package doc comment). The content
+// pane is now a controls.AcrylicSurface rather than a flat WindowBackground
+// Border, so the translucent backdrop shows through behind pageContent.
+func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq *timers.Queue, textProp *core.Property[string], sliderProp *core.Property[float32], itemList *bind.List[string], pageProp *core.Property[int], advSelectedProp *core.Property[int], advDialogResultProp *core.Property[string], onMinimize, onMaximize, onClose func(), cancels *[]func()) (*controls.OverlayHost, *controls.TitleBar) {
 	title := text.NewFace(font, th.Type.SubtitleSize)
 	body := text.NewFace(font, th.Type.BodySize)
 
@@ -549,28 +590,26 @@ func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq
 		pageContent = buildAdvancedPage(th, body, host, advSelectedProp, advDialogResultProp, cancels)
 	}
 
+	titleBar := controls.NewTitleBar(title, "fluo gallery").
+		OnMinimize(onMinimize).
+		OnMaximize(onMaximize).
+		OnClose(onClose)
+
 	dock := controls.NewDockPanel().
-		Add(controls.NewBorder().
-			SetBackground(th.Color.LayerBackground).
-			SetPadding(render.Thickness{
-				Left: th.Metric.PaddingL, Right: th.Metric.PaddingL,
-				Top: th.Metric.PaddingM, Bottom: th.Metric.PaddingM,
-			}).
-			SetChild(controls.NewTextBlock(title, "fluo gallery").SetColor(th.Color.TextPrimary)),
-			controls.DockTop).
+		Add(titleBar, controls.DockTop).
 		Add(controls.NewBorder().
 			SetBackground(th.Color.LayerBackground).
 			SetPadding(render.Uniform(th.Metric.PaddingM)).
 			SetChild(navList),
 			controls.DockLeft).
-		Add(controls.NewBorder().
-			SetBackground(th.Color.WindowBackground).
+		Add(controls.NewAcrylicSurface().
+			SetRadius(th.Metric.CornerRadius).
 			SetPadding(render.Uniform(th.Metric.PaddingL)).
 			SetChild(pageContent),
 			controls.DockLeft) // last child fills
 
 	host.SetContent(newGalleryRoot(dock, onToggle))
-	return host
+	return host, titleBar
 }
 
 func main() {
@@ -594,6 +633,16 @@ func main() {
 	// filled in from the first frame's c.Timers below — see buildControlsSection's
 	// doc comment for why a nil queue is a safe, if less lively, fallback.
 	var timerQueue *timers.Queue
+
+	// winMinimize/winToggleMax/winClose are captured, once, from the app's
+	// first frame's Ctx.Minimize/Ctx.ToggleMaximize/Ctx.Close — those three
+	// Ctx fields wrap the SAME closures (minimizeFn/toggleMaximizeFn/
+	// closeFn in app/window.go's Run) on every frame, so capturing them once
+	// here and threading them into every build() call (rather than
+	// re-reading them from Ctx on every rebuild) is safe and lets build's
+	// signature stay a plain closure over local state, matching timerQueue's
+	// own capture-once convention just above.
+	var winMinimize, winToggleMax, winClose func()
 
 	// Phase 6 binding models: constructed once here, so they outlive every
 	// theme-toggle rebuild below (buildUI only ever builds fresh WIDGETS and
@@ -634,18 +683,26 @@ func main() {
 	// — otherwise two trees' worth of binders would both be live, with the
 	// older one silently fighting the newer one for OnChanged ownership.
 	var cancels []func()
-	build := func() *controls.OverlayHost {
-		return buildUI(theme.Active(), f, &counter, func() { togglePending = true }, timerQueue, textProp, sliderProp, itemList, pageProp, advSelectedProp, advDialogResultProp, &cancels)
+	build := func() (*controls.OverlayHost, *controls.TitleBar) {
+		return buildUI(theme.Active(), f, &counter, func() { togglePending = true }, timerQueue, textProp, sliderProp, itemList, pageProp, advSelectedProp, advDialogResultProp, winMinimize, winToggleMax, winClose, &cancels)
 	}
 
 	var root *controls.OverlayHost
+	var titleBar *controls.TitleBar
 	var lastSize render.Size
 	rootSet := false
+	// mouseWasDown tracks last frame's Ctx.Mouse.Down so the titlebar-drag
+	// check below fires BeginDrag exactly once per press (on the down-edge),
+	// never on every frame a press stays held — see the package doc
+	// comment's Phase 8 paragraph for why re-arming every frame would break
+	// the drag entirely.
+	var mouseWasDown bool
 
-	err = app.Run(app.Config{Title: "fluo gallery", Width: 640, Height: 420}, func(c *app.Ctx) {
+	err = app.Run(app.Config{Title: "fluo gallery", Width: 640, Height: 420, Undecorated: true}, func(c *app.Ctx) {
 		if !rootSet {
 			timerQueue = c.Timers
-			root = build()
+			winMinimize, winToggleMax, winClose = c.Minimize, c.ToggleMaximize, c.Close
+			root, titleBar = build()
 			c.Input.SetRoot(root)
 			root.SetRouter(c.Input) // OverlayHost needs the router for light-dismiss capture
 			rootSet = true
@@ -664,7 +721,7 @@ func main() {
 				cancel()
 			}
 			cancels = cancels[:0]
-			root = build()
+			root, titleBar = build()
 			c.Input.SetRoot(root) // SetRoot resets hover/capture/focus by design
 			root.SetRouter(c.Input)
 			lastSize = render.Size{}
@@ -680,7 +737,7 @@ func main() {
 				cancel()
 			}
 			cancels = cancels[:0]
-			root = build()
+			root, titleBar = build()
 			c.Input.SetRoot(root)
 			root.SetRouter(c.Input)
 			lastSize = render.Size{}
@@ -690,6 +747,17 @@ func main() {
 			core.MeasureWidget(root, c.Size)
 			core.ArrangeWidget(root, render.Rect{X: 0, Y: 0, W: c.Size.W, H: c.Size.H})
 		}
+		// Titlebar drag: see mouseWasDown's doc comment above. titleBar's
+		// DragRegion excludes the three caption buttons on its own (see
+		// TitleBar.DragRegion), so a press on Minimize/Maximize/Close never
+		// reaches here as a drag start — it's delivered to the router like
+		// any other click, via the ordinary glfw button callback in
+		// app/window.go.
+		pressed := c.Mouse.Down
+		if pressed && !mouseWasDown && titleBar.DragRegion(c.Mouse.Pos) {
+			c.BeginDrag()
+		}
+		mouseWasDown = pressed
 		core.RenderWidget(root, c.R)
 	})
 	if err != nil {

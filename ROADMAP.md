@@ -109,15 +109,43 @@ before its dependencies. Check items off as they land. Design spec:
       into the rebuild's cancel path alongside the ordinary binder cancels.
 
 ## Phase 8 · App shell & polish
-- [ ] Clean embedding API: integrate into an app's existing GL render loop
-- [ ] Custom Fluent titlebar + window chrome
-- [ ] Acrylic / mica surface effect (blur shader)
-- [ ] Animation system (easing, transitions between the Phase-5 visual states)
-- [ ] High-DPI audit pass end-to-end
-- [ ] Docs site / examples / integration guide
-- [ ] Tag + publish v0.1
+- [x] Clean embedding API: integrate into an app's existing GL render loop —
+      `app.Surface` (`NewSurface`/`SetRoot`/`Router`/`Timers`/`Frame`); `app.Run`
+      refactored onto it, behavior unchanged.
+- [x] Custom Fluent titlebar + window chrome — `controls.TitleBar` (title +
+      min/max/close caption buttons, `DragRegion`) + `app.Config.Undecorated`
+      + `Ctx.Minimize`/`Ctx.ToggleMaximize`/`Ctx.BeginDrag`; `fluo-gallery`
+      now opens undecorated with a live TitleBar wired to all three.
+- [x] Acrylic / mica surface effect (blur shader) — `render.Renderer.
+      DrawBackdropBlur` + `*gl.Renderer` impl (framebuffer-snapshot separable
+      blur, tinted-translucency degrade documented) + `controls.AcrylicSurface`,
+      wrapping `fluo-gallery`'s content pane.
+- [x] Animation system (easing, transitions between the Phase-5 visual
+      states) — `anim` (`Easing`/`Tween`) + `controls.colorAnim`, opt-in via
+      `SetAnimated`/`SetTimers` on `Button` (default off; every existing
+      golden/test stays byte-identical); `fluo-gallery`'s four Button-family
+      demo controls (Click me / Accent / Toggle / Add) opt in.
+- [x] High-DPI audit pass end-to-end — code audit + scale-parameterized
+      tests (`render/gl` `text_2x.png` golden, hit-test scale-independence
+      test); residual manual-verification gap (no live 2x display in WSLg)
+      documented.
+- [x] Docs site / examples / integration guide — root + per-package `doc.go`
+      (all 17 packages), `examples/{counter,form,todo}`, expanded README.
+- [x] Chain-aware popup forwarding (Phase-7 backlog) — `OverlayHost`
+      generalized to walk the whole popup stack for outside-press dismissal
+      and hover delivery; `fluo-gallery`'s Advanced-page MenuBar slides
+      File↔Edit on hover as a direct consequence.
+- [x] v0.1 publish PREP complete — `go.mod`/`LICENSE`/doc coverage verified,
+      `go vet`/`gofmt`/`go build`/`go test` (incl. golden suite) all clean;
+      see `docs/superpowers/RELEASE-CHECKLIST.md` for the operator's actual
+      publish steps (tag + push — out of scope for this repo's automation).
 - [ ] *(stretch)* IME input
 - [ ] *(stretch)* Accessibility hooks
+
+**fluo is v0.1-ready.** Every non-stretch Phase 0–8 item is implemented,
+tested, and live-verified (`fluo-gallery`); publish itself (create the GitHub
+repo, push, tag `v0.1.0`) is an operator action — see
+[`docs/superpowers/RELEASE-CHECKLIST.md`](docs/superpowers/RELEASE-CHECKLIST.md).
 
 ## Out of scope for this repo
 Adoption in any specific existing app (e.g. replacing cimgui elsewhere) is the
