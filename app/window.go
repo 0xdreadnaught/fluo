@@ -229,19 +229,17 @@ func Run(cfg Config, frame func(*Ctx)) error {
 	closeFn := func() { win.SetShouldClose(true) }
 	minimizeFn := func() { win.Iconify() }
 
-	// maximized tracks the window's maximize/restore state across frames
-	// purely for toggleMaximizeFn's own benefit — glfw has no GetMaximized
-	// query this codebase's pinned version exposes to double-check against,
-	// so the host is the sole source of truth for which of Maximize/Restore
-	// to call next.
-	var maximized bool
+	// toggleMaximizeFn queries the window's live Maximized attribute (rather
+	// than tracking a host-owned bool, which could desync from the actual
+	// window state — e.g. a maximized window restored by some OTHER means,
+	// were fluo ever to grow one) to decide which of Restore/Maximize to
+	// call next.
 	toggleMaximizeFn := func() {
-		if maximized {
+		if win.GetAttrib(glfw.Maximized) == glfw.True {
 			win.Restore()
 		} else {
 			win.Maximize()
 		}
-		maximized = !maximized
 	}
 
 	// dragging, dragStartX, and dragStartY implement Ctx.BeginDrag's window
