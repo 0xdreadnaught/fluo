@@ -113,15 +113,18 @@ func TestDataGridArrangeResolvesColumnsAgainstViewportWidth(t *testing.T) {
 	// pool[0] is row0/col0. Its text is vertically centered within the row
 	// (row 0's rect top is headerH, height rowH), so Y = headerH+(rowH-textH)/2.
 	rowH := defaultRowHeight(face, theme.Active())
+	pad := theme.Active().Metric.PaddingS
 	b := g.pool[0].Bounds()
+	// Cell text is inset PaddingS left (to align with the header) and
+	// vertically centered in the row.
 	wantY := headerH + (rowH-b.H)/2
-	if b.X != 0 || b.Y != wantY || b.W != 80 {
-		t.Fatalf("pool[0].Bounds() = %v, want X=0 Y=%v W=80", b, wantY)
+	if b.X != pad || b.Y != wantY || b.W != 80-2*pad {
+		t.Fatalf("pool[0].Bounds() = %v, want X=%v Y=%v W=%v", b, pad, wantY, 80-2*pad)
 	}
-	// pool[2] is row0/col2 (Age, Px 60), at the third column offset.
+	// pool[2] is row0/col2 (Age, Px 60), at the third column offset + inset.
 	b2 := g.pool[2].Bounds()
-	if b2.X != 308 || b2.W != 60 {
-		t.Fatalf("pool[2].Bounds() = %v, want X=308 W=60", b2)
+	if b2.X != 308+pad || b2.W != 60-2*pad {
+		t.Fatalf("pool[2].Bounds() = %v, want X=%v W=%v", b2, 308+pad, 60-2*pad)
 	}
 	_ = numCols
 }

@@ -371,8 +371,18 @@ func (g *DataGrid) ArrangeContent(bounds render.Rect) {
 			}
 			tb.SetColor(color)
 
-			cellRect := render.Rect{X: colOffsets[c], Y: rowY, W: colWidths[c], H: g.rowH}
-			core.MeasureWidget(tb, render.Size{W: colWidths[c], H: g.rowH})
+			// Inset the cell text by PaddingS on the left so it lines up with
+			// the header titles, which Render draws at colOffset+PaddingS;
+			// without the matching inset every column's body sits PaddingS to
+			// the left of its own header. Trim width by 2*PaddingS to keep a
+			// symmetric right gutter before the next column.
+			pad := g.metrics.PaddingS
+			cellW := colWidths[c] - 2*pad
+			if cellW < 0 {
+				cellW = 0
+			}
+			cellRect := render.Rect{X: colOffsets[c] + pad, Y: rowY, W: cellW, H: g.rowH}
+			core.MeasureWidget(tb, render.Size{W: cellW, H: g.rowH})
 			core.ArrangeWidget(tb, cellRect)
 		}
 	}
