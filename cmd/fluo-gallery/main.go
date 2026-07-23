@@ -613,10 +613,10 @@ func main() {
 	// here, never canceled — it isn't owned by any one built tree, unlike
 	// the binder cancels buildUI/buildAdvancedPage collect into cancels)
 	// rather than from a widget callback, since the page-switching ListView
-	// itself is rebuilt on every page change and can't hold this flag's
-	// only reference to safety. advSelectedProp/advDialogResultProp are the
-	// Advanced page's own persistent models — see buildAdvancedPage's doc
-	// comment.
+	// itself is rebuilt on every page change and so cannot be the sole
+	// owner of a flag that must survive across those rebuilds.
+	// advSelectedProp/advDialogResultProp are the Advanced page's own
+	// persistent models — see buildAdvancedPage's doc comment.
 	pageProp := new(core.Property[int])
 	pageProp.Set(1)
 	var pagePending bool
