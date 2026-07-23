@@ -39,6 +39,8 @@ func (p *ovProbe) OnPointer(e *input.PointerEvent) {
 		}
 	case input.Move:
 		p.events = append(p.events, "move")
+	case input.Wheel:
+		p.events = append(p.events, "wheel")
 	}
 }
 
@@ -700,6 +702,47 @@ func TestOverlayChainPressInLowerPopupClosesAboveAndDelivers(t *testing.T) {
 	}
 	if got := lowerProbe.events; len(got) != 1 || got[0] != "press" {
 		t.Fatalf("lowerProbe.events = %v, want [press] (forwarded into the containing popup)", got)
+	}
+}
+
+// TestOverlayChainWheelClosesAbove pins the "close-above generalizes to
+// every pointer action, not just Press/Move" claim: with a TWO-level popup
+// stack, a Wheel event landing inside the LOWER (non-topmost) popup's
+// bounds closes the upper popup first (its onDismiss fires) and forwards
+// the Wheel into the lower popup's own subtree — no panic, no special-case
+// needed, since OnPointer's popupAt + close-above walk never branches on
+// e.Action (only the diffPopupHover call, gated on Move, does).
+func TestOverlayChainWheelClosesAbove(t *testing.T) {
+	lowerProbe := &ovProbe{}
+	lowerProbe.SetWidth(60)
+	lowerProbe.SetHeight(30)
+	upperProbe := &ovProbe{}
+	upperProbe.SetWidth(40)
+	upperProbe.SetHeight(20)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(NewFixed(400, 300, render.RGB(1, 2, 3)))
+	r.SetRoot(host) // BEFORE ShowPopup: SetRoot itself resets any capture
+
+	upperDismissed := false
+	host.ShowPopup(lowerProbe, render.Rect{X: 10, Y: 10, W: 10, H: 10}, nil)
+	host.ShowPopup(upperProbe, render.Rect{X: 200, Y: 10, W: 10, H: 10}, func() { upperDismissed = true })
+	layoutOverlay(host, 400, 300)
+
+	// lowerProbe bounds {10,20,60,30}; wheel inside it, well outside upperProbe.
+	pos := render.Point{X: 30, Y: 30}
+	r.PointerWheel(render.Point{X: 0, Y: -1}, pos, 0)
+
+	if !upperDismissed {
+		t.Fatal("upper popup's onDismiss did not fire on a Wheel landing in the lower popup — want it closed (chain-aware close-above generalizes to every action)")
+	}
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after wheel in the lower popup = %d, want 1 (only the lower popup remains)", got)
+	}
+	if got := lowerProbe.events; len(got) != 1 || got[0] != "wheel" {
+		t.Fatalf("lowerProbe.events = %v, want [wheel] (forwarded into the containing popup)", got)
 	}
 }
 

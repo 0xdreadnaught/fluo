@@ -569,6 +569,10 @@ func (h *OverlayHost) OnPointer(e *input.PointerEvent) {
 	}
 
 	target := h.popups[idx].w
+	// Indiscriminate, like CloseAllPopups: if a closing popup's onDismiss
+	// synchronously opened a NEW popup, that new popup would be closed too
+	// (it's now above target, same as anything else this loop finds) — no
+	// current consumer's onDismiss does this.
 	for len(h.popups) > 0 && h.popups[len(h.popups)-1].w != target {
 		h.CloseTopPopup()
 	}
