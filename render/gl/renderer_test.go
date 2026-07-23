@@ -657,6 +657,46 @@ func TestDataGrid(t *testing.T) {
 	})
 }
 
+// TestTitleBar is the Phase 8 Task 4 golden: a TitleBar reading "fluo" with
+// its close caption button hovered — showing the distinct CloseButtonHover
+// red fill behind the white X glyph — inside a 300x40 frame. The bar itself
+// is exactly titleBarHeight (32) tall, vertically centered in the taller
+// frame (4px of WindowBackground showing above and below it).
+func TestTitleBar(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "titlebar", 300, 40, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tb := controls.NewTitleBar(face, "fluo")
+
+		router := input.NewRouter()
+		router.SetRoot(tb)
+
+		frame := render.Rect{X: 0, Y: 0, W: 300, H: 40}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		bounds := render.Rect{X: 0, Y: (frame.H - 32) / 2, W: 300, H: 32}
+		core.MeasureWidget(tb, render.Size{W: bounds.W, H: bounds.H})
+		core.ArrangeWidget(tb, bounds)
+
+		// Hover the close button: a point 10px in from the bar's right edge,
+		// vertically centered — comfortably inside the rightmost (close)
+		// caption button regardless of its exact measured width.
+		barBounds := core.BoundsOf(tb)
+		hoverPoint := render.Point{X: barBounds.Right() - 10, Y: barBounds.Y + barBounds.H/2}
+		router.PointerMove(hoverPoint, 0)
+
+		core.RenderWidget(tb, r)
+	})
+}
+
 func TestDialog(t *testing.T) {
 	theme.SetActive(theme.FluentLight())
 	defer theme.SetActive(nil)

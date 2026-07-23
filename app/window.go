@@ -24,6 +24,16 @@ func init() { runtime.LockOSThread() }
 type Config struct {
 	Title         string
 	Width, Height int // logical px
+
+	// Undecorated, when true, creates the window with no OS-drawn title bar
+	// or border (glfw.WindowHint(glfw.Decorated, glfw.False)) — pair with a
+	// controls.TitleBar drawn inside the frame callback for custom Fluent
+	// window chrome. Wire the TitleBar's OnMinimize/OnMaximize/OnClose to
+	// Ctx.Minimize/Ctx.ToggleMaximize/Ctx.Close, and call Ctx.BeginDrag from
+	// the frame callback whenever a press lands inside the TitleBar's own
+	// DragRegion — see those Ctx fields' doc comments for exactly what each
+	// does.
+	Undecorated bool
 }
 
 // MouseState is the mouse position and left-button state for the current
@@ -42,6 +52,25 @@ type Ctx struct {
 	Input  *input.Router // root set once via ctx.Input.SetRoot(root)
 	Timers *timers.Queue // Advance()d by the host each frame before frame() runs
 	Close  func()        // request app exit
+
+	// Minimize iconifies the window (glfw win.Iconify()). Wire a
+	// controls.TitleBar's OnMinimize to this — a decorated window already
+	// gets a native minimize button, so this hook only matters once
+	// Config.Undecorated has removed the OS chrome. Always non-nil.
+	Minimize func()
+	// ToggleMaximize toggles the window between maximized and restored
+	// (glfw win.Maximize()/win.Restore(), tracked via an internal maximized
+	// flag the host owns across frames). Wire a controls.TitleBar's
+	// OnMaximize to this. Always non-nil.
+	ToggleMaximize func()
+	// BeginDrag starts an interactive window move: see Run's doc comment
+	// for exactly how the move is implemented (cursor-delta + SetPos, since
+	// glfw exposes no native "start an interactive move" call). Call it
+	// from the frame callback when a press lands inside a
+	// controls.TitleBar's DragRegion; the move continues, tracked entirely
+	// by the host's own cursor/button callbacks, until the next left-button
+	// release. Always non-nil.
+	BeginDrag func()
 }
 
 // standardCursors lazily creates and caches the glfw standard cursor
@@ -144,6 +173,28 @@ func buttonFrom(b glfw.MouseButton) input.Button {
 // derived purely for the renderer's benefit (device pixels per window
 // coordinate, so glr.Renderer can size its framebuffer-space viewport and
 // glyph atlases correctly); it does not feed back into Size or Mouse.Pos.
+//
+// Undecorated window dragging (WSLg/X11 approach): glfw exposes no native
+// "start an interactive move" call the way a real window manager's
+// nonclient-area drag does (that's an EWMH/X11-manager-level concept, and
+// glfw is deliberately window-manager agnostic), so Ctx.BeginDrag
+// reimplements it at the cursor-delta level instead: it records the
+// cursor's CURRENT position in glfw's own window-relative coordinate
+// system (win.GetCursorPos(), the same space Ctx.Mouse.Pos is reported
+// in). On every subsequent cursor-pos callback (until the next left-button
+// release), the window is moved by re-querying win.GetPos() FRESH each
+// time and adding the window-relative cursor delta (current minus
+// recorded-at-grab) to it: because GetPos is re-read live rather than
+// cached, the component of the reported cursor position that shifted
+// merely because the window itself just moved cancels out algebraically,
+// leaving a pure screen-space follow. This is the standard technique for
+// glfw-driven borderless-window dragging, and it works unmodified under
+// WSLg's XWayland (and any other X11/Win32 glfw backend): SetPos is an
+// ordinary "move this top-level window" request that the compositor/window
+// manager honors like any other client-initiated move. What's NOT
+// reproduced is a true OS-native interactive move (the window manager
+// itself owning the drag, with edge-snapping etc.) — a documented v0
+// simplification.
 func Run(cfg Config, frame func(*Ctx)) error {
 	if err := glfw.Init(); err != nil {
 		return fmt.Errorf("glfw: %w", err)
@@ -154,6 +205,9 @@ func Run(cfg Config, frame func(*Ctx)) error {
 	glfw.WindowHint(glfw.ContextVersionMinor, 3)
 	glfw.WindowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile)
 	glfw.WindowHint(glfw.OpenGLForwardCompatible, glfw.True)
+	if cfg.Undecorated {
+		glfw.WindowHint(glfw.Decorated, glfw.False)
+	}
 
 	win, err := glfw.CreateWindow(cfg.Width, cfg.Height, cfg.Title, nil, nil)
 	if err != nil {
@@ -173,6 +227,34 @@ func Run(cfg Config, frame func(*Ctx)) error {
 	}
 
 	closeFn := func() { win.SetShouldClose(true) }
+	minimizeFn := func() { win.Iconify() }
+
+	// maximized tracks the window's maximize/restore state across frames
+	// purely for toggleMaximizeFn's own benefit — glfw has no GetMaximized
+	// query this codebase's pinned version exposes to double-check against,
+	// so the host is the sole source of truth for which of Maximize/Restore
+	// to call next.
+	var maximized bool
+	toggleMaximizeFn := func() {
+		if maximized {
+			win.Restore()
+		} else {
+			win.Maximize()
+		}
+		maximized = !maximized
+	}
+
+	// dragging, dragStartX, and dragStartY implement Ctx.BeginDrag's window
+	// move (see Run's doc comment above for the cursor-delta math).
+	// dragStartX/Y are the window-relative cursor position at the moment
+	// BeginDrag was called; dragging gates the cursor-pos callback's move
+	// branch and is cleared on the next left-button release.
+	var dragging bool
+	var dragStartX, dragStartY float64
+	beginDragFn := func() {
+		dragging = true
+		dragStartX, dragStartY = win.GetCursorPos()
+	}
 
 	surf := NewSurface()
 	router := surf.Router()
@@ -184,6 +266,11 @@ func Run(cfg Config, frame func(*Ctx)) error {
 	// --- callbacks, set BEFORE the event/frame loop starts ---
 
 	win.SetCursorPosCallback(func(_ *glfw.Window, xpos, ypos float64) {
+		if dragging {
+			wx, wy := win.GetPos()
+			win.SetPos(wx+int(xpos-dragStartX), wy+int(ypos-dragStartY))
+			return
+		}
 		p := render.Point{X: float32(xpos), Y: float32(ypos)}
 		cur := router.PointerMove(p, curMods)
 		if cur != curCursor {
@@ -194,6 +281,9 @@ func Run(cfg Config, frame func(*Ctx)) error {
 
 	win.SetMouseButtonCallback(func(_ *glfw.Window, button glfw.MouseButton, action glfw.Action, mods glfw.ModifierKey) {
 		curMods = modsFrom(mods)
+		if dragging && button == glfw.MouseButtonLeft && action == glfw.Release {
+			dragging = false
+		}
 		mx, my := win.GetCursorPos()
 		p := render.Point{X: float32(mx), Y: float32(my)}
 		router.PointerButton(buttonFrom(button), action == glfw.Press, p, curMods)
@@ -262,6 +352,10 @@ func Run(cfg Config, frame func(*Ctx)) error {
 			Input:  surf.Router(),
 			Timers: surf.Timers(),
 			Close:  closeFn,
+
+			Minimize:       minimizeFn,
+			ToggleMaximize: toggleMaximizeFn,
+			BeginDrag:      beginDragFn,
 		}
 
 		r.Begin(fbW, fbH, scale)

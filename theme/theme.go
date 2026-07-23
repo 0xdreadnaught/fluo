@@ -17,6 +17,10 @@ type ColorTokens struct {
 	Shadow                                                     render.Color
 	// SelectionForeground and ScrimBackground for text selection and scrim overlays.
 	SelectionForeground, ScrimBackground render.Color
+	// CloseButtonHover is the distinct red a window's close caption button
+	// uses for its hover/pressed fill (Fluent convention), same value in
+	// both bundled themes — RGBA(232,17,35,255).
+	CloseButtonHover render.Color
 }
 
 // MetricTokens holds the layout and sizing values for a theme.
