@@ -266,3 +266,35 @@ func TestToggles(t *testing.T) {
 		core.RenderWidget(row, r)
 	})
 }
+
+// TestTextBox is the Phase 5 Task 5 golden: a focused TextBox reading
+// "Hello fluo" with runes 2..7 selected ("llo f") and the caret at 7,
+// filling a 200x40 frame. Focus is set directly via OnFocusChanged (no
+// router involved — this task doesn't wire pointer/key handling yet), and
+// no timers.Queue is wired, so the caret renders solid (never blinked off)
+// per TextBox.caretShown's documented behavior.
+func TestTextBox(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "textbox", 200, 40, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tb := controls.NewTextBox(face)
+		tb.SetText("Hello fluo") // resets caret to end, clears selection
+		tb.Select(2, 7)          // selects "llo f", caret ends at 7
+		tb.OnFocusChanged(true)
+
+		frame := render.Rect{X: 0, Y: 0, W: 200, H: 40}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(tb, frame)
+		core.RenderWidget(tb, r)
+	})
+}
