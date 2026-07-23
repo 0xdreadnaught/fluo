@@ -579,7 +579,8 @@ func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq
 	// beyond the SELECTION itself, which lives in pageProp).
 	navItems := bind.NewList("Controls", "Advanced")
 	navList := controls.NewListView(body, navItems)
-	navList.SetWidth(130)
+	// No fixed width: let the list fill the sidebar column so its selection
+	// band reaches the right edge too (the sidebar Border sets the width).
 	navList.SetHeight(64)
 	*cancels = append(*cancels,
 		bind.ListSelected(pageProp, navList),
@@ -600,10 +601,18 @@ func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq
 
 	dock := controls.NewDockPanel().
 		Add(titleBar, controls.DockTop).
-		Add(controls.NewBorder().
-			SetBackground(th.Color.LayerBackground).
-			SetPadding(render.Uniform(th.Metric.PaddingM)).
-			SetChild(navList),
+		Add(func() core.Widget {
+			// Fixed-width sidebar panel; vertical padding only so the nav
+			// ListView fills the column width and its selection band reaches
+			// both edges (row text stays inset by the ListView's own row
+			// padding).
+			b := controls.NewBorder().
+				SetBackground(th.Color.LayerBackground).
+				SetPadding(render.Thickness{Top: th.Metric.PaddingS, Bottom: th.Metric.PaddingS}).
+				SetChild(navList)
+			b.SetWidth(150)
+			return b
+		}(),
 			controls.DockLeft).
 		Add(controls.NewAcrylicSurface().
 			SetRadius(th.Metric.CornerRadius).
