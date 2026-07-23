@@ -58,8 +58,9 @@ activation).
 
 Package `bind` connects `core.Property[T]` values to controls. `bind.OneWay`
 pushes a property's value into a control (or any `func(T)`) on every change.
-The six two-way binders (`bind.Text`, `bind.Checked`, `bind.SwitchChecked`,
-`bind.ToggleChecked`, `bind.Value`, `bind.SelectedIndex`) additionally OWN
+The seven two-way binders (`bind.Text`, `bind.Checked`, `bind.SwitchChecked`,
+`bind.ToggleChecked`, `bind.Value`, `bind.SelectedIndex`, `bind.Selected`
+for `controls.RadioGroup`) additionally OWN
 the bound control's `OnChanged` slot — user edits flow into the property via
 `p.Set`, and any OTHER change to the property flows back into the control
 via its silent setter (`SetText`/`SetChecked`/`SetValue`/`SetSelectedIndex`),

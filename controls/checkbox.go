@@ -631,3 +631,35 @@ func (g *RadioGroup) deselectOthersSilent(rb *RadioButton) int {
 	}
 	return idx
 }
+
+// SelectedIndex returns the index (in Add call order) of the currently
+// checked member, or -1 if no member is checked (including the empty
+// group).
+func (g *RadioGroup) SelectedIndex() int {
+	for i, m := range g.members {
+		if m.Checked() {
+			return i
+		}
+	}
+	return -1
+}
+
+// SetSelectedIndex sets the checked member to index i programmatically and
+// silently — no member's OnChanged nor the group's own OnChanged fires,
+// matching fluo's uniform contract that programmatic setters are silent.
+// i is clamped to [-1, len(members)-1]; -1 (or any i on an empty group)
+// clears every member's checked state. Respects group exclusivity: a valid
+// i silently deselects every other member, same as SetChecked(true) on a
+// grouped RadioButton. Returns g for chaining.
+func (g *RadioGroup) SetSelectedIndex(i int) *RadioGroup {
+	if i < -1 {
+		i = -1
+	}
+	if max := len(g.members) - 1; i > max {
+		i = max
+	}
+	for idx, m := range g.members {
+		m.setCheckedSilent(idx == i)
+	}
+	return g
+}

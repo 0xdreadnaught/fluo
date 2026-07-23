@@ -156,6 +156,55 @@ func TestTextBindUserEditViaRouterUpdatesModelEchoSafely(t *testing.T) {
 	}
 }
 
+// TestRebindAfterCancelDoesNotFight proves that canceling one binding before
+// installing a second on a DIFFERENT control leaves the discarded control
+// (and its binding) completely inert: the first bind's cancel fully detaches
+// both directions (per the package doc's cancel guarantee), so the second
+// bind on the new control neither fights nor gets fought by the first.
+func TestRebindAfterCancelDoesNotFight(t *testing.T) {
+	var p core.Property[string]
+	p.Set("start")
+
+	tbA := controls.NewTextBox(testFace(t))
+	tbA.SetWidth(300)
+	tbA.SetHeight(30)
+	cancelA := Text(&p, tbA)
+	cancelA()
+
+	tbB := controls.NewTextBox(testFace(t))
+	tbB.SetWidth(300)
+	tbB.SetHeight(30)
+	Text(&p, tbB)
+
+	if tbA.Text() != "start" || tbB.Text() != "start" {
+		t.Fatalf("after rebind, tbA=%q tbB=%q, want both %q", tbA.Text(), tbB.Text(), "start")
+	}
+
+	// A model push after rebind must reach ONLY B; A (cancelled) stays silent.
+	p.Set("model-push")
+	if tbB.Text() != "model-push" {
+		t.Fatalf("tbB.Text() = %q after model push, want %q", tbB.Text(), "model-push")
+	}
+	if tbA.Text() != "start" {
+		t.Fatalf("tbA.Text() = %q after model push, want unchanged %q (A cancelled, must stay silent)", tbA.Text(), "start")
+	}
+
+	// A user edit on B, driven through the real router, must reach p.
+	r := input.NewRouter()
+	r.SetRoot(tbB)
+	layout(tbB, render.Rect{X: 0, Y: 0, W: 300, H: 30})
+	r.Focus(tbB)
+	r.KeyDown(input.KeyEnd, 0, 0)
+	r.KeyDown(0, '!', 0)
+
+	if p.Get() != "model-push!" {
+		t.Fatalf("p.Get() = %q after user edit on B, want %q (pushed into model)", p.Get(), "model-push!")
+	}
+	if tbA.Text() != "start" {
+		t.Fatalf("tbA.Text() = %q after B's user edit, want unchanged %q (A fully silent throughout)", tbA.Text(), "start")
+	}
+}
+
 func TestTextBindCancelDetachesBothDirections(t *testing.T) {
 	var p core.Property[string]
 	p.Set("hi")
@@ -360,5 +409,42 @@ func TestBindSelectedIndexBothDirections(t *testing.T) {
 	p.Set(2) // model push
 	if combo.SelectedIndex() != 2 {
 		t.Fatalf("SelectedIndex() = %d after model push, want 2", combo.SelectedIndex())
+	}
+}
+
+func TestBindSelectedBothDirections(t *testing.T) {
+	var p core.Property[int]
+	p.Set(-1)
+
+	a := controls.NewRadioButton(testFace(t), "A")
+	b := controls.NewRadioButton(testFace(t), "B")
+	group := controls.NewRadioGroup().Add(a).Add(b)
+	Selected(&p, group)
+
+	if group.SelectedIndex() != -1 {
+		t.Fatalf("SelectedIndex() = %d after bind, want -1 (current value applied)", group.SelectedIndex())
+	}
+	if a.Checked() || b.Checked() {
+		t.Fatal("a member is checked after bind, want none (p was -1)")
+	}
+
+	host := controls.NewStackPanel(controls.Horizontal).Add(a, b)
+	r := input.NewRouter()
+	r.SetRoot(host)
+	layout(host, render.Rect{X: 0, Y: 0, W: 300, H: 20})
+
+	bBounds := core.BoundsOf(b)
+	clickAt(r, render.Point{X: bBounds.X + 9, Y: bBounds.Y + 9}) // user click: selects B (index 1)
+
+	if p.Get() != 1 {
+		t.Fatalf("p.Get() = %d after user click, want 1 (pushed into model)", p.Get())
+	}
+
+	p.Set(0) // model push
+	if group.SelectedIndex() != 0 {
+		t.Fatalf("SelectedIndex() = %d after model push, want 0", group.SelectedIndex())
+	}
+	if !a.Checked() || b.Checked() {
+		t.Fatalf("checked states = %v %v after model push, want true false", a.Checked(), b.Checked())
 	}
 }

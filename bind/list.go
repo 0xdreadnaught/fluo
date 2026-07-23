@@ -103,27 +103,28 @@ func (l *List[T]) notify() {
 	}
 }
 
-// snapshotListItems returns a copy of all items in the list.
-// This is a helper for Items to avoid builtin shadowing.
+// snapshotListItems returns a copy of all items in the list, copied
+// directly from the internal slice (not via repeated At calls), so Items
+// can iterate a rebuild pass without aliasing the live slice.
 func snapshotListItems[T any](l *List[T]) []T {
-	snapshot := make([]T, l.Len())
-	for i := 0; i < len(snapshot); i++ {
-		snapshot[i] = l.At(i)
-	}
+	snapshot := make([]T, len(l.items))
+	copy(snapshot, l.items)
 	return snapshot
 }
 
-// Items binds a list to a panel: on ANY list change, panel.Clear() then Add(make(item))
-// for each item, in order. v0 = full rebuild (virtualization arrives Phase 7).
+// Items binds a list to a panel: on ANY list change, panel.Clear() then
+// Add(makeItem(item)) for each item, in order. v0 = full rebuild
+// (virtualization arrives Phase 7).
 //
-// Reentrancy: if a list mutation occurs during make() (while rebuilding), the
-// rebuild coalesces into one additional rebuild after the outer completes, matching
-// Property's own reentrancy semantics. Each pass snapshots the current items and
-// iterates the snapshot; mutations discovered during the pass set a pending flag,
-// and after the outer loop completes, one additional rebuild pass runs if pending,
-// ensuring convergence (each pass has bounded iteration). Unsupported: a make()
+// Reentrancy: if a list mutation occurs during makeItem() (while
+// rebuilding), the rebuild coalesces into one additional rebuild after the
+// outer completes, matching Property's own reentrancy semantics. Each pass
+// snapshots the current items and iterates the snapshot; mutations
+// discovered during the pass set a pending flag, and after the outer loop
+// completes, one additional rebuild pass runs if pending, ensuring
+// convergence (each pass has bounded iteration). Unsupported: a makeItem()
 // that mutates on EVERY invocation across every pass will not converge.
-func Items[T any](l *List[T], panel *controls.StackPanel, make func(item T, index int) core.Widget) (cancel func()) {
+func Items[T any](l *List[T], panel *controls.StackPanel, makeItem func(item T, index int) core.Widget) (cancel func()) {
 	var rebuilding bool
 	var pending bool
 	var rebuild func()
@@ -149,7 +150,7 @@ func Items[T any](l *List[T], panel *controls.StackPanel, make func(item T, inde
 		panel.Clear()
 		for i := 0; i < len(snapshot); i++ {
 			item := snapshot[i]
-			widget := make(item, i)
+			widget := makeItem(item, i)
 			panel.Add(widget)
 		}
 	}

@@ -253,6 +253,75 @@ func TestRadioButtonSetCheckedRespectsGroupExclusivity(t *testing.T) {
 	}
 }
 
+func TestRadioGroupSelectedIndexGetterAndSetterAreSilent(t *testing.T) {
+	a := NewRadioButton(nil, "A")
+	b := NewRadioButton(nil, "B")
+	c := NewRadioButton(nil, "C")
+	group := NewRadioGroup().Add(a).Add(b).Add(c)
+
+	var groupChanges []int
+	group.OnChanged(func(i int) { groupChanges = append(groupChanges, i) })
+	var aChanges, bChanges, cChanges []bool
+	a.OnChanged(func(v bool) { aChanges = append(aChanges, v) })
+	b.OnChanged(func(v bool) { bChanges = append(bChanges, v) })
+	c.OnChanged(func(v bool) { cChanges = append(cChanges, v) })
+
+	if group.SelectedIndex() != -1 {
+		t.Fatalf("SelectedIndex() = %d on a fresh group, want -1 (none checked)", group.SelectedIndex())
+	}
+
+	group.SetSelectedIndex(1)
+	if group.SelectedIndex() != 1 {
+		t.Fatalf("SelectedIndex() = %d after SetSelectedIndex(1), want 1", group.SelectedIndex())
+	}
+	if a.Checked() || !b.Checked() || c.Checked() {
+		t.Fatalf("checked states = %v %v %v after SetSelectedIndex(1), want false true false", a.Checked(), b.Checked(), c.Checked())
+	}
+
+	// Switching selection respects exclusivity.
+	group.SetSelectedIndex(2)
+	if a.Checked() || b.Checked() || !c.Checked() {
+		t.Fatalf("checked states = %v %v %v after SetSelectedIndex(2), want false false true", a.Checked(), b.Checked(), c.Checked())
+	}
+
+	// -1 clears every member.
+	group.SetSelectedIndex(-1)
+	if a.Checked() || b.Checked() || c.Checked() {
+		t.Fatal("a member still checked after SetSelectedIndex(-1), want all clear")
+	}
+	if group.SelectedIndex() != -1 {
+		t.Fatalf("SelectedIndex() = %d after SetSelectedIndex(-1), want -1", group.SelectedIndex())
+	}
+
+	// Out-of-range clamps rather than panicking or going out of bounds.
+	group.SetSelectedIndex(99)
+	if group.SelectedIndex() != 2 {
+		t.Fatalf("SelectedIndex() = %d after SetSelectedIndex(99), want clamp to 2 (last member)", group.SelectedIndex())
+	}
+	group.SetSelectedIndex(-99)
+	if group.SelectedIndex() != -1 {
+		t.Fatalf("SelectedIndex() = %d after SetSelectedIndex(-99), want clamp to -1", group.SelectedIndex())
+	}
+
+	if groupChanges != nil {
+		t.Fatalf("group OnChanged fired: %v, want none (SetSelectedIndex is silent)", groupChanges)
+	}
+	if aChanges != nil || bChanges != nil || cChanges != nil {
+		t.Fatalf("member OnChanged fired: a=%v b=%v c=%v, want none (SetSelectedIndex is silent)", aChanges, bChanges, cChanges)
+	}
+}
+
+func TestRadioGroupSelectedIndexOnEmptyGroup(t *testing.T) {
+	group := NewRadioGroup()
+	if group.SelectedIndex() != -1 {
+		t.Fatalf("SelectedIndex() = %d on empty group, want -1", group.SelectedIndex())
+	}
+	group.SetSelectedIndex(5) // must not panic; clamps to -1 on an empty group
+	if group.SelectedIndex() != -1 {
+		t.Fatalf("SelectedIndex() = %d after SetSelectedIndex(5) on empty group, want -1", group.SelectedIndex())
+	}
+}
+
 func TestRadioButtonDisabledIgnoresPointerAndFocus(t *testing.T) {
 	rb := NewRadioButton(buttonFace(t), "A").SetEnabled(false)
 	rb.SetWidth(80)

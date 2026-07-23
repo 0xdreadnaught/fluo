@@ -3,7 +3,13 @@
 // two-way binding additionally OWNS a control's OnChanged slot so user edits
 // flow back into the property.
 //
-// Every binder in this file (OneWay and the six two-way binders below)
+// Naming: among the checked-family two-way binders, Checked names
+// CheckBox's binder (the package's canonical bool control); the others are
+// prefixed by their control (SwitchChecked, ToggleChecked) since Checked was
+// already taken. This is a naming-only distinction — every two-way binder
+// below, whatever it's called, follows the identical shared mechanics.
+//
+// Every binder in this file (OneWay and the seven two-way binders below)
 // shares the same normative mechanics:
 //
 //   - On bind: the control is set to the property's CURRENT value via its
@@ -129,5 +135,23 @@ func SelectedIndex(p *core.Property[int], cb *controls.ComboBox) (cancel func())
 	return func() {
 		sub()
 		cb.OnChanged(nil)
+	}
+}
+
+// Selected two-way binds p to g (see the package doc comment for the shared
+// mechanics). While bound, Selected OWNS g's OnChanged slot — the group's
+// own OnChanged(index), not any individual member RadioButton's — replacing
+// any previously set callback.
+//
+// Clamp-divergence caveat: if p's value falls outside the group's valid
+// member range, the group silently displays a clamped selection (or none,
+// for -1) while p retains the unclamped one.
+func Selected(p *core.Property[int], g *controls.RadioGroup) (cancel func()) {
+	g.SetSelectedIndex(p.Get())
+	g.OnChanged(func(v int) { p.Set(v) })
+	sub := p.OnChange(func(_, v int) { g.SetSelectedIndex(v) })
+	return func() {
+		sub()
+		g.OnChanged(nil)
 	}
 }
