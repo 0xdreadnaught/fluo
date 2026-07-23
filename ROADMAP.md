@@ -132,9 +132,15 @@ before its dependencies. Check items off as they land. Design spec:
 - [x] Docs site / examples / integration guide — root + per-package `doc.go`
       (all 17 packages), `examples/{counter,form,todo}`, expanded README.
 - [x] Chain-aware popup forwarding (Phase-7 backlog) — `OverlayHost`
-      generalized to walk the whole popup stack for outside-press dismissal
-      and hover delivery; `fluo-gallery`'s Advanced-page MenuBar slides
-      File↔Edit on hover as a direct consequence.
+      generalized to walk the whole popup stack: an outside press now
+      dismisses the entire open chain (not just the topmost popup), and
+      hover/Move forwarding targets whichever popup in the stack actually
+      contains the pointer, making sibling submenu rows reachable without
+      first closing the open one. This is `OverlayHost`-level only — it
+      does not add top-level `MenuBar` hover-switching (hovering "Edit"
+      while "File" is open does not auto-open "Edit"; `MenuBar.OnPointer`
+      still only opens a menu on `Press`), so `fluo-gallery`'s Advanced-page
+      MenuBar does not slide File↔Edit on hover.
 - [x] v0.1 publish PREP complete — `go.mod`/`LICENSE`/doc coverage verified,
       `go vet`/`gofmt`/`go build`/`go test` (incl. golden suite) all clean;
       see `docs/superpowers/RELEASE-CHECKLIST.md` for the operator's actual

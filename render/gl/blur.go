@@ -23,11 +23,16 @@ import (
 //     in tint by the tint's own alpha, giving the "frosted glass" look.
 //
 // This only degrades (to FillRoundedRect(r, radius, tint), i.e. a flat
-// tinted fill with no blur) in the narrow case where the blur shader itself
-// fails to compile/link on the current driver — extremely unlikely for
-// GLSL this simple on a 3.3-core context, but cheaper than crashing a
-// frame over it. On any GL 3.3-core context this has actually been
-// exercised on (see TestAcrylic's golden), the real blur path runs.
+// tinted fill with no blur) in two narrow cases, both cheaper to check than
+// to crash a frame over: the blur shader itself fails to compile/link on
+// the current driver (extremely unlikely for GLSL this simple on a 3.3-core
+// context), or one of the two scratch FBOs allocated below comes back
+// incomplete (e.g. a driver refusing RGBA8 as a color-renderable format —
+// also extremely unlikely, but checked rather than assumed). Either sets
+// rd.blurFailed so every subsequent call on this Renderer takes the degrade
+// path directly, skipping the GPU work above. On any GL 3.3-core context
+// this has actually been exercised on (see TestAcrylic's golden), the real
+// blur path runs.
 func (rd *Renderer) DrawBackdropBlur(r render.Rect, radius float32, tint render.Color) {
 	radius = clampRadius(r, radius)
 
@@ -89,8 +94,26 @@ func (rd *Renderer) DrawBackdropBlur(r render.Rect, radius float32, tint render.
 	gl.CopyTexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, x0, y0, w, h, 0)
 
 	// 2. Two scratch FBOs for the horizontal/vertical separable passes.
-	fboA, texA := makeScratchFBO(w, h)
-	fboB, texB := makeScratchFBO(w, h)
+	fboA, texA, completeA := makeScratchFBO(w, h)
+	fboB, texB, completeB := makeScratchFBO(w, h)
+
+	if !completeA || !completeB {
+		// Driver rejected one of the scratch FBOs (e.g. RGBA8 not
+		// color-renderable on this GL implementation) — same degrade as a
+		// blur-program compile/link failure, latched so later calls skip
+		// straight to it. Tear down everything allocated above first: the
+		// framebuffer binding is still fboB (makeScratchFBO leaves its FBO
+		// bound), so restore prevFBO before anyone draws again.
+		rd.blurFailed = true
+		gl.BindFramebuffer(gl.FRAMEBUFFER, uint32(prevFBO))
+		gl.DeleteFramebuffers(1, &fboA)
+		gl.DeleteFramebuffers(1, &fboB)
+		gl.DeleteTextures(1, &snapTex)
+		gl.DeleteTextures(1, &texA)
+		gl.DeleteTextures(1, &texB)
+		rd.FillRoundedRect(r, radius, tint)
+		return
+	}
 
 	gl.Disable(gl.SCISSOR_TEST) // the blur passes render into their own small FBOs, unclipped
 	gl.Disable(gl.BLEND)        // opaque resample; no blending wanted
@@ -140,7 +163,11 @@ func (rd *Renderer) DrawBackdropBlur(r render.Rect, radius float32, tint render.
 
 // makeScratchFBO allocates a w x h RGBA8 texture and an FBO with it bound as
 // COLOR_ATTACHMENT0, for use as an intermediate blur-pass render target.
-func makeScratchFBO(w, h int32) (fbo, tex uint32) {
+// complete reports whether the driver actually accepted the attachment
+// (gl.CheckFramebufferStatus == gl.FRAMEBUFFER_COMPLETE) — the caller must
+// check it and degrade rather than render into (or sample from) an
+// incomplete FBO, whose contents are undefined.
+func makeScratchFBO(w, h int32) (fbo, tex uint32, complete bool) {
 	gl.GenTextures(1, &tex)
 	gl.BindTexture(gl.TEXTURE_2D, tex)
 	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, nil)
@@ -152,7 +179,8 @@ func makeScratchFBO(w, h int32) (fbo, tex uint32) {
 	gl.GenFramebuffers(1, &fbo)
 	gl.BindFramebuffer(gl.FRAMEBUFFER, fbo)
 	gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
-	return fbo, tex
+	status := gl.CheckFramebufferStatus(gl.FRAMEBUFFER)
+	return fbo, tex, status == gl.FRAMEBUFFER_COMPLETE
 }
 
 // blurProgram is a small standalone GL program (separate from the main

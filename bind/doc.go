@@ -9,7 +9,7 @@
 // already taken. This is a naming-only distinction — every two-way binder
 // below, whatever it's called, follows the identical shared mechanics.
 //
-// Every binder in this file (OneWay and the seven two-way binders below)
+// Every binder in this file (OneWay and the eight two-way binders below)
 // shares the same normative mechanics:
 //
 //   - On bind: the control is set to the property's CURRENT value via its

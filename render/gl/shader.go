@@ -47,7 +47,8 @@ void main(){
         // computed from unscaled vPos/vRect, so rounded-rect/stroke/shadow
         // edges soften at scale>1 and alias at scale<1 (text uses fwidth
         // and is correct). Deferred: fixing means retuning 20+ tolerance-3
-        // goldens. See docs/superpowers p8 task-6 report.
+        // goldens. See docs/superpowers/plans/2026-07-23-phase8-app-shell-polish.md
+        // (Task 6) for the audit that found this.
         if (vMode == 3) c.a *= clamp(0.5 - d, 0.0, 1.0);
         else if (vMode == 4) { float w = vExtra.y; c.a *= clamp(0.5 - (abs(d + w*0.5) - w*0.5), 0.0, 1.0); }
         else if (vMode == 5) c.a *= 1.0 - smoothstep(-vExtra.y, vExtra.y, d);
