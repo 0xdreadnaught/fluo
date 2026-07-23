@@ -685,3 +685,198 @@ func TestItemsReentrancyGuard(t *testing.T) {
 		t.Fatal("mutation during make() did not occur")
 	}
 }
+
+// --- OnChange (granular) events ---
+
+func TestListOnChangeAddSingleItem(t *testing.T) {
+	l := NewList[int](1)
+	var changes []Change
+	l.OnChange(func(c Change) { changes = append(changes, c) })
+	l.Add(2)
+
+	if len(changes) != 1 {
+		t.Fatalf("changes count = %d, want 1", len(changes))
+	}
+	if changes[0].Kind != ChangeAdd || changes[0].Index != 1 {
+		t.Fatalf("change[0] = {Kind: %d, Index: %d}, want {Kind: %d, Index: 1}", changes[0].Kind, changes[0].Index, ChangeAdd)
+	}
+}
+
+func TestListOnChangeAddMultipleItems(t *testing.T) {
+	l := NewList[int](1)
+	var changes []Change
+	l.OnChange(func(c Change) { changes = append(changes, c) })
+	l.Add(2, 3, 4)
+
+	if len(changes) != 3 {
+		t.Fatalf("changes count = %d, want 3", len(changes))
+	}
+	for i, wantIdx := range []int{1, 2, 3} {
+		if changes[i].Kind != ChangeAdd || changes[i].Index != wantIdx {
+			t.Fatalf("changes[%d] = {Kind: %d, Index: %d}, want {Kind: %d, Index: %d}", i, changes[i].Kind, changes[i].Index, ChangeAdd, wantIdx)
+		}
+	}
+}
+
+func TestListOnChangeInsert(t *testing.T) {
+	l := NewList[int](1, 3)
+	var changes []Change
+	l.OnChange(func(c Change) { changes = append(changes, c) })
+	l.Insert(1, 2)
+
+	if len(changes) != 1 {
+		t.Fatalf("changes count = %d, want 1", len(changes))
+	}
+	if changes[0].Kind != ChangeAdd || changes[0].Index != 1 {
+		t.Fatalf("change[0] = {Kind: %d, Index: %d}, want {Kind: %d, Index: 1}", changes[0].Kind, changes[0].Index, ChangeAdd)
+	}
+}
+
+func TestListOnChangeRemoveAt(t *testing.T) {
+	l := NewList[int](1, 2, 3)
+	var changes []Change
+	l.OnChange(func(c Change) { changes = append(changes, c) })
+	l.RemoveAt(1)
+
+	if len(changes) != 1 {
+		t.Fatalf("changes count = %d, want 1", len(changes))
+	}
+	if changes[0].Kind != ChangeRemove || changes[0].Index != 1 {
+		t.Fatalf("change[0] = {Kind: %d, Index: %d}, want {Kind: %d, Index: 1}", changes[0].Kind, changes[0].Index, ChangeRemove)
+	}
+}
+
+func TestListOnChangeSet(t *testing.T) {
+	l := NewList[int](1, 2, 3)
+	var changes []Change
+	l.OnChange(func(c Change) { changes = append(changes, c) })
+	l.Set(1, 99)
+
+	if len(changes) != 1 {
+		t.Fatalf("changes count = %d, want 1", len(changes))
+	}
+	if changes[0].Kind != ChangeReplace || changes[0].Index != 1 {
+		t.Fatalf("change[0] = {Kind: %d, Index: %d}, want {Kind: %d, Index: 1}", changes[0].Kind, changes[0].Index, ChangeReplace)
+	}
+}
+
+func TestListOnChangeReplace(t *testing.T) {
+	l := NewList[int](1, 2, 3)
+	var changes []Change
+	l.OnChange(func(c Change) { changes = append(changes, c) })
+	l.Replace(10, 20)
+
+	if len(changes) != 1 {
+		t.Fatalf("changes count = %d, want 1", len(changes))
+	}
+	if changes[0].Kind != ChangeReset || changes[0].Index != -1 {
+		t.Fatalf("change[0] = {Kind: %d, Index: %d}, want {Kind: %d, Index: -1}", changes[0].Kind, changes[0].Index, ChangeReset)
+	}
+}
+
+func TestListOnChangeDoesNotFireOnNoOp(t *testing.T) {
+	l := NewList[int](1)
+	var changes []Change
+	l.OnChange(func(c Change) { changes = append(changes, c) })
+	l.Add() // empty Add is a no-op
+
+	if len(changes) != 0 {
+		t.Fatalf("changes count = %d, want 0 (no-op Add should not fire)", len(changes))
+	}
+}
+
+func TestListOnChangeCancelStopsNotifications(t *testing.T) {
+	l := NewList[int](1)
+	var changes []Change
+	cancel := l.OnChange(func(c Change) { changes = append(changes, c) })
+	l.Add(2)
+
+	if len(changes) != 1 {
+		t.Fatalf("changes count before cancel = %d, want 1", len(changes))
+	}
+
+	cancel()
+	l.Add(3)
+
+	if len(changes) != 1 {
+		t.Fatalf("changes count after cancel = %d, want 1 (no new notifications)", len(changes))
+	}
+}
+
+func TestListOnChangeCancelIsIdempotent(t *testing.T) {
+	l := NewList[int](1)
+	cancel := l.OnChange(func(Change) {})
+	cancel()
+	cancel() // must not panic
+}
+
+func TestListOnChangeAndOnChangedBothFire(t *testing.T) {
+	l := NewList[int](1)
+	coarseCount := 0
+	var granularChanges []Change
+
+	l.OnChanged(func() { coarseCount++ })
+	l.OnChange(func(c Change) { granularChanges = append(granularChanges, c) })
+
+	l.Add(2)
+
+	if coarseCount != 1 {
+		t.Fatalf("coarse count = %d, want 1", coarseCount)
+	}
+	if len(granularChanges) != 1 {
+		t.Fatalf("granular changes count = %d, want 1", len(granularChanges))
+	}
+}
+
+func TestListOnChangeCancelIndependentFromOnChanged(t *testing.T) {
+	l := NewList[int](1)
+	coarseCount := 0
+	var granularChanges []Change
+
+	coarseCancel := l.OnChanged(func() { coarseCount++ })
+	granularCancel := l.OnChange(func(c Change) { granularChanges = append(granularChanges, c) })
+
+	l.Add(2)
+	if coarseCount != 1 || len(granularChanges) != 1 {
+		t.Fatalf("before cancel: coarse=%d, granular=%d, want 1, 1", coarseCount, len(granularChanges))
+	}
+
+	// Cancel only the granular channel
+	granularCancel()
+	l.Add(3)
+
+	if coarseCount != 2 {
+		t.Fatalf("after granular cancel: coarse count = %d, want 2", coarseCount)
+	}
+	if len(granularChanges) != 1 {
+		t.Fatalf("after granular cancel: granular count = %d, want 1 (no new events)", len(granularChanges))
+	}
+
+	// Cancel only the coarse channel
+	l.Add(4)
+	if coarseCount != 3 {
+		t.Fatalf("before coarse cancel: coarse count = %d, want 3", coarseCount)
+	}
+
+	coarseCancel()
+	l.Add(5)
+
+	if coarseCount != 3 {
+		t.Fatalf("after coarse cancel: coarse count = %d, want 3 (no new events)", coarseCount)
+	}
+}
+
+func TestListOnChangeMultipleSubscribers(t *testing.T) {
+	l := NewList[int](1)
+	var changes1 []Change
+	var changes2 []Change
+
+	l.OnChange(func(c Change) { changes1 = append(changes1, c) })
+	l.OnChange(func(c Change) { changes2 = append(changes2, c) })
+
+	l.Add(2)
+
+	if len(changes1) != 1 || len(changes2) != 1 {
+		t.Fatalf("changes1=%d changes2=%d, want both 1", len(changes1), len(changes2))
+	}
+}

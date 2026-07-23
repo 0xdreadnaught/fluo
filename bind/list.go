@@ -7,11 +7,29 @@ import (
 	"github.com/0xdreadnaught/fluo/core"
 )
 
+// ChangeKind enumerates types of list mutations.
+type ChangeKind uint8
+
+const (
+	ChangeAdd ChangeKind = iota
+	ChangeRemove
+	ChangeReplace
+	ChangeReset
+)
+
+// Change represents a granular list mutation event.
+type Change struct {
+	Kind  ChangeKind
+	Index int // -1 for ChangeReset
+}
+
 // List is an observable slice for collection binding. Not goroutine-safe.
 type List[T any] struct {
-	items  []T
-	subs   map[int]func()
-	nextID int
+	items      []T
+	subs       map[int]func()
+	nextID     int
+	granSubs   map[int]func(Change)
+	granNextID int
 }
 
 // NewList creates a new List with the provided initial items.
@@ -41,8 +59,12 @@ func (l *List[T]) Add(items ...T) {
 	if len(items) == 0 {
 		return
 	}
+	startIndex := len(l.items)
 	l.items = append(l.items, items...)
 	l.notify()
+	for i := range items {
+		l.notifyGran(Change{Kind: ChangeAdd, Index: startIndex + i})
+	}
 }
 
 // Insert inserts item at index i. Panics if i is out of range.
@@ -52,6 +74,7 @@ func (l *List[T]) Insert(i int, item T) {
 	}
 	l.items = append(l.items[:i], append([]T{item}, l.items[i:]...)...)
 	l.notify()
+	l.notifyGran(Change{Kind: ChangeAdd, Index: i})
 }
 
 // RemoveAt removes the item at index i. Panics if i is out of range.
@@ -61,6 +84,7 @@ func (l *List[T]) RemoveAt(i int) {
 	}
 	l.items = append(l.items[:i], l.items[i+1:]...)
 	l.notify()
+	l.notifyGran(Change{Kind: ChangeRemove, Index: i})
 }
 
 // Set replaces the item at index i with a new value and notifies subscribers.
@@ -71,6 +95,7 @@ func (l *List[T]) Set(i int, item T) {
 	}
 	l.items[i] = item
 	l.notify()
+	l.notifyGran(Change{Kind: ChangeReplace, Index: i})
 }
 
 // Replace replaces the entire list with new items and notifies subscribers (once).
@@ -78,6 +103,7 @@ func (l *List[T]) Replace(items ...T) {
 	l.items = make([]T, len(items))
 	copy(l.items, items)
 	l.notify()
+	l.notifyGran(Change{Kind: ChangeReset, Index: -1})
 }
 
 // OnChanged registers a subscriber to be called when the list changes.
@@ -96,10 +122,33 @@ func (l *List[T]) OnChanged(f func()) (cancel func()) {
 	return
 }
 
+// OnChange registers a subscriber to be called with granular change details.
+// Returns a cancel function that removes the subscriber (idempotent).
+func (l *List[T]) OnChange(f func(Change)) (cancel func()) {
+	if l.granSubs == nil {
+		l.granSubs = make(map[int]func(Change))
+	}
+	id := l.granNextID
+	l.granNextID++
+	l.granSubs[id] = f
+
+	cancel = func() {
+		delete(l.granSubs, id)
+	}
+	return
+}
+
 // notify calls all registered subscribers.
 func (l *List[T]) notify() {
 	for _, f := range l.subs {
 		f()
+	}
+}
+
+// notifyGran calls all registered granular subscribers with a Change event.
+func (l *List[T]) notifyGran(c Change) {
+	for _, f := range l.granSubs {
+		f(c)
 	}
 }
 

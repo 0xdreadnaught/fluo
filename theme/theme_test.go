@@ -50,3 +50,63 @@ func TestConstructorsReturnFreshCopies(t *testing.T) {
 		t.Fatal("constructors share state")
 	}
 }
+
+func TestSelectionForegroundPresent(t *testing.T) {
+	l := FluentLight()
+	d := FluentDark()
+
+	// Verify the tokens exist and are set
+	_ = l.Color.SelectionForeground
+	_ = d.Color.SelectionForeground
+
+	// Dark: RGB(255, 255, 255)
+	expectedDark := render.RGB(255, 255, 255)
+	if d.Color.SelectionForeground != expectedDark {
+		t.Fatalf("dark SelectionForeground = %v, want %v", d.Color.SelectionForeground, expectedDark)
+	}
+
+	// Light: RGB(26, 26, 26)
+	expectedLight := render.RGB(26, 26, 26)
+	if l.Color.SelectionForeground != expectedLight {
+		t.Fatalf("light SelectionForeground = %v, want %v", l.Color.SelectionForeground, expectedLight)
+	}
+}
+
+func TestScrimBackgroundPresent(t *testing.T) {
+	l := FluentLight()
+	d := FluentDark()
+
+	// Verify the tokens exist and are set
+	_ = l.Color.ScrimBackground
+	_ = d.Color.ScrimBackground
+
+	// Dark: RGBA(0, 0, 0, 120)
+	expectedDark := render.RGBA(0, 0, 0, 120)
+	if d.Color.ScrimBackground != expectedDark {
+		t.Fatalf("dark ScrimBackground = %v, want %v", d.Color.ScrimBackground, expectedDark)
+	}
+
+	// Light: RGBA(0, 0, 0, 90)
+	expectedLight := render.RGBA(0, 0, 0, 90)
+	if l.Color.ScrimBackground != expectedLight {
+		t.Fatalf("light ScrimBackground = %v, want %v", l.Color.ScrimBackground, expectedLight)
+	}
+}
+
+func TestSelectionForegroundLightDarkDiffer(t *testing.T) {
+	l := FluentLight()
+	d := FluentDark()
+
+	if l.Color.SelectionForeground == d.Color.SelectionForeground {
+		t.Fatal("SelectionForeground should differ between light and dark")
+	}
+}
+
+func TestScrimBackgroundLightDarkDiffer(t *testing.T) {
+	l := FluentLight()
+	d := FluentDark()
+
+	if l.Color.ScrimBackground == d.Color.ScrimBackground {
+		t.Fatal("ScrimBackground should differ between light and dark")
+	}
+}

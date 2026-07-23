@@ -15,6 +15,8 @@ type ColorTokens struct {
 	// ControlFillDisabled, ControlStrokeDisabled, and AccentDisabled for disabled control states.
 	ControlFillDisabled, ControlStrokeDisabled, AccentDisabled render.Color
 	Shadow                                                     render.Color
+	// SelectionForeground and ScrimBackground for text selection and scrim overlays.
+	SelectionForeground, ScrimBackground render.Color
 }
 
 // MetricTokens holds the layout and sizing values for a theme.
