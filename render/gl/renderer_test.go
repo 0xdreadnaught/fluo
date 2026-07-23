@@ -427,3 +427,48 @@ func TestListView(t *testing.T) {
 		core.RenderWidget(root, r)
 	})
 }
+
+// TestTreeExpander is the Phase 7 Task 4 golden: a TreeView (left) showing
+// two roots — "src" (expanded, with children "core", "controls" (the
+// current selection, showing the SelectionBackground/SelectionForeground
+// row highlight), and "render") and "docs" (collapsed, hiding its own single
+// child "readme.md" — proving the '>' collapsed chevron alongside "src"'s
+// 'v' expanded one) — beside an expanded Expander (right) titled "Details"
+// containing a TextBlock reading "Hello", inside a 260x180 frame.
+func TestTreeExpander(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "tree_expander", 260, 180, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		coreNode := controls.NewTreeNode("core")
+		controlsNode := controls.NewTreeNode("controls")
+		renderNode := controls.NewTreeNode("render")
+		src := controls.NewTreeNode("src", coreNode, controlsNode, renderNode).SetExpanded(true)
+		docs := controls.NewTreeNode("docs", controls.NewTreeNode("readme.md"))
+
+		tv := controls.NewTreeView(face, src, docs)
+		tv.SetSelected(controlsNode)
+
+		details := controls.NewExpander(face, "Details").SetExpanded(true)
+		details.SetContent(controls.NewTextBlock(face, "Hello"))
+		details.SetWidth(110)
+
+		root := controls.NewCanvas().
+			Add(tv, 10, 10).
+			Add(details, 140, 10)
+
+		frame := render.Rect{X: 0, Y: 0, W: 260, H: 180}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(root, frame)
+		core.RenderWidget(root, r)
+	})
+}
