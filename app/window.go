@@ -265,6 +265,18 @@ func Run(cfg Config, frame func(*Ctx)) error {
 
 	win.SetCursorPosCallback(func(_ *glfw.Window, xpos, ypos float64) {
 		if dragging {
+			if win.GetMouseButton(glfw.MouseButtonLeft) != glfw.Press {
+				// Self-heal: the left button was released without this
+				// host ever seeing a matching Release callback (focus lost
+				// mid-drag, an XWayland event hiccup, etc.) — rather than
+				// trust the button-release callback below as the ONLY way
+				// out of dragging, check the live button state on every
+				// move and bail the moment it's no longer held, so a
+				// missed release can never wedge the window into
+				// following the cursor forever.
+				dragging = false
+				return
+			}
 			wx, wy := win.GetPos()
 			win.SetPos(wx+int(xpos-dragStartX), wy+int(ypos-dragStartY))
 			return
@@ -282,9 +294,25 @@ func Run(cfg Config, frame func(*Ctx)) error {
 		if dragging && button == glfw.MouseButtonLeft && action == glfw.Release {
 			dragging = false
 		}
+		// Falls through to the ordinary router dispatch below even for the
+		// release that just ended a drag — intentional: it fires at the
+		// cursor's current (post-move) position, which is harmless today
+		// (nothing holds a pointer capture across a titlebar drag), but
+		// worth flagging for whoever wires capture-driven dragging behind
+		// DragRegion later.
 		mx, my := win.GetCursorPos()
 		p := render.Point{X: float32(mx), Y: float32(my)}
 		router.PointerButton(buttonFrom(button), action == glfw.Press, p, curMods)
+	})
+
+	win.SetFocusCallback(func(_ *glfw.Window, focused bool) {
+		if !focused {
+			// Losing focus mid-drag (e.g. Alt+Tab, or the WM stealing focus
+			// for some other reason) has no reliable matching button-release
+			// event on this platform — clear dragging directly rather than
+			// wait for a release that may never come.
+			dragging = false
+		}
 	})
 
 	win.SetScrollCallback(func(_ *glfw.Window, xoff, yoff float64) {
