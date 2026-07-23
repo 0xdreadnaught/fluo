@@ -440,10 +440,15 @@ func (l *ListView) Render(r render.Renderer) {
 	if l.selected < l.visibleFirst || l.selected >= last {
 		return
 	}
+	// The band spans the ListView's FULL width (edge to edge), not the
+	// gutter-inset viewport: the selection highlight reaches both edges of
+	// the row while the text stays padded within it (the scroll thumb, drawn
+	// in RenderOverlay, sits on top of the band's right end when present).
+	b := l.Bounds()
 	rowRect := render.Rect{
-		X: l.viewport.X,
+		X: b.X,
 		Y: l.viewport.Y + float32(l.selected)*l.rowH - l.offset,
-		W: l.viewport.W,
+		W: b.W,
 		H: l.rowH,
 	}
 	r.FillRect(rowRect, l.colors.SelectionBackground)
