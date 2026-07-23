@@ -123,6 +123,9 @@ func (l *List[T]) OnChanged(f func()) (cancel func()) {
 }
 
 // OnChange registers a subscriber to be called with granular change details.
+// Granular events fire after the coarse OnChanged notification, and only after
+// the mutation is fully applied — a subscriber processing the first event of a
+// multi-item Add already observes the final list state.
 // Returns a cancel function that removes the subscriber (idempotent).
 func (l *List[T]) OnChange(f func(Change)) (cancel func()) {
 	if l.granSubs == nil {
