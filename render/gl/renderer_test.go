@@ -8,6 +8,7 @@ import (
 
 	"github.com/0xdreadnaught/fluo/controls"
 	"github.com/0xdreadnaught/fluo/core"
+	"github.com/0xdreadnaught/fluo/input"
 	"github.com/0xdreadnaught/fluo/render"
 	glr "github.com/0xdreadnaught/fluo/render/gl"
 	"github.com/0xdreadnaught/fluo/render/gl/gltest"
@@ -325,5 +326,59 @@ func TestSliderProgress(t *testing.T) {
 		}
 		core.ArrangeWidget(stack, bounds)
 		core.RenderWidget(stack, r)
+	})
+}
+
+// TestComboOpen is the Phase 5 Task 8 golden: an open ComboBox — 3 items
+// ("Red", "Green", "Blue"), "Green" (index 1) selected-highlighted — inside
+// a 220x160 frame. The popup is opened via the SAME router-driven path a
+// real app would use (focus the field, then KeyDown(Enter), landing on
+// ComboBox.OnKey's Space/Enter/Down branch) rather than by reaching into the
+// unexported openPopup directly, so the golden also exercises the whole
+// input-to-popup path end to end, not just the popup's own visuals.
+func TestComboOpen(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "combo_open", 220, 160, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		combo := controls.NewComboBox(face)
+		combo.SetItems([]string{"Red", "Green", "Blue"})
+		combo.SetSelectedIndex(1)
+		combo.SetWidth(120)
+		combo.SetHeight(32)
+		combo.SetAlign(core.Start, core.Start) // top-left, so the popup opens downward with room to fit
+		combo.SetMargin(render.Uniform(10))
+
+		host := controls.NewOverlayHost()
+		router := input.NewRouter()
+		host.SetRouter(router)
+		host.SetContent(combo)
+		router.SetRoot(host)
+
+		frame := render.Rect{X: 0, Y: 0, W: 220, H: 160}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		// First layout pass: gives the field real arranged bounds, so the
+		// popup (opened below) has a real anchor rect to place against.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		router.Focus(combo)
+		router.KeyDown(input.KeyEnter, 0, 0) // opens the popup via ComboBox.OnKey
+
+		// Second layout pass: the host now also has the popup as a child,
+		// so it needs placing relative to the field's anchor (see
+		// OverlayHost.ArrangeContent/placePopup).
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		core.RenderWidget(host, r)
 	})
 }
