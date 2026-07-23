@@ -103,6 +103,41 @@ func TestText(t *testing.T) {
 	})
 }
 
+// TestText2x is the Phase 8 Task 6 high-DPI golden: TestText's exact
+// scenario — the identical LOGICAL draw coordinates and font sizes — run
+// through the FBO harness at a 2x framebuffer (512x192 instead of
+// 256x96) with Begin's scale set to 2 instead of 1. Nothing about the
+// draw calls below changes from TestText; only the framebuffer size and
+// the scale passed to Begin do. This proves the renderer's scale
+// (fbW/winW, the same value app.Surface.Frame derives and passes to
+// Begin) actually flows through to SDF glyph quad placement/sizing (via
+// the vertex shader's aPos*uScale — see shader.go) and the scissor clip
+// path (applyClip's rd.scale multiply), producing a crisp 2x-resolution
+// render of the SAME logical layout as text.png — not a blurry pixel
+// upscale of the 1x image. See testFrame/TestText for the 1x baseline
+// this mirrors; text.png itself is untouched by this task.
+func TestText2x(t *testing.T) {
+	gltest.Run(t, 512, 192, func(fb *gltest.Framebuffer) {
+		r, err := glr.New()
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		gl.ClearColor(0.12, 0.12, 0.14, 1)
+		gl.Clear(gl.COLOR_BUFFER_BIT)
+		r.Begin(fb.W, fb.H, 2)
+
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text.NewFace(f, 14).Draw(r, render.Point{X: 8, Y: 8}, "Hello, fluo!", render.RGB(255, 255, 255))
+		text.NewFace(f, 28).Draw(r, render.Point{X: 8, Y: 40}, "SDF text 0123", render.RGB(0, 120, 215))
+
+		r.End()
+		gltest.CheckGolden(t, "text_2x", fb.Image())
+	})
+}
+
 func TestLayoutRender(t *testing.T) {
 	testFrame(t, "layout", 220, 150, func(r *glr.Renderer) {
 		f, err := text.Load(goregular.TTF)

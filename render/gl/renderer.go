@@ -90,6 +90,27 @@ func newWhiteTexture() uint32 {
 // Begin starts a new frame: binds the shader program, sets the viewport
 // and scale uniforms, configures blending/depth/scissor state, and resets
 // the batch and clip stack.
+//
+// scale (device px per logical px, i.e. fbWidth/winWidth — see
+// app.Surface.Frame and app.Run's own `scale = fbW/winW`) is the ONE place
+// device-pixel conversion enters this package: it feeds uScale (the
+// vertex shader multiplies aPos*uScale — see shader.go) and rd.scale
+// (multiplied into applyClip's scissor rect and DrawBackdropBlur's
+// snapshot region — see blur.go). Everything else the Renderer accepts —
+// FillRect/FillRoundedRect/StrokeRoundedRect/DrawShadow/DrawQuad/
+// DrawSDFQuads/PushClip rects, and glyph placement upstream in
+// text.Face.Draw — is in logical px and never multiplies by scale itself;
+// scale is applied exactly once, uniformly, right here.
+//
+// Residual gap (Phase 8 Task 6 high-DPI audit): this has been exercised
+// with scale values of 1, 1.5, 2, and 3 against the FBO test harness (see
+// renderer_test.go's TestText2x, a 2x-framebuffer golden of TestText's
+// exact logical layout) and against app.Surface's own scale derivation,
+// but NOT against a real per-monitor DPI-change event or an actual live
+// 2x display — WSLg has no such hardware/compositor path to exercise, so
+// glfw's content-scale-changed callback and a real mid-session DPI change
+// (e.g. dragging a window between two differently-scaled monitors on
+// Windows/Linux/macOS) remain untested by anything in this repo.
 func (rd *Renderer) Begin(fbWidth, fbHeight int, scale float32) {
 	rd.fbW, rd.fbH = fbWidth, fbHeight
 	rd.scale = scale
