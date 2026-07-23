@@ -120,6 +120,13 @@ func (b *Button) SetAnimated(v bool) *Button {
 // same "nil detaches" convention as TextBox.SetTimers. A button that is
 // SetAnimated(true) but never had SetTimers called (timerQueue stays nil)
 // behaves exactly like an unanimated one: instant, current behavior.
+//
+// Caveat: swapping to a DIFFERENT non-nil queue while a fade is already in
+// flight does not redirect that in-flight tween — it keeps ticking on the
+// queue it was started on until it settles (or is otherwise superseded by
+// a real state-driven target change), even though b.timerQueue now points
+// elsewhere. An obscure edge case (queue-swapping mid-animation), not
+// handled specially.
 func (b *Button) SetTimers(q *timers.Queue) *Button {
 	b.timerQueue = q
 	return b

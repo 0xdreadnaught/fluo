@@ -54,6 +54,13 @@ const tickInterval = 10 * time.Millisecond
 // negative) duration, synchronously inside NewTween, with onDone following
 // immediately — a degenerate but valid "already done" tween. Not
 // goroutine-safe (matches timers.Queue itself).
+//
+// If the host stalls and then advances q by more than one tickInterval in
+// a single Advance call, the underlying timers.Queue catches up by firing
+// every due tick within that call (see timers.Queue.Advance), so onUpdate
+// (and, at most once, onDone) may be called several times within that one
+// Advance — bounded by roughly d/tickInterval, never unbounded. Keep
+// onUpdate cheap for this reason.
 type Tween struct {
 	d        time.Duration
 	ease     Easing
