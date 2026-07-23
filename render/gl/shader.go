@@ -43,6 +43,11 @@ void main(){
         c.a *= smoothstep(0.5 - w, 0.5 + w, s);
     } else if (vMode >= 3) {
         float d = sdRoundBox(vPos - vRect.xy, vRect.zw, vExtra.x);
+        // TODO(hidpi): AA transition band is a fixed logical-unit width
+        // computed from unscaled vPos/vRect, so rounded-rect/stroke/shadow
+        // edges soften at scale>1 and alias at scale<1 (text uses fwidth
+        // and is correct). Deferred: fixing means retuning 20+ tolerance-3
+        // goldens. See docs/superpowers p8 task-6 report.
         if (vMode == 3) c.a *= clamp(0.5 - d, 0.0, 1.0);
         else if (vMode == 4) { float w = vExtra.y; c.a *= clamp(0.5 - (abs(d + w*0.5) - w*0.5), 0.0, 1.0); }
         else if (vMode == 5) c.a *= 1.0 - smoothstep(-vExtra.y, vExtra.y, d);
