@@ -7,21 +7,31 @@ import (
 	"github.com/0xdreadnaught/fluo/core"
 )
 
-// ChangeKind enumerates types of list mutations.
-type ChangeKind uint8
+// ChangeKind enumerates types of list mutations. It is a type alias for
+// controls.ListChangeKind, not an independent definition: Phase 7 Task 2
+// needs controls.ListView to declare a ListItems interface whose OnChange
+// method names this payload type, and controls cannot import bind (bind
+// already imports controls, for Items and, from Task 3, ListSelected — the
+// reverse edge would be an import cycle). Declaring the canonical type in
+// controls and aliasing it here keeps ChangeKind's published name and
+// values exactly as they were before Task 2 (this is a real alias, not a
+// same-shaped redefinition, so ChangeKind and controls.ListChangeKind are
+// the identical type, and *List[T] satisfies controls.ListItems — see the
+// static assertion below) while breaking the cycle. See
+// controls/listview.go's ListChange doc comment for the full rationale.
+type ChangeKind = controls.ListChangeKind
 
 const (
-	ChangeAdd ChangeKind = iota
-	ChangeRemove
-	ChangeReplace
-	ChangeReset
+	ChangeAdd     = controls.ListChangeAdd
+	ChangeRemove  = controls.ListChangeRemove
+	ChangeReplace = controls.ListChangeReplace
+	ChangeReset   = controls.ListChangeReset
 )
 
-// Change represents a granular list mutation event.
-type Change struct {
-	Kind  ChangeKind
-	Index int // -1 for ChangeReset
-}
+// Change represents a granular list mutation event. Like ChangeKind above,
+// this is a type alias for controls.ListChange (see ChangeKind's doc
+// comment for why).
+type Change = controls.ListChange
 
 // List is an observable slice for collection binding. Not goroutine-safe.
 type List[T any] struct {
@@ -31,6 +41,15 @@ type List[T any] struct {
 	granSubs   map[int]func(Change)
 	granNextID int
 }
+
+// Compile-time proof that *List[string] satisfies controls.ListItems (Len,
+// At(int) string, OnChange(func(ListChange)) func()) — the whole point of
+// ChangeKind/Change being aliases above: controls.NewListView can accept a
+// *bind.List[string] directly without controls importing bind. If this
+// assertion ever fails to compile, ListView's ListItems interface and
+// List[T]'s method set have drifted apart; do not silence it, fix the
+// mismatch.
+var _ controls.ListItems = (*List[string])(nil)
 
 // NewList creates a new List with the provided initial items.
 func NewList[T any](items ...T) *List[T] {
