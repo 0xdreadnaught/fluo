@@ -58,14 +58,20 @@ before its dependencies. Check items off as they land. Design spec:
       states, click counter) and its T-key Light/Dark toggle.
 
 ## Phase 5 · Core controls
-- [ ] Overlay/popup layer (prerequisite for several controls)
-- [ ] `Button`, `ToggleButton`, `CheckBox`, `RadioButton`, `ToggleSwitch`
+- [x] Overlay/popup layer (prerequisite for several controls)
+- [x] `Button`, `ToggleButton`, `CheckBox`, `RadioButton`, `ToggleSwitch`
       — incl. theme-driven hover/press/disabled visual states (animation comes later)
-- [ ] `TextBox` (caret + blink, selection, editing — biggest single control)
-- [ ] Clipboard cut/copy/paste (glfw clipboard API)
-- [ ] `Slider`, `ProgressBar`
-- [ ] `ComboBox` (uses popup)
-- [ ] `ToolTip` (uses timer service)
+- [x] `TextBox` (caret + blink, selection, editing — biggest single control)
+- [x] Clipboard cut/copy/paste (glfw clipboard API)
+- [x] `Slider`, `ProgressBar`
+- [x] `ComboBox` (uses popup)
+- [x] `ToolTip` (uses timer service)
+- [x] **MILESTONE: gallery Controls section** — `fluo-gallery`'s scroll content
+      grows a Controls section above the swatches exercising every Phase 5
+      control (Button/ToggleButton/CheckBox/RadioButton+Group/ToggleSwitch/
+      TextBox/Slider/ProgressBar/ComboBox/ToolTipArea) from a real
+      `controls.OverlayHost` root, wired to the app's `Ctx.Timers` queue for
+      live caret blink and tooltip dwell.
 
 ## Phase 6 · Data binding
 - [ ] One-way bind (property → UI) via `Property` subscriptions

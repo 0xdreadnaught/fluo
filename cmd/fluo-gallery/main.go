@@ -2,8 +2,12 @@
 // phases land. Phase 3: interactive swatches (pointer/focus/cursor) plus a
 // ScrollViewer over a taller-than-viewport content stack. Phase 4: the whole
 // tree is built from theme.Active()'s tokens (buildUI), plus a live T-key
-// toggle between Fluent Light and Dark, and a Fluent button preview that
-// exercises hover/press-capture state, previewing Phase 5's Button.
+// toggle between Fluent Light and Dark. Phase 5: a Controls section at the
+// top of the scroll content exercises every core control built this phase
+// (Button/ToggleButton/CheckBox/RadioButton+Group/ToggleSwitch/TextBox/
+// Slider/ProgressBar/ComboBox/ToolTipArea), and the root becomes an
+// OverlayHost (controls.NewOverlayHost) so ComboBox's popup and
+// ToolTipArea's tip have somewhere to render above the rest of the tree.
 package main
 
 import (
@@ -18,6 +22,7 @@ import (
 	"github.com/0xdreadnaught/fluo/render"
 	"github.com/0xdreadnaught/fluo/text"
 	"github.com/0xdreadnaught/fluo/theme"
+	"github.com/0xdreadnaught/fluo/timers"
 
 	"golang.org/x/image/font/gofont/goregular"
 )
@@ -93,142 +98,26 @@ func (s *swatch) AcceptsFocus() bool { return true }
 // Cursor implements input.CursorShaper: a hand cursor over any swatch.
 func (s *swatch) Cursor() input.Cursor { return input.CursorHand }
 
-// button is a gallery-local Fluent button preview: a Border-like composite
-// that fills with Accent/AccentHover/AccentPressed by pointer state (hover
-// via Enter/Leave, pressed via Press/Release with capture — release-inside
-// fires onClick), token-styled from theme.Active() at construction like
-// every other control here (rebuild to re-theme). This is the LIVE Phase 4
-// milestone: it previews the press-capture-release-inside semantics that
-// Phase 5's Button/Clickable helper will formalize.
-type button struct {
-	core.Element
-
-	label core.Widget
-
-	fill, hoverFill, pressFill render.Color
-	radius                     float32
-	padding                    render.Thickness
-
-	hover, pressed bool
-
-	onClick func()
-}
-
-// newButton returns a button styled from th, with a TextBlock(face, text)
-// label colored th.Color.AccentText, that calls onClick on release-inside.
-func newButton(th *theme.Theme, face *text.Face, label string, onClick func()) *button {
-	b := &button{
-		fill:      th.Color.Accent,
-		hoverFill: th.Color.AccentHover,
-		pressFill: th.Color.AccentPressed,
-		radius:    th.Metric.ControlCornerRadius,
-		padding: render.Thickness{
-			Left: th.Metric.PaddingL, Right: th.Metric.PaddingL,
-			Top: th.Metric.PaddingM, Bottom: th.Metric.PaddingM,
-		},
-		onClick: onClick,
-	}
-	lbl := controls.NewTextBlock(face, label).SetColor(th.Color.AccentText)
-	b.label = lbl
-	core.SetParent(lbl, b)
-	return b
-}
-
-// MeasureContent measures the label reduced by padding, then adds the
-// padding back — the same chrome-then-content shape as controls.Border.
-func (b *button) MeasureContent(available render.Size) render.Size {
-	availW := available.W - b.padding.Left - b.padding.Right
-	if availW < 0 {
-		availW = 0
-	}
-	availH := available.H - b.padding.Top - b.padding.Bottom
-	if availH < 0 {
-		availH = 0
-	}
-	core.MeasureWidget(b.label, render.Size{W: availW, H: availH})
-	d := core.DesiredSizeOf(b.label)
-	return render.Size{
-		W: d.W + b.padding.Left + b.padding.Right,
-		H: d.H + b.padding.Top + b.padding.Bottom,
-	}
-}
-
-// ArrangeContent arranges the label within bounds inset by padding.
-func (b *button) ArrangeContent(bounds render.Rect) {
-	inner := bounds.Inset(b.padding)
-	if inner.W < 0 {
-		inner.W = 0
-	}
-	if inner.H < 0 {
-		inner.H = 0
-	}
-	core.ArrangeWidget(b.label, inner)
-}
-
-// Render fills the rounded background with the color for the current state:
-// pressed wins over hover, hover wins over the resting fill.
-func (b *button) Render(r render.Renderer) {
-	fill := b.fill
-	switch {
-	case b.pressed:
-		fill = b.pressFill
-	case b.hover:
-		fill = b.hoverFill
-	}
-	r.FillRoundedRect(b.Bounds(), b.radius, fill)
-}
-
-// Children returns the single label child.
-func (b *button) Children() []core.Widget { return []core.Widget{b.label} }
-
-// AcceptsFocus implements input.Focusable, so the button joins tab order.
-func (b *button) AcceptsFocus() bool { return true }
-
-// Cursor implements input.CursorShaper: a hand cursor over the button.
-func (b *button) Cursor() input.Cursor { return input.CursorHand }
-
-// OnPointer implements input.PointerHandler: Press captures the pointer and
-// shows the pressed fill; Move (while captured) tracks whether the pointer
-// is still over the button for the hover fill; Release (while captured)
-// releases the capture and fires onClick only if the release lands inside
-// the button's own bounds (a drag-away-and-release cancels the click).
-func (b *button) OnPointer(e *input.PointerEvent) {
-	switch e.Action {
-	case input.Enter:
-		b.hover = true
-	case input.Leave:
-		b.hover = false
-	case input.Press:
-		b.pressed = true
-		e.Router.Capture(b)
-		e.Handled = true
-	case input.Move:
-		if e.Router.Captured() == b {
-			b.hover = b.Bounds().Contains(e.Pos)
-			e.Handled = true
-		}
-	case input.Release:
-		if e.Router.Captured() == b {
-			e.Router.Release()
-			inside := b.Bounds().Contains(e.Pos)
-			b.pressed = false
-			b.hover = inside
-			if inside && b.onClick != nil {
-				b.onClick()
-			}
-			e.Handled = true
-		}
-	}
-}
-
-// galleryRoot is the gallery's root widget: a trivial single-child wrapper
-// (same shape as controls.Border) around the real DockPanel tree, whose only
-// job is implementing input.KeyHandler for the theme-toggle shortcut. It
-// must be the actual root object recorded as children's ancestor (via
+// galleryRoot is a trivial single-child wrapper (same shape as
+// controls.Border) around the real DockPanel tree, whose only job is
+// implementing input.KeyHandler for the theme-toggle shortcut. It must be an
+// actual node in the tree recorded as its child's ancestor (via
 // core.SetParent in newGalleryRoot) — not a promoted-method embed of
 // *DockPanel — so that input.Router's key-bubbling (which walks
-// core.ParentOf from whichever widget holds focus) reaches OnKey no matter
-// what has focus, not only when nothing does.
+// core.ParentOf from whichever widget holds focus) reaches OnKey whenever
+// something under the dock is focused.
+//
+// Since Phase 5 Task 9, galleryRoot is no longer the router's own root: it
+// sits as buildUI's OverlayHost's content, one level below the host (see
+// buildUI). input.Router.dispatchKey delivers to the focused widget's own
+// core.ParentOf chain (which still includes galleryRoot, and above it the
+// host) whenever something is focused, but falls back to the bare router
+// root ALONE — the OverlayHost, which implements no KeyHandler — when
+// nothing is (e.g. immediately after SetRoot, which always clears focus).
+// So the T-key toggle fires reliably once any focusable control has been
+// interacted with, but not from a pristine, nothing-yet-focused launch — a
+// documented v0 tradeoff of routing ComboBox/ToolTipArea popups through a
+// single OverlayHost root, not an oversight.
 type galleryRoot struct {
 	core.Element
 
@@ -273,13 +162,89 @@ var swatchPalette = []render.Color{
 	render.RGB(232, 17, 35), render.RGB(136, 23, 152), render.RGB(0, 153, 188),
 }
 
+// swatchColorNames names swatchPalette's entries in the same order, reused
+// verbatim as the Controls section's ComboBox items — the gallery's one
+// piece of "data that appears in two widgets", kept as a single slice so the
+// two can never drift out of sync.
+var swatchColorNames = []string{"Blue", "Yellow", "Green", "Red", "Purple", "Teal"}
+
+// buildControlsSection builds the Phase 5 Controls section: one HStack per
+// control family (Button/ToggleButton, CheckBox/RadioButton+Group/
+// ToggleSwitch, TextBox/ComboBox, Slider/ProgressBar), stacked vertically
+// with th's PaddingM gap, all styled from th like everything else buildUI
+// draws. tq (may be nil, e.g. before the app's first frame hands buildUI a
+// real timers.Queue) is threaded into the TextBox's caret blink and the
+// accent button's ToolTipArea dwell timer via their respective SetTimers —
+// nil disables the timing behavior but leaves both controls otherwise
+// functional (solid caret, immediate-show tooltip), matching each control's
+// own documented no-queue convention. counter/onToggle wire up the demo
+// button's click count and the theme-toggle shortcut respectively (onToggle
+// is consumed by galleryRoot, not here).
+func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *timers.Queue) core.Widget {
+	// Row 1: Button (with click counter), accent Button (tooltipped),
+	// ToggleButton.
+	counterLabel := controls.NewTextBlock(body, fmt.Sprintf("Clicked %d times", *counter)).
+		SetColor(th.Color.TextSecondary)
+	demoButton := controls.NewButton(body, "Click me").OnClick(func() {
+		*counter++
+		counterLabel.SetText(fmt.Sprintf("Clicked %d times", *counter))
+	})
+	accentButton := controls.NewButton(body, "Accent").SetAccent(true)
+	accentTip := controls.NewToolTipArea(accentButton, body, "Accent button").SetTimers(tq)
+	toggleButton := controls.NewToggleButton(body, "Toggle")
+
+	row1 := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
+		Add(demoButton, counterLabel, accentTip, toggleButton)
+
+	// Row 2: CheckBox, RadioButton "A"+"B" in a RadioGroup, ToggleSwitch.
+	checkBox := controls.NewCheckBox(body, "Enable")
+
+	radioA := controls.NewRadioButton(body, "A")
+	radioB := controls.NewRadioButton(body, "B")
+	controls.NewRadioGroup().Add(radioA).Add(radioB)
+
+	toggleSwitch := controls.NewToggleSwitch()
+
+	row2 := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
+		Add(checkBox, radioA, radioB, toggleSwitch)
+
+	// Row 3: TextBox (placeholder + caret blink), ComboBox (swatch color
+	// names).
+	textBox := controls.NewTextBox(body).SetPlaceholder("Type here…").SetTimers(tq)
+	textBox.SetWidth(200)
+	comboBox := controls.NewComboBox(body).SetItems(swatchColorNames)
+
+	row3 := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
+		Add(textBox, comboBox)
+
+	// Row 4: Slider (wired to drive a ProgressBar's value).
+	progressBar := controls.NewProgressBar()
+	slider := controls.NewSlider()
+	slider.OnChanged(func(v float32) { progressBar.SetValue(v) })
+	slider.SetValue(0.3) // fires OnChanged above, seeding progressBar to match
+
+	row4 := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
+		Add(slider, progressBar)
+
+	return controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingM).
+		Add(row1, row2, row3, row4)
+}
+
 // buildUI builds the gallery's entire widget tree from th's tokens — colors,
 // paddings, radii, and type sizes all come from th, so the whole tree is a
 // pure function of the active theme (see FLUO_THEME and the T-key toggle in
 // main: re-theming means calling buildUI again and swapping roots, never
 // mutating an existing tree in place). counter/onToggle wire up the demo
-// button's click count and the theme-toggle shortcut respectively.
-func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func()) *galleryRoot {
+// button's click count and the theme-toggle shortcut respectively; tq is
+// forwarded to buildControlsSection (see its doc comment).
+//
+// Since Phase 5 Task 9, the returned root is a *controls.OverlayHost (rather
+// than *galleryRoot directly): ComboBox's popup and ToolTipArea's tip (both
+// used in the Controls section) need an OverlayHost ancestor to render into
+// (OverlayHostFor walks up looking for one), so the host must sit above
+// everything that uses either control — see main's SetRouter wiring, which
+// an OverlayHost needs to drive its light-dismiss capture.
+func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq *timers.Queue) *controls.OverlayHost {
 	title := text.NewFace(font, th.Type.SubtitleSize)
 	body := text.NewFace(font, th.Type.BodySize)
 
@@ -288,18 +253,10 @@ func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func()) *g
 		swatches.Add(newSwatch(72, 48, c, th.Color.Accent, th.Color.TextPrimary))
 	}
 
-	counterLabel := controls.NewTextBlock(body, fmt.Sprintf("Clicked %d times", *counter)).
-		SetColor(th.Color.TextSecondary)
-	demoButton := newButton(th, body, "Click me", func() {
-		*counter++
-		counterLabel.SetText(fmt.Sprintf("Clicked %d times", *counter))
-	})
-	demoRow := controls.NewStackPanel(controls.Horizontal).
-		SetGap(th.Metric.PaddingM).
-		Add(demoButton, counterLabel)
+	controlsSection := buildControlsSection(th, body, counter, tq)
 
 	content := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingM).
-		Add(demoRow, swatches)
+		Add(controlsSection, swatches)
 	for i := 1; i <= 20; i++ {
 		content.Add(controls.NewTextBlock(body, fmt.Sprintf("Row %02d", i)).SetColor(th.Color.TextSecondary))
 	}
@@ -332,7 +289,9 @@ func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func()) *g
 			SetChild(scroll),
 			controls.DockLeft) // last child fills
 
-	return newGalleryRoot(dock, onToggle)
+	host := controls.NewOverlayHost()
+	host.SetContent(newGalleryRoot(dock, onToggle))
+	return host
 }
 
 func main() {
@@ -352,17 +311,24 @@ func main() {
 
 	var counter int
 	var togglePending bool
-	build := func() *galleryRoot {
-		return buildUI(theme.Active(), f, &counter, func() { togglePending = true })
+	// timerQueue starts nil (no app.Ctx exists yet to supply one) and is
+	// filled in from the first frame's c.Timers below — see buildControlsSection's
+	// doc comment for why a nil queue is a safe, if less lively, fallback.
+	var timerQueue *timers.Queue
+	build := func() *controls.OverlayHost {
+		return buildUI(theme.Active(), f, &counter, func() { togglePending = true }, timerQueue)
 	}
 
-	root := build()
+	var root *controls.OverlayHost
 	var lastSize render.Size
 	rootSet := false
 
 	err = app.Run(app.Config{Title: "fluo gallery", Width: 640, Height: 420}, func(c *app.Ctx) {
 		if !rootSet {
+			timerQueue = c.Timers
+			root = build()
 			c.Input.SetRoot(root)
+			root.SetRouter(c.Input) // OverlayHost needs the router for light-dismiss capture
 			rootSet = true
 		}
 		if togglePending {
@@ -374,6 +340,7 @@ func main() {
 			theme.SetActive(next)
 			root = build()
 			c.Input.SetRoot(root) // SetRoot resets hover/capture/focus by design
+			root.SetRouter(c.Input)
 			lastSize = render.Size{}
 		}
 		if c.Size != lastSize || root.NeedsLayout() {

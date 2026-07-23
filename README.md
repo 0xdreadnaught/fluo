@@ -33,6 +33,23 @@ Grows a page per control as later phases land. The color swatches are
 interactive (hover/press/focus/cursor) and the content area scrolls,
 demonstrating fluo's input event API.
 
+## Controls
+
+Phase 5 shipped the core control set, all shown together at the top of the
+gallery's scroll content, above the color swatches: `Button`/`ToggleButton`,
+`CheckBox`, `RadioButton` + `RadioGroup`, `ToggleSwitch`, `TextBox`,
+`Slider` wired to a `ProgressBar`, `ComboBox`, and `ToolTipArea`. Every
+popup-capable control (`ComboBox`'s dropdown, `ToolTipArea`'s tip) needs a
+`controls.OverlayHost` ancestor to render into — the gallery's root is now an
+`OverlayHost` wrapping its DockPanel chrome as content, with `SetRouter`
+wired to the app's `input.Router` so the host's light-dismiss capture works.
+`TextBox`'s caret blink and `ToolTipArea`'s hover-dwell delay both animate
+off the same `app.Ctx.Timers` queue (`SetTimers`); a nil queue degrades each
+to a reasonable default (solid caret, immediate-show tooltip) rather than
+breaking. `TextBox` also wires up `Ctrl+C`/`Ctrl+X`/`Ctrl+V` against
+`input.Router`'s clipboard (backed by glfw's clipboard API), so cut/copy/
+paste works out of the box.
+
 ## Theming
 
 Every control is styled from `theme.Active()` — a `*theme.Theme` bundling
