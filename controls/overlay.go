@@ -39,15 +39,37 @@ type popupEntry struct {
 // when the event falls inside it, so popup-internal controls (ComboBox item
 // rows, etc.) still receive Press/Release/Move/Wheel normally. Content (and
 // any popup beneath the topmost one) is the part that stays inert while a
-// popup is open — it gets no hover/move feedback, only the topmost popup's
-// interior and the dismiss-on-outside-Press decision are live. Documented v0
-// simplification, not an oversight.
+// popup is open — only the topmost popup's interior and the
+// dismiss-on-outside-Press decision are live. Documented v0 simplification,
+// not an oversight.
+//
+// Hover (Enter/Leave) is the one exception to "forwarded like any other
+// event": input.Router's own hover-diffing (the mechanism that normally
+// turns hit-test-path changes between successive Move events into Enter/
+// Leave pairs) lives entirely in Router.PointerMove's UNCAPTURED branch, so
+// it never runs at all while OverlayHost holds the capture — a captured Move
+// only ever reaches OverlayHost.OnPointer as a bare Move, with no Enter/Leave
+// synthesized anywhere. Popup-internal controls that drive their hover state
+// off Enter/Leave (e.g. ComboBox's item rows) would therefore never actually
+// hover from real mouse movement, only from Press/Release — so OnPointer
+// replicates Router.updateHover's diff-and-notify algorithm itself, scoped to
+// the topmost popup's own subtree, via popupHover/diffPopupHover.
 type OverlayHost struct {
 	core.Element
 
 	content core.Widget
 	popups  []popupEntry
 	router  *input.Router
+
+	// popupHover is the last hit-test path (root→leaf, rooted at the topmost
+	// popup) computed by a forwarded Move, used to diff against the next one
+	// and synthesize Enter/Leave for popup-internal widgets — see
+	// diffPopupHover and the type doc comment's "Hover" paragraph. Reset to
+	// nil (silently — no Leave fired, matching input.Router.Detach's
+	// no-notification-on-teardown convention) whenever the topmost popup
+	// changes: a new popup opens (ShowPopup) or any popup closes
+	// (ClosePopup), since either invalidates whatever it was tracking.
+	popupHover []core.Widget
 }
 
 // NewOverlayHost returns an empty OverlayHost with no content and no popups.
@@ -102,6 +124,11 @@ func (h *OverlayHost) SetRouter(r *input.Router) {
 func (h *OverlayHost) ShowPopup(popup core.Widget, anchor render.Rect, onDismiss func()) {
 	h.popups = append(h.popups, popupEntry{w: popup, anchor: anchor, onDismiss: onDismiss})
 	core.SetParent(popup, h)
+	// popup is now topmost: whatever popupHover was tracking (if anything)
+	// belonged to the previous topmost (or nothing, if this is the first
+	// popup) and is stale either way — reset silently, per the field's doc
+	// comment.
+	h.popupHover = nil
 	if h.router != nil {
 		h.router.Capture(h)
 	}
@@ -134,6 +161,10 @@ func (h *OverlayHost) ClosePopup(popup core.Widget) {
 
 	entry := h.popups[idx]
 	h.popups = append(h.popups[:idx], h.popups[idx+1:]...)
+	// The closed popup (or, if idx wasn't the top, the new topmost) may
+	// differ from whatever popupHover was tracking — reset silently, per the
+	// field's doc comment.
+	h.popupHover = nil
 
 	core.SetParent(popup, nil)
 	if h.router != nil {
@@ -277,9 +308,13 @@ func (h *OverlayHost) Children() []core.Widget {
 // widget(s) under the point, and input.Bubble replays the same leaf→root
 // delivery Router's own dispatch would have done had it not been bypassed by
 // the capture — so popup-internal controls (buttons, item rows, ...) receive
-// Press/Release/Move/Wheel much as if the router had hit-tested normally.
-// Nothing here is dismissed in this branch, regardless of whether the
-// forwarded delivery itself ends up Handled.
+// Press/Release/Move/Wheel much as if the router had hit-tested normally. A
+// Move specifically is ALSO run through diffPopupHover first (see the type
+// doc comment's "Hover" paragraph), so popup-internal widgets that rely on
+// Enter/Leave (e.g. ComboBox's item rows) receive proper hover transitions
+// from real mouse movement, not just from this forwarded Move. Nothing here
+// is dismissed in this branch, regardless of whether the forwarded delivery
+// itself ends up Handled.
 //
 // One real difference from ordinary (uncaptured) dispatch: this host's own
 // Capture(h) is still the one on top of the router's capture stack for the
@@ -290,14 +325,17 @@ func (h *OverlayHost) Children() []core.Widget {
 // it: light dismiss stays armed for the rest of the popup's lifetime even
 // after an inner drag completes.
 //
-// When e.Pos falls outside the topmost popup's bounds, only Press matters:
-// it closes that popup (via CloseTopPopup, so its onDismiss fires) and marks
-// e.Handled, swallowing it. Every other outside action (Move/Release/Wheel)
-// is swallowed silently with no forwarding — content (and, for now, any
-// popup beneath the topmost one) gets no hover/move feedback while a popup
-// is open; only the topmost popup's own interior and the dismiss-on-Press
-// decision are live. This is a documented v0 simplification, not an
-// oversight.
+// When e.Pos falls outside the topmost popup's bounds, a Move first clears
+// popupHover (diffPopupHover(nil) delivers Leave to everything it was
+// tracking — the pointer just left the popup's interior entirely, whether or
+// not the popup itself stays open), then only Press matters: it closes that
+// popup (via CloseTopPopup, so its onDismiss fires) and marks e.Handled,
+// swallowing it. Every other outside action (Move/Release/Wheel) is
+// swallowed silently with no forwarding beyond that hover clear — content
+// (and any popup beneath the topmost one) still gets no hover/move feedback
+// while a popup is open; only the topmost popup's own interior and the
+// dismiss-on-Press decision are live. This is a documented v0
+// simplification, not an oversight.
 func (h *OverlayHost) OnPointer(e *input.PointerEvent) {
 	if len(h.popups) == 0 {
 		return
@@ -306,12 +344,71 @@ func (h *OverlayHost) OnPointer(e *input.PointerEvent) {
 
 	if core.BoundsOf(top).Contains(e.Pos) {
 		path := input.HitPath(top, e.Pos)
+		if e.Action == input.Move {
+			h.diffPopupHover(path)
+		}
 		input.Bubble(path, e)
 		return
+	}
+
+	if e.Action == input.Move {
+		h.diffPopupHover(nil)
 	}
 
 	if e.Action == input.Press {
 		h.CloseTopPopup()
 		e.Handled = true
 	}
+}
+
+// diffPopupHover diffs h.popupHover (the hit-test path, rooted at the
+// topmost popup, as of the previous forwarded Move) against newPath,
+// delivering a direct (non-bubbling; e.Handled is not consulted, matching
+// input.Router.updateHover) Leave to every widget that dropped off the path
+// and an Enter to every widget newly on it, then stores newPath as the new
+// popupHover. Passing nil (as OnPointer does once the pointer has moved
+// outside the popup entirely) delivers Leave to every currently-tracked
+// widget and Enter to none — this replicates input.Router.updateHover's own
+// diff-and-notify algorithm (that method is private to the input package,
+// and in any case diffs against the ROOT tree's hover state, which
+// OverlayHost's modal capture bypasses entirely while any popup is open —
+// see the type doc comment's "Hover" paragraph for why Router's own
+// mechanism never runs during that window).
+func (h *OverlayHost) diffPopupHover(newPath []core.Widget) {
+	for _, w := range h.popupHover {
+		if !containsPopupWidget(newPath, w) {
+			deliverPopupHoverEvent(w, input.Leave, h.router)
+		}
+	}
+	for _, w := range newPath {
+		if !containsPopupWidget(h.popupHover, w) {
+			deliverPopupHoverEvent(w, input.Enter, h.router)
+		}
+	}
+	h.popupHover = newPath
+}
+
+// deliverPopupHoverEvent delivers a direct (non-bubbling) Enter or Leave to
+// w, if w implements input.PointerHandler — the same direct-delivery shape
+// input.Router's own hover diffing uses (deliverDirect, private to the input
+// package). router (the OverlayHost's own, possibly nil) is attached to the
+// synthesized event for parity with a normally-dispatched Enter/Leave, even
+// though neither action reads it in practice (ClickBehavior.HandlePointer,
+// for one, only touches e.Router on Press/Release).
+func deliverPopupHoverEvent(w core.Widget, action input.Action, router *input.Router) {
+	if ph, ok := w.(input.PointerHandler); ok {
+		ph.OnPointer(&input.PointerEvent{Action: action, Target: w, Router: router})
+	}
+}
+
+// containsPopupWidget reports whether w appears in path, compared by
+// identity (==) — the same comparison input.Router's own hover diffing uses
+// (containsIdentity, private to the input package).
+func containsPopupWidget(path []core.Widget, w core.Widget) bool {
+	for _, x := range path {
+		if x == w {
+			return true
+		}
+	}
+	return false
 }

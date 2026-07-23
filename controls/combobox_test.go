@@ -271,6 +271,40 @@ func TestComboBoxFieldShowsSelectedText(t *testing.T) {
 	}
 }
 
+// TestComboRowHoverViaLiveRouter is the end-to-end regression for
+// OverlayHost's hover-synthesis fix (diffPopupHover): opens a combo through
+// the real router (matching every other interaction test in this file), then
+// drives a genuine router.PointerMove over the first popup row and asserts
+// ITS OWN hover state (white-box: row.click.Hover()) goes true — proving a
+// real live mouse move (not a direct OnPointer(Enter) call, as in
+// TestComboRowHoverTracksEnterLeave below) now lights up row hover, which
+// was impossible before OverlayHost forwarded synthesized Enter/Leave into
+// open popups.
+func TestComboRowHoverViaLiveRouter(t *testing.T) {
+	combo, host, r := newTestCombo(t, []string{"Red", "Green", "Blue"})
+
+	clickAt(r, rectCenter(core.BoundsOf(combo))) // opens
+	layoutOverlay(host, 300, 300)                // arrange the popup + its rows
+
+	rows := popupRows(t, combo)
+	if len(rows) != 3 {
+		t.Fatalf("len(rows) = %d, want 3", len(rows))
+	}
+
+	if rows[0].click.Hover() {
+		t.Fatal("rows[0].click.Hover() = true before any Move, want false")
+	}
+
+	r.PointerMove(rectCenter(core.BoundsOf(rows[0])), 0)
+
+	if !rows[0].click.Hover() {
+		t.Fatal("rows[0].click.Hover() = false after a live router.PointerMove over it, want true")
+	}
+	if rows[1].click.Hover() {
+		t.Fatal("rows[1].click.Hover() = true after moving over rows[0], want false")
+	}
+}
+
 func TestComboRowHoverTracksEnterLeave(t *testing.T) {
 	colors := theme.Active().Color
 	metrics := theme.Active().Metric

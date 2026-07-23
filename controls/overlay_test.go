@@ -459,3 +459,87 @@ func TestOverlayHostForNilWhenAbsent(t *testing.T) {
 		t.Fatalf("OverlayHostFor(orphan) = %v, want nil (never attached to a host)", got)
 	}
 }
+
+// hoverProbe is a minimal leaf widget that records every Enter/Leave/Move it
+// receives. Unlike ovProbe above (which only tracks Press/Release/Move, and
+// is shared by tests that must NOT see extra Enter/Leave noise — e.g.
+// TestPopupContentMoveForwarded's exact-one-event assertion), hoverProbe
+// exists specifically to prove OverlayHost's hover synthesis (diffPopupHover,
+// invoked from OnPointer on a forwarded or swallowed Move) delivers real
+// Enter/Leave pairs to popup-internal widgets from live pointer movement —
+// not just Press/Release, which is all that reached them before that fix.
+type hoverProbe struct {
+	core.Element
+	events []string
+}
+
+func (p *hoverProbe) OnPointer(e *input.PointerEvent) {
+	switch e.Action {
+	case input.Enter:
+		p.events = append(p.events, "enter")
+	case input.Leave:
+		p.events = append(p.events, "leave")
+	case input.Move:
+		p.events = append(p.events, "move")
+	}
+}
+
+// TestPopupHoverEnterLeaveSynthesis is the OverlayHost-level regression for
+// the row-hover fix: two hoverProbes stacked vertically inside an open
+// popup, driven by REAL router.PointerMove calls (not direct OnPointer
+// calls) while the host holds its modal capture. Moving onto rowA must
+// synthesize an Enter (then forward the Move); moving from rowA to rowB must
+// synthesize a Leave on rowA and an Enter on rowB; moving outside the popup
+// entirely (still captured — the popup itself stays open, this isn't a
+// light-dismiss press) must synthesize a Leave on rowB, with nothing left
+// hovered.
+func TestPopupHoverEnterLeaveSynthesis(t *testing.T) {
+	rowA := &hoverProbe{}
+	rowA.SetWidth(60)
+	rowA.SetHeight(20)
+	rowB := &hoverProbe{}
+	rowB.SetWidth(60)
+	rowB.SetHeight(20)
+
+	stack := NewStackPanel(Vertical).Add(rowA, rowB)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(NewFixed(400, 300, render.RGB(1, 2, 3)))
+	r.SetRoot(host) // BEFORE ShowPopup: SetRoot itself resets any capture
+
+	anchor := render.Rect{X: 100, Y: 50, W: 10, H: 10}
+	host.ShowPopup(stack, anchor, nil)
+	layoutOverlay(host, 400, 300)
+
+	// Popup (the stack, desired 60x40) is placed below-anchor at
+	// {100,60,60,40}: rowA at {100,60,60,20}, rowB at {100,80,60,20}.
+	posA := render.Point{X: 110, Y: 65}    // inside rowA
+	posB := render.Point{X: 110, Y: 90}    // inside rowB
+	posOutside := render.Point{X: 5, Y: 5} // well outside the popup entirely
+
+	r.PointerMove(posA, 0)
+	if got := rowA.events; len(got) != 2 || got[0] != "enter" || got[1] != "move" {
+		t.Fatalf("rowA.events after move onto A = %v, want [enter move]", got)
+	}
+	if got := rowB.events; len(got) != 0 {
+		t.Fatalf("rowB.events after move onto A = %v, want none", got)
+	}
+
+	r.PointerMove(posB, 0)
+	if got := rowA.events; len(got) != 3 || got[2] != "leave" {
+		t.Fatalf("rowA.events after move to B = %v, want [enter move leave]", got)
+	}
+	if got := rowB.events; len(got) != 2 || got[0] != "enter" || got[1] != "move" {
+		t.Fatalf("rowB.events after move to B = %v, want [enter move]", got)
+	}
+
+	r.PointerMove(posOutside, 0)
+	if got := rowB.events; len(got) != 3 || got[2] != "leave" {
+		t.Fatalf("rowB.events after move outside popup = %v, want [enter move leave]", got)
+	}
+	if host.PopupCount() != 1 {
+		t.Fatalf("PopupCount after moving outside (no press) = %d, want 1 (popup stays open)", host.PopupCount())
+	}
+}
