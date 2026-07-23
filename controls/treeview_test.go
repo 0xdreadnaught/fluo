@@ -23,7 +23,7 @@ func TestFlattenTreeAllCollapsedShowsOnlyRoots(t *testing.T) {
 		NewTreeNode("a", NewTreeNode("a1"), NewTreeNode("a2")),
 		NewTreeNode("b"),
 	}
-	rows := flattenTree(roots)
+	rows := flattenTree(roots, nil)
 	if got, want := len(rows), 2; got != want {
 		t.Fatalf("len(rows) = %d, want %d (both roots collapsed by default)", got, want)
 	}
@@ -42,12 +42,12 @@ func TestFlattenTreeExpandingRootAddsChildRows(t *testing.T) {
 	b := NewTreeNode("b")
 	roots := []*TreeNode{a, b}
 
-	if got := len(flattenTree(roots)); got != 2 {
+	if got := len(flattenTree(roots, nil)); got != 2 {
 		t.Fatalf("collapsed len = %d, want 2", got)
 	}
 
 	a.SetExpanded(true)
-	rows := flattenTree(roots)
+	rows := flattenTree(roots, nil)
 	if got, want := len(rows), 4; got != want {
 		t.Fatalf("expanded len = %d, want %d (a, a1, a2, b)", got, want)
 	}
@@ -76,12 +76,12 @@ func TestFlattenTreeCollapsingRemovesGrandchildRowsToo(t *testing.T) {
 	roots := []*TreeNode{a}
 
 	// a expanded, b expanded: a, b, c1 -> 3 rows.
-	if got := len(flattenTree(roots)); got != 3 {
+	if got := len(flattenTree(roots, nil)); got != 3 {
 		t.Fatalf("len = %d, want 3", got)
 	}
 
 	a.SetExpanded(false)
-	if got := len(flattenTree(roots)); got != 1 {
+	if got := len(flattenTree(roots, nil)); got != 1 {
 		t.Fatalf("len after collapsing a = %d, want 1 (b and c1 hidden too)", got)
 	}
 }
@@ -92,7 +92,7 @@ func TestFlattenTreeDeepNestingDepthMath(t *testing.T) {
 	d1 := NewTreeNode("d1", d2).SetExpanded(true)
 	d0 := NewTreeNode("d0", d1).SetExpanded(true)
 
-	rows := flattenTree([]*TreeNode{d0})
+	rows := flattenTree([]*TreeNode{d0}, nil)
 	if got, want := len(rows), 4; got != want {
 		t.Fatalf("len = %d, want %d", got, want)
 	}
@@ -395,7 +395,7 @@ func TestTreeViewKeyboardUpDown(t *testing.T) {
 	}
 }
 
-// --- Keyboard: Right expands / no-op leaf ---
+// --- Keyboard: Right expands / descends into first child / no-op leaf ---
 
 func TestTreeViewKeyRightExpandsCollapsedNodeWithChildren(t *testing.T) {
 	child := NewTreeNode("child")
@@ -433,6 +433,61 @@ func TestTreeViewKeyRightOnLeafIsNoOp(t *testing.T) {
 	}
 	if leaf.Expanded() {
 		t.Fatal("Right on a leaf somehow expanded it")
+	}
+}
+
+// TestTreeViewKeyRightOnExpandedNodeDescendsToFirstChild locks in the
+// WinUI-adopted behavior: Right on a node that is ALREADY expanded (and has
+// children) moves the selection down to its first child, rather than being
+// a no-op.
+func TestTreeViewKeyRightOnExpandedNodeDescendsToFirstChild(t *testing.T) {
+	child1 := NewTreeNode("child1")
+	child2 := NewTreeNode("child2")
+	root := NewTreeNode("root", child1, child2).SetExpanded(true)
+	tv := NewTreeView(nil, root)
+	tv.rowH = 20
+	layoutTreeView(tv, 0, 0, 200, 200)
+	tv.OnFocusChanged(true)
+	tv.SetSelected(root)
+
+	var got []*TreeNode
+	tv.OnChanged(func(n *TreeNode) { got = append(got, n) })
+
+	e := &input.KeyEvent{Action: input.Press, Key: input.KeyRight}
+	tv.OnKey(e)
+
+	if !e.Handled {
+		t.Fatal("Right not marked Handled")
+	}
+	if tv.Selected() != child1 {
+		t.Fatalf("Selected() after Right on an already-expanded node = %v, want child1 (WinUI: descend into first child)", tv.Selected())
+	}
+	if !root.Expanded() {
+		t.Fatal("Right on an already-expanded node collapsed it, want unchanged")
+	}
+	if len(got) != 1 || got[0] != child1 {
+		t.Fatalf("OnChanged calls = %v, want [child1] (descending is a genuine user-driven selection change)", got)
+	}
+}
+
+func TestTreeViewKeyRightLeftUnhandledWithNoSelection(t *testing.T) {
+	root := NewTreeNode("root")
+	tv := NewTreeView(nil, root)
+	tv.rowH = 20
+	layoutTreeView(tv, 0, 0, 200, 200)
+	tv.OnFocusChanged(true)
+	// No SetSelected call: tv.Selected() == nil, even though rows exist.
+
+	er := &input.KeyEvent{Action: input.Press, Key: input.KeyRight}
+	tv.OnKey(er)
+	if er.Handled {
+		t.Fatal("Right with no current selection marked Handled, want false")
+	}
+
+	el := &input.KeyEvent{Action: input.Press, Key: input.KeyLeft}
+	tv.OnKey(el)
+	if el.Handled {
+		t.Fatal("Left with no current selection marked Handled, want false")
 	}
 }
 
@@ -564,5 +619,89 @@ func TestTreeViewWithRealFaceAndTheme(t *testing.T) {
 	}
 	if tv.rowH <= 0 {
 		t.Fatalf("rowH = %v, want > 0 with a real face", tv.rowH)
+	}
+}
+
+// --- Direct node mutation invalidates the owning TreeView (owner back-ref) ---
+
+// TestTreeNodeSetExpandedInvalidatesOwningTreeView is the reviewer-mandated
+// regression test for the invalidation gap: mutating a node DIRECTLY (not
+// via tv.toggle/expandRow/collapseOrJumpToParent) must still mark the
+// owning TreeView dirty, since nothing else observes the mutation.
+func TestTreeNodeSetExpandedInvalidatesOwningTreeView(t *testing.T) {
+	child := NewTreeNode("child")
+	root := NewTreeNode("root", child)
+	tv := NewTreeView(nil, root)
+	layoutTreeView(tv, 0, 0, 200, 100)
+
+	if tv.NeedsLayout() {
+		t.Fatal("expected clean layout before the direct SetExpanded call")
+	}
+
+	root.SetExpanded(true) // NOT via tv.toggle/expandRow — a direct external mutation
+
+	if !tv.NeedsLayout() {
+		t.Fatal("direct node.SetExpanded on an attached node did not invalidate its owning TreeView")
+	}
+}
+
+// TestTreeNodeSetExpandedInvalidatesEvenWhenNodeCurrentlyHidden proves
+// NewTreeView's construction-time walkAllNodes tags EVERY node with its
+// owner up front — including ones hidden behind a currently-collapsed
+// ancestor, which flattenTree itself would never have walked into.
+func TestTreeNodeSetExpandedInvalidatesEvenWhenNodeCurrentlyHidden(t *testing.T) {
+	grandchild := NewTreeNode("grandchild")
+	child := NewTreeNode("child", grandchild) // hidden: root starts collapsed
+	root := NewTreeNode("root", child)
+	tv := NewTreeView(nil, root)
+	layoutTreeView(tv, 0, 0, 200, 100) // only "root" visible; flattenTree never walked into child
+
+	if got := len(tv.rows); got != 1 {
+		t.Fatalf("visible rows = %d, want 1 (root only)", got)
+	}
+	if tv.NeedsLayout() {
+		t.Fatal("expected clean layout before the direct SetExpanded call")
+	}
+
+	child.SetExpanded(true) // child was never in a flatten pass, only NewTreeView's full walk
+
+	if !tv.NeedsLayout() {
+		t.Fatal("direct SetExpanded on a currently-hidden-but-owned node did not invalidate its owning TreeView")
+	}
+}
+
+// TestTreeNodeAppendedAfterConstructionGetsOwnerOnceReachable proves the
+// "newly-reachable nodes during each flatten" half of the ownership rule: a
+// node appended to an existing owned node's Children slice AFTER
+// construction has no owner until a flatten pass actually walks into it.
+func TestTreeNodeAppendedAfterConstructionGetsOwnerOnceReachable(t *testing.T) {
+	root := NewTreeNode("root")
+	tv := NewTreeView(nil, root)
+	layoutTreeView(tv, 0, 0, 200, 100)
+
+	lateChild := NewTreeNode("late")
+	root.Children = append(root.Children, lateChild) // missed NewTreeView's own walk entirely
+	root.SetExpanded(true)                           // root itself IS owned: invalidates tv
+	layoutTreeView(tv, 0, 0, 200, 100)               // re-flatten walks into lateChild, tagging it
+
+	if tv.NeedsLayout() {
+		t.Fatal("expected clean layout after the relayout")
+	}
+
+	lateChild.SetExpanded(true)
+
+	if !tv.NeedsLayout() {
+		t.Fatal("direct SetExpanded on a node only reachable via a later flatten pass did not invalidate its owning TreeView")
+	}
+}
+
+// TestTreeNodeSetExpandedWithNoOwnerIsHarmless covers a node never attached
+// to any TreeView: SetExpanded must not panic (nil owner) and still flips
+// the flag.
+func TestTreeNodeSetExpandedWithNoOwnerIsHarmless(t *testing.T) {
+	n := NewTreeNode("orphan")
+	n.SetExpanded(true)
+	if !n.Expanded() {
+		t.Fatal("SetExpanded(true) on an unowned node did not flip the flag")
 	}
 }

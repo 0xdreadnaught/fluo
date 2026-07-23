@@ -31,12 +31,26 @@ const (
 // A TreeNode is shared, mutable state: the SAME *TreeNode instance passed to
 // NewTreeView is read back by TreeView.Selected/OnChanged, so callers can
 // hold onto node pointers returned from NewTreeNode to inspect or drive them
-// later (e.g. SetExpanded from outside the tree).
+// later (e.g. SetExpanded from outside the tree — see its own doc comment
+// for how that reaches the owning TreeView).
+//
+// Ownership: a TreeNode belongs to at most one TreeView at a time. owner is
+// tagged onto every node reachable from a TreeView's roots — regardless of
+// current expand state — during NewTreeView's construction-time walk
+// (walkAllNodes), and re-tagged onto any node newly reached by a later
+// flatten pass (flattenTree), which covers a node appended to an existing
+// owned node's Children slice AFTER construction: it has no owner until the
+// first flatten that walks into it (i.e. once its ancestor chain is
+// expanded enough to make it visible). Sharing the same node across two
+// TreeViews is unsupported: owner simply holds whichever TreeView tagged it
+// most recently, so only that one TreeView's layout is invalidated by a
+// SetExpanded call — the other silently sees nothing.
 type TreeNode struct {
 	Label    string
 	Children []*TreeNode
 
 	expanded bool
+	owner    *TreeView
 }
 
 // NewTreeNode returns a new, collapsed TreeNode with the given label and
@@ -50,14 +64,23 @@ func (n *TreeNode) Expanded() bool {
 	return n.expanded
 }
 
-// SetExpanded sets n's expanded state directly. This is the low-level
-// setter TreeView's own chevron click/keyboard handling (and
-// TreeView.SetSelected's auto-expand-ancestors behavior) drives — calling it
-// directly on a node not currently attached to (or visible in) any TreeView
-// is harmless (it just flips the flag) but has no visible effect until the
-// owning TreeView's next layout pass re-flattens its rows.
+// SetExpanded sets n's expanded state directly and, if n is currently owned
+// by a TreeView (see the type doc comment's Ownership section), immediately
+// invalidates that TreeView's measure — for BOTH true and false — so the
+// changed row set is picked up on the very next layout pass, exactly as if
+// the change had come from a chevron click or Left/Right keyboard
+// navigation. This is what makes a direct external call (bypassing
+// TreeView's own toggle/expandRow/collapseOrJumpToParent) actually visible:
+// earlier, nothing invalidated the owning TreeView, so a caller mutating a
+// node directly (e.g. from bound model code) could silently desync from
+// what was on screen until some UNRELATED invalidation happened to trigger
+// a relayout. Calling it on a node not (yet) owned by any TreeView is a
+// harmless no-op beyond flipping the flag.
 func (n *TreeNode) SetExpanded(v bool) *TreeNode {
 	n.expanded = v
+	if n.owner != nil {
+		n.owner.InvalidateMeasure()
+	}
 	return n
 }
 
@@ -78,11 +101,20 @@ type treeRow struct {
 // expanded nodes" normative rule the whole of TreeView is built around: the
 // row COUNT alone (see the package's flatten-math tests) already proves
 // expand/collapse is wired correctly, with no rendering involved.
-func flattenTree(roots []*TreeNode) []treeRow {
+//
+// owner is tagged onto every visited node (see TreeNode's Ownership doc
+// comment) — this is what lets a node appended to an existing owned node's
+// Children slice AFTER construction (so it missed NewTreeView's own
+// construction-time walkAllNodes tagging) still end up owned, the moment a
+// flatten pass actually walks into it. owner may be nil (the pure
+// flatten-math tests in this package call flattenTree directly with no
+// TreeView at all); tagging nodes with a nil owner is harmless.
+func flattenTree(roots []*TreeNode, owner *TreeView) []treeRow {
 	var rows []treeRow
 	var walk func(nodes []*TreeNode, depth int, parent *TreeNode)
 	walk = func(nodes []*TreeNode, depth int, parent *TreeNode) {
 		for _, n := range nodes {
+			n.owner = owner
 			rows = append(rows, treeRow{node: n, depth: depth, parent: parent})
 			if n.expanded && len(n.Children) > 0 {
 				walk(n.Children, depth+1, n)
@@ -91,6 +123,20 @@ func flattenTree(roots []*TreeNode) []treeRow {
 	}
 	walk(roots, 0, nil)
 	return rows
+}
+
+// walkAllNodes visits every node reachable from roots, regardless of
+// current expand state (unlike flattenTree, which only descends into
+// expanded subtrees) — used by NewTreeView to tag EVERY node in the tree,
+// including ones hidden behind a currently-collapsed ancestor, with their
+// owning TreeView at construction time, so a direct SetExpanded call on any
+// of them (not merely the currently-visible ones) can find its owner and
+// invalidate immediately.
+func walkAllNodes(roots []*TreeNode, fn func(*TreeNode)) {
+	for _, n := range roots {
+		fn(n)
+		walkAllNodes(n.Children, fn)
+	}
 }
 
 // findAncestors returns the ancestor chain (root-to-parent order, EXCLUDING
@@ -178,6 +224,7 @@ func NewTreeView(face *text.Face, roots ...*TreeNode) *TreeView {
 	th := theme.Active()
 	t := &TreeView{face: face, roots: roots, colors: th.Color, metrics: th.Metric}
 	t.rowH = defaultRowHeight(face, th)
+	walkAllNodes(t.roots, func(n *TreeNode) { n.owner = t })
 	return t
 }
 
@@ -201,6 +248,14 @@ func (t *TreeView) Selected() *TreeNode {
 // click drilling down to it manually. Only fires InvalidateMeasure when an
 // ancestor's expanded state actually changed (n was already visible, or n is
 // nil, is a true no-op structurally, not just a silent one).
+//
+// No reachability check is performed: SetSelected does not verify n is
+// actually still reachable from t.roots (a foreign node never part of this
+// tree, or one removed from it since construction). findAncestors simply
+// returns nil for such a node, so no ancestor gets expanded, and since n
+// will never appear in t.rows, Render's `row.node == t.selected` comparison
+// never matches — the failure mode is a soft "no row highlighted", not a
+// panic or a rejected call.
 func (t *TreeView) SetSelected(n *TreeNode) *TreeView {
 	t.selected = n
 	changed := false
@@ -254,15 +309,24 @@ func (t *TreeView) toggle(node *TreeNode) {
 	t.InvalidateMeasure()
 }
 
-// expandRow expands row's node if it has children and is currently
-// collapsed; a no-op for an already-expanded node or a leaf — the keyboard
-// Right path ("Right expands (or no-op leaf)").
+// expandRow implements the keyboard Right path, per the WinUI TreeView
+// convention (adopted here as the normative v0 behavior): on a collapsed
+// node with children, it expands the node; on a node that already has
+// children AND is expanded, it instead moves the selection down to its
+// FIRST child (via selectUser — a genuine, user-driven selection change,
+// so OnChanged fires normally); on a leaf, it is a true no-op. The first
+// child is guaranteed to already be a real row in t.rows by the time this
+// runs (row.node.expanded is true, so flattenTree already walked into it).
 func (t *TreeView) expandRow(row treeRow) {
-	if len(row.node.Children) == 0 || row.node.expanded {
+	if len(row.node.Children) == 0 {
 		return
 	}
-	row.node.SetExpanded(true)
-	t.InvalidateMeasure()
+	if !row.node.expanded {
+		row.node.SetExpanded(true)
+		t.InvalidateMeasure()
+		return
+	}
+	t.selectUser(row.node.Children[0])
 }
 
 // collapseOrJumpToParent implements the keyboard Left path: collapses
@@ -294,7 +358,7 @@ func (t *TreeView) selectedRowIndex() int {
 	return -1
 }
 
-// MeasureContent recomputes t.rows (flattenTree(t.roots) — see its doc
+// MeasureContent recomputes t.rows (flattenTree(t.roots, t) — see its doc
 // comment for why measure, not arrange, is the right place: a TreeView's
 // content is fully known up front, unlike ListView's virtualized/unboundedly
 // long content, so its desired size is simply the real total content size,
@@ -305,7 +369,7 @@ func (t *TreeView) selectedRowIndex() int {
 // and rowH itself collapses to the nil-safe padding-only value (see
 // defaultRowHeight).
 func (t *TreeView) MeasureContent(available render.Size) render.Size {
-	t.rows = flattenTree(t.roots)
+	t.rows = flattenTree(t.roots, t)
 
 	var maxW float32
 	for _, row := range t.rows {
@@ -433,9 +497,14 @@ func (t *TreeView) OnPointer(e *input.PointerEvent) {
 // OnKey implements input.KeyHandler: Up/Down move the selection by one row
 // over the flattened rows (clamped via clampRowIndex — shared with
 // ListView, so Up/Down from no selection both land on row 0, mirroring
-// ListView.OnKey exactly); Right expands the selected row (expandRow);
-// Left collapses it, or jumps to its parent (collapseOrJumpToParent) — see
-// both methods' own doc comments. Ignored entirely for anything but
+// ListView.OnKey exactly, and so ALWAYS handled once there is at least one
+// row); Right expands the selected row, or descends to its first child if
+// already expanded (expandRow); Left collapses it, or jumps to its parent
+// (collapseOrJumpToParent) — see both methods' own doc comments. Unlike
+// Up/Down, Right/Left are only meaningful relative to a CURRENT selection,
+// so they are marked Handled only when one exists (idx >= 0); with no
+// selection, they fall through unhandled rather than silently doing
+// nothing while claiming to have acted. Ignored entirely for anything but
 // Action==Press, or when there are no rows at all.
 func (t *TreeView) OnKey(e *input.KeyEvent) {
 	if e.Action != input.Press {
@@ -457,12 +526,12 @@ func (t *TreeView) OnKey(e *input.KeyEvent) {
 	case input.KeyRight:
 		if idx >= 0 {
 			t.expandRow(t.rows[idx])
+			e.Handled = true
 		}
-		e.Handled = true
 	case input.KeyLeft:
 		if idx >= 0 {
 			t.collapseOrJumpToParent(t.rows[idx])
+			e.Handled = true
 		}
-		e.Handled = true
 	}
 }
