@@ -93,3 +93,46 @@ func TestStackVisibleZeroExtentChildKeepsGap(t *testing.T) {
 		t.Fatalf("middle child bounds=%v, want {X:0 Y:20 W:100 H:0}", got)
 	}
 }
+
+func TestStackPanelClearDetachesChildrenEmptiesPanelAndDirtiesMeasure(t *testing.T) {
+	a := NewFixed(10, 10, render.RGB(1, 2, 3))
+	b := NewFixed(10, 10, render.RGB(1, 2, 3))
+	sp := vstack(0, a, b)
+
+	// Clean the dirty flags first, so Clear's own invalidation is what we're
+	// actually observing (a fresh Element starts dirty regardless).
+	core.MeasureWidget(sp, render.Size{W: 100, H: 100})
+	core.ArrangeWidget(sp, render.Rect{X: 0, Y: 0, W: 100, H: 100})
+	if sp.NeedsLayout() {
+		t.Fatal("panel NeedsLayout() = true right after measure+arrange, want false (test setup broken)")
+	}
+
+	got := sp.Clear()
+	if got != sp {
+		t.Fatal("Clear() did not return the panel for chaining")
+	}
+
+	if len(sp.Children()) != 0 {
+		t.Fatalf("Children() after Clear = %d, want 0", len(sp.Children()))
+	}
+	if core.ParentOf(a) != nil {
+		t.Fatal("a still reports the panel as its parent after Clear")
+	}
+	if core.ParentOf(b) != nil {
+		t.Fatal("b still reports the panel as its parent after Clear")
+	}
+	if !sp.NeedsLayout() {
+		t.Fatal("panel NeedsLayout() = false after Clear, want true (measure invalidated)")
+	}
+}
+
+func TestStackPanelClearOnEmptyPanelIsHarmless(t *testing.T) {
+	sp := NewStackPanel(Vertical)
+	got := sp.Clear()
+	if got != sp {
+		t.Fatal("Clear() did not return the panel for chaining")
+	}
+	if len(sp.Children()) != 0 {
+		t.Fatalf("Children() after Clear on an already-empty panel = %d, want 0", len(sp.Children()))
+	}
+}

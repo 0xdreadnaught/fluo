@@ -51,6 +51,19 @@ func (s *StackPanel) SetGap(g float32) *StackPanel {
 	return s
 }
 
+// Clear removes all children, detaching each (core.SetParent(child, nil), so
+// none of them keep this panel recorded as their layout parent) and
+// invalidates measure. Returns s for chaining, matching Add/SetGap. A no-op
+// (still invalidates measure) when the panel already has no children.
+func (s *StackPanel) Clear() *StackPanel {
+	for _, child := range s.children {
+		core.SetParent(child, nil)
+	}
+	s.children = nil
+	s.InvalidateMeasure()
+	return s
+}
+
 // Children returns a copy of the children slice; mutating it does not
 // affect the panel.
 func (s *StackPanel) Children() []core.Widget {
