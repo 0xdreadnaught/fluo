@@ -8,7 +8,6 @@ package app
 import (
 	"fmt"
 	"runtime"
-	"time"
 
 	"github.com/go-gl/gl/v3.3-core/gl"
 	"github.com/go-gl/glfw/v3.3/glfw"
@@ -175,9 +174,9 @@ func Run(cfg Config, frame func(*Ctx)) error {
 
 	closeFn := func() { win.SetShouldClose(true) }
 
-	router := input.NewRouter()
+	surf := NewSurface()
+	router := surf.Router()
 	router.SetClipboard(glfwClipboard{win: win})
-	queue := timers.NewQueue(time.Now())
 	cursors := newStandardCursors()
 	curCursor := input.CursorArrow
 	curMods := input.Modifiers(0)
@@ -245,7 +244,11 @@ func Run(cfg Config, frame func(*Ctx)) error {
 		gl.ClearColor(0.125, 0.125, 0.14, 1)
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 
-		queue.Advance(time.Now())
+		// surf never has a root set here — Run's frame callback owns
+		// layout/render itself via Ctx (see fluo-demo/gallery) — so this
+		// call's only effect is advancing surf's Timers queue, same as the
+		// bare queue.Advance(time.Now()) this replaced.
+		surf.Frame(r, winW, winH, fbW, fbH)
 
 		mx, my := win.GetCursorPos()
 		ctx := &Ctx{
@@ -256,8 +259,8 @@ func Run(cfg Config, frame func(*Ctx)) error {
 				Pos:  render.Point{X: float32(mx), Y: float32(my)}, // raw cursor pos: same coord space as Size
 				Down: win.GetMouseButton(glfw.MouseButtonLeft) == glfw.Press,
 			},
-			Input:  router,
-			Timers: queue,
+			Input:  surf.Router(),
+			Timers: surf.Timers(),
 			Close:  closeFn,
 		}
 
