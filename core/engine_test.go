@@ -186,6 +186,8 @@ func (r *recordRenderer) End()                                       {}
 func (r *recordRenderer) FillRect(rect render.Rect, c render.Color)  {}
 func (r *recordRenderer) FillRoundedRect(rect render.Rect, radius float32, c render.Color) {
 }
+func (r *recordRenderer) DrawGradientRect(rect render.Rect, from, to render.Color, horizontal bool) {
+}
 func (r *recordRenderer) StrokeRoundedRect(rect render.Rect, radius, width float32, c render.Color) {
 }
 func (r *recordRenderer) DrawShadow(rect render.Rect, radius, blur float32, c render.Color) {}

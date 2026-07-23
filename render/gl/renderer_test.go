@@ -40,6 +40,13 @@ func TestFillRect(t *testing.T) {
 	})
 }
 
+func TestGradientRect(t *testing.T) {
+	testFrame(t, "gradient", 120, 80, func(r *glr.Renderer) {
+		r.DrawGradientRect(render.Rect{X: 8, Y: 8, W: 104, H: 28}, render.RGB(10, 36, 106), render.RGB(166, 202, 240), true) // horizontal
+		r.DrawGradientRect(render.Rect{X: 8, Y: 44, W: 104, H: 28}, render.RGB(0, 0, 0), render.RGB(255, 255, 255), false)   // vertical
+	})
+}
+
 func TestClip(t *testing.T) {
 	testFrame(t, "clip", 128, 96, func(r *glr.Renderer) {
 		r.PushClip(render.Rect{X: 20, Y: 20, W: 50, H: 30})

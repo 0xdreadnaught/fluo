@@ -78,6 +78,40 @@ func (rd *Renderer) quad(mode float32, dst, src render.Rect, c render.Color, rc 
 	rd.vert(dstTR, uvTR, c, rc, ex, mode)
 }
 
+// gradQuad emits one quad (2 triangles, 6 vertices) covering dst with a
+// distinct color per corner — solid mode (0), whiteTex — so the shader's
+// existing per-vertex color interpolation produces a smooth gradient with
+// no shader changes. cTL/cTR/cBL/cBR are the top-left/top-right/bottom-left/
+// bottom-right corner colors respectively.
+func (rd *Renderer) gradQuad(dst render.Rect, cTL, cTR, cBL, cBR render.Color) {
+	const mode = 0
+	tex := rd.whiteTex
+	if tex != rd.curTex {
+		rd.flush()
+		rd.curTex = tex
+	}
+	if len(rd.verts)/floatsPerVert+6 > maxVerts {
+		rd.flush()
+	}
+
+	dstTL := [2]float32{dst.X, dst.Y}
+	dstTR := [2]float32{dst.Right(), dst.Y}
+	dstBL := [2]float32{dst.X, dst.Bottom()}
+	dstBR := [2]float32{dst.Right(), dst.Bottom()}
+
+	var uv [2]float32
+	var rc [4]float32
+	var ex [2]float32
+
+	rd.vert(dstTL, uv, cTL, rc, ex, mode)
+	rd.vert(dstBL, uv, cBL, rc, ex, mode)
+	rd.vert(dstBR, uv, cBR, rc, ex, mode)
+
+	rd.vert(dstTL, uv, cTL, rc, ex, mode)
+	rd.vert(dstBR, uv, cBR, rc, ex, mode)
+	rd.vert(dstTR, uv, cTR, rc, ex, mode)
+}
+
 // flush uploads the pending vertices and issues a single draw call, then
 // resets the batch. It is a no-op when there is nothing pending.
 func (rd *Renderer) flush() {

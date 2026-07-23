@@ -139,6 +139,19 @@ func (rd *Renderer) FillRect(r render.Rect, c render.Color) {
 	rd.quad(0, r, render.Rect{}, c, [4]float32{}, [2]float32{}, rd.whiteTex)
 }
 
+// DrawGradientRect fills r with a linear gradient from `from` to `to`:
+// horizontal (left->right) when horizontal is true, else vertical
+// (top->bottom). It relies on gradQuad emitting one corner-colored quad;
+// the shader needs no changes since it already interpolates per-vertex
+// color across the fill.
+func (rd *Renderer) DrawGradientRect(r render.Rect, from, to render.Color, horizontal bool) {
+	if horizontal {
+		rd.gradQuad(r, from, to, from, to)
+		return
+	}
+	rd.gradQuad(r, from, from, to, to)
+}
+
 // rectParams returns the rect center and half-dimensions for shader SDF calculations.
 func rectParams(r render.Rect) [4]float32 {
 	return [4]float32{r.X + r.W/2, r.Y + r.H/2, r.W / 2, r.H / 2}
