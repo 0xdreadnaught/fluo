@@ -298,3 +298,32 @@ func TestTextBox(t *testing.T) {
 		core.RenderWidget(tb, r)
 	})
 }
+
+// TestSliderProgress is the Phase 5 Task 7 golden: a Slider at 0.6 (over the
+// default [0,1] range) stacked above a ProgressBar at 0.3, in a vertical
+// StackPanel gapped by PaddingM, filling a 200x60 frame.
+func TestSliderProgress(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "slider_progress", 200, 60, func(r *glr.Renderer) {
+		slider := controls.NewSlider().SetValue(0.6)
+		progress := controls.NewProgressBar().SetValue(0.3)
+
+		stack := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingM).
+			Add(slider, progress)
+
+		frame := render.Rect{X: 0, Y: 0, W: 200, H: 60}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(stack, render.Size{W: frame.W, H: frame.H})
+		desired := core.DesiredSizeOf(stack)
+		bounds := render.Rect{
+			X: (frame.W - desired.W) / 2, Y: (frame.H - desired.H) / 2,
+			W: desired.W, H: desired.H,
+		}
+		core.ArrangeWidget(stack, bounds)
+		core.RenderWidget(stack, r)
+	})
+}
