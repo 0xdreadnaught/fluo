@@ -448,3 +448,47 @@ func TestBindSelectedBothDirections(t *testing.T) {
 		t.Fatalf("checked states = %v %v after model push, want true false", a.Checked(), b.Checked())
 	}
 }
+
+// TestBindListSelectedBothDirectionsAndModelPushAutoScrolls proves both
+// binder directions AND the auto-scroll note in ListSelected's own doc
+// comment: a model push through the silent SetSelectedIndex path scrolls
+// the newly-selected row into view exactly like a user-driven keyboard move
+// would, not merely updating SelectedIndex() while leaving it off-screen.
+func TestBindListSelectedBothDirectionsAndModelPushAutoScrolls(t *testing.T) {
+	var p core.Property[int]
+	p.Set(-1)
+
+	items := NewList("0", "1", "2", "3", "4") // 5 rows * 48 = 240 content
+	lv := controls.NewListView(nil, items).SetRowHeight(48)
+	lv.SetWidth(100)
+	lv.SetHeight(100) // viewport 100: only ~2 rows visible at a time
+	ListSelected(&p, lv)
+
+	if lv.SelectedIndex() != -1 {
+		t.Fatalf("SelectedIndex() = %d after bind, want -1 (current value applied)", lv.SelectedIndex())
+	}
+
+	r := input.NewRouter()
+	r.SetRoot(lv)
+	layout(lv, render.Rect{X: 0, Y: 0, W: 100, H: 100})
+
+	// User click on row 0 (top of the viewport, scrolled to offset 0).
+	clickAt(r, render.Point{X: 10, Y: 10})
+	if p.Get() != 0 {
+		t.Fatalf("p.Get() = %d after user row click, want 0 (pushed into model)", p.Get())
+	}
+
+	// Model push to the LAST row (4), currently scrolled out of view (the
+	// viewport is still at/near offset 0 from the click above): must both
+	// update SelectedIndex() AND scroll it into view.
+	p.Set(4)
+	if lv.SelectedIndex() != 4 {
+		t.Fatalf("SelectedIndex() = %d after model push, want 4", lv.SelectedIndex())
+	}
+
+	layout(lv, render.Rect{X: 0, Y: 0, W: 100, H: 100}) // apply the pending auto-scroll
+	wantOffset := float32(5)*48 - 100                   // row 4's bottom edge minus viewport H
+	if got := lv.OffsetY(); got != wantOffset {
+		t.Fatalf("ListView offset after model push = %v, want %v (auto-scrolled into view)", got, wantOffset)
+	}
+}

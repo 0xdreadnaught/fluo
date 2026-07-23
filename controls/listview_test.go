@@ -286,6 +286,250 @@ func TestListViewAddReflectsAfterRelayout(t *testing.T) {
 	}
 }
 
+// --- Selection: click ---
+
+func TestListViewClickRowSelectsAndFiresOnChanged(t *testing.T) {
+	items := newFakeListItems("0", "1", "2", "3", "4")
+	l := NewListView(nil, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 100) // rows 0,1,2 visible (2 partial)
+
+	var got []int
+	l.OnChanged(func(v int) { got = append(got, v) })
+
+	r := input.NewRouter()
+	e := &input.PointerEvent{Action: input.Press, Pos: render.Point{X: 10, Y: 60}, Router: r}
+	l.OnPointer(e)
+
+	if !e.Handled {
+		t.Fatal("press on a real row not marked Handled")
+	}
+	if got, want := l.SelectedIndex(), 1; got != want {
+		t.Fatalf("SelectedIndex() = %d, want %d (y=60 falls in row 1, rowH 48)", got, want)
+	}
+	if len(got) != 1 || got[0] != 1 {
+		t.Fatalf("OnChanged calls = %v, want [1]", got)
+	}
+}
+
+func TestListViewClickSameRowTwiceFiresOnChangedOnce(t *testing.T) {
+	items := newFakeListItems("0", "1", "2")
+	l := NewListView(nil, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 500)
+
+	fires := 0
+	l.OnChanged(func(int) { fires++ })
+
+	r := input.NewRouter()
+	press := func() {
+		e := &input.PointerEvent{Action: input.Press, Pos: render.Point{X: 10, Y: 10}, Router: r}
+		l.OnPointer(e)
+	}
+	press()
+	press()
+
+	if l.SelectedIndex() != 0 {
+		t.Fatalf("SelectedIndex() = %d, want 0", l.SelectedIndex())
+	}
+	if fires != 1 {
+		t.Fatalf("OnChanged fired %d times for two clicks on the SAME row, want 1 (only real changes notify)", fires)
+	}
+}
+
+func TestListViewClickGutterDoesNotSelect(t *testing.T) {
+	items := newFakeListItems("0", "1", "2")
+	l := NewListView(nil, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 100) // 3*48=144 content > 100 viewport: thumb present
+
+	r := input.NewRouter()
+	// x inside the gutter strip, y below the thumb's own span (thumbH well
+	// under 100 - see TestListViewThumbGeometryMatchesScrollViewerConventions
+	// for the shared thumb-geometry math) so this exercises a genuine
+	// "click past the thumb, still in the gutter" case, not a thumb-drag.
+	e := &input.PointerEvent{Action: input.Press, Pos: render.Point{X: 100 - l.gutter/2, Y: 95}, Router: r}
+	l.OnPointer(e)
+
+	if e.Handled {
+		t.Fatal("gutter click (past the thumb) marked Handled, want false")
+	}
+	if l.SelectedIndex() != -1 {
+		t.Fatalf("SelectedIndex() = %d after gutter click, want -1 (unchanged)", l.SelectedIndex())
+	}
+}
+
+func TestListViewClickEmptySpaceBelowShortListDoesNotSelect(t *testing.T) {
+	items := newFakeListItems("0", "1") // 2*48=96 content, well under the viewport
+	l := NewListView(nil, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 500)
+
+	r := input.NewRouter()
+	e := &input.PointerEvent{Action: input.Press, Pos: render.Point{X: 10, Y: 200}, Router: r} // past both rows
+	l.OnPointer(e)
+
+	if e.Handled {
+		t.Fatal("click on empty space below a short list marked Handled, want false")
+	}
+	if l.SelectedIndex() != -1 {
+		t.Fatalf("SelectedIndex() = %d after empty-space click, want -1 (unchanged)", l.SelectedIndex())
+	}
+}
+
+// --- Selection: SetSelectedIndex (silent, clamped) ---
+
+func TestListViewSetSelectedIndexIsSilentAndClamped(t *testing.T) {
+	items := newFakeListItems("0", "1", "2")
+	l := NewListView(nil, items).SetRowHeight(48)
+
+	fired := false
+	l.OnChanged(func(int) { fired = true })
+
+	l.SetSelectedIndex(1)
+	if got := l.SelectedIndex(); got != 1 {
+		t.Fatalf("SelectedIndex() = %d, want 1", got)
+	}
+
+	l.SetSelectedIndex(99) // clamps to n-1
+	if got := l.SelectedIndex(); got != 2 {
+		t.Fatalf("SelectedIndex() = %d after over-range SetSelectedIndex(99), want 2 (clamped to n-1)", got)
+	}
+
+	l.SetSelectedIndex(-5) // -1 is an explicit, always-valid "no selection"
+	if got := l.SelectedIndex(); got != -1 {
+		t.Fatalf("SelectedIndex() = %d after under-range SetSelectedIndex(-5), want -1", got)
+	}
+
+	if fired {
+		t.Fatal("SetSelectedIndex fired OnChanged, want fully silent (programmatic setter)")
+	}
+}
+
+// --- Selection: keyboard (focused) ---
+
+func TestListViewKeyboardUpDownHomeEndWhenFocused(t *testing.T) {
+	items := newFakeListItems("0", "1", "2", "3", "4")
+	l := NewListView(nil, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 500) // all 5 rows visible, nothing to auto-scroll
+	l.OnFocusChanged(true)
+
+	var got []int
+	l.OnChanged(func(v int) { got = append(got, v) })
+
+	press := func(k input.Key) {
+		e := &input.KeyEvent{Action: input.Press, Key: k}
+		l.OnKey(e)
+		if !e.Handled {
+			t.Fatalf("key %v not marked Handled", k)
+		}
+	}
+
+	press(input.KeyDown) // no prior selection -> lands on row 0
+	if got := l.SelectedIndex(); got != 0 {
+		t.Fatalf("SelectedIndex() after first Down = %d, want 0", got)
+	}
+	press(input.KeyDown)
+	if got := l.SelectedIndex(); got != 1 {
+		t.Fatalf("SelectedIndex() after second Down = %d, want 1", got)
+	}
+	press(input.KeyUp)
+	if got := l.SelectedIndex(); got != 0 {
+		t.Fatalf("SelectedIndex() after Up = %d, want 0", got)
+	}
+	press(input.KeyUp) // clamped: stays at 0, does not go to -1
+	if got := l.SelectedIndex(); got != 0 {
+		t.Fatalf("SelectedIndex() after Up at row 0 = %d, want clamped 0 (never -1)", got)
+	}
+	press(input.KeyEnd)
+	if got := l.SelectedIndex(); got != 4 {
+		t.Fatalf("SelectedIndex() after End = %d, want 4 (last row)", got)
+	}
+	press(input.KeyHome)
+	if got := l.SelectedIndex(); got != 0 {
+		t.Fatalf("SelectedIndex() after Home = %d, want 0", got)
+	}
+
+	want := []int{0, 1, 0, 4, 0}
+	if len(got) != len(want) {
+		t.Fatalf("OnChanged calls = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("OnChanged calls = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestListViewSelectLastRowAutoScrollsIntoView(t *testing.T) {
+	items := newFakeListItems(make([]string, 20)...) // 20 rows: 20*48=960 content
+	l := NewListView(nil, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 100) // viewport 100: rows 0..2 visible, offset 0
+
+	if got := l.offset; got != 0 {
+		t.Fatalf("initial offset = %v, want 0", got)
+	}
+
+	l.OnFocusChanged(true)
+	e := &input.KeyEvent{Action: input.Press, Key: input.KeyEnd}
+	l.OnKey(e) // selects the last row (19), off-screen while scrolled to top
+
+	layoutListView(l, 0, 0, 100, 100) // re-layout applies the pending rawOffset
+
+	if got := l.SelectedIndex(); got != 19 {
+		t.Fatalf("SelectedIndex() = %d, want 19", got)
+	}
+	wantOffset := float32(20)*48 - 100 // last row's bottom edge minus viewport H
+	if got := l.offset; got != wantOffset {
+		t.Fatalf("offset after auto-scroll = %v, want %v (last row fully visible)", got, wantOffset)
+	}
+}
+
+// --- Selection: pool re-color ---
+
+func TestListViewPoolRecolorsSelectedRow(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	items := newFakeListItems("0", "1", "2")
+	l := NewListView(nil, items).SetRowHeight(48)
+	l.SetSelectedIndex(1)
+	layoutListView(l, 0, 0, 100, 500) // all rows realized
+
+	if len(l.pool) != 3 {
+		t.Fatalf("pool size = %d, want 3", len(l.pool))
+	}
+	for i, tb := range l.pool {
+		want := th.Color.TextPrimary
+		if i == 1 {
+			want = th.Color.SelectionForeground
+		}
+		if got := tb.Color(); got != want {
+			t.Fatalf("pool[%d].Color() = %v, want %v (selected == %d)", i, got, want, l.SelectedIndex())
+		}
+	}
+}
+
+func TestListViewPoolRecolorsAfterSelectionChangesWithoutRetext(t *testing.T) {
+	// Guards ArrangeContent's unconditional-recolor requirement: a selection
+	// change alone (no text change) must still repaint the right rows on the
+	// NEXT arrange pass, even though re-texting itself stays conditional.
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	items := newFakeListItems("0", "1", "2")
+	l := NewListView(nil, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 500)
+
+	l.SetSelectedIndex(2)
+	layoutListView(l, 0, 0, 100, 500)
+
+	if got, want := l.pool[2].Color(), th.Color.SelectionForeground; got != want {
+		t.Fatalf("pool[2].Color() = %v, want %v", got, want)
+	}
+	if got, want := l.pool[0].Color(), th.Color.TextPrimary; got != want {
+		t.Fatalf("pool[0].Color() = %v, want %v", got, want)
+	}
+}
+
 // --- Dispose ---
 
 func TestListViewDisposeStopsInvalidation(t *testing.T) {

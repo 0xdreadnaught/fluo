@@ -155,3 +155,28 @@ func Selected(p *core.Property[int], g *controls.RadioGroup) (cancel func()) {
 		g.OnChanged(nil)
 	}
 }
+
+// ListSelected two-way binds p to lv (see the package doc comment for the
+// shared mechanics). While bound, ListSelected OWNS lv's OnChanged slot,
+// replacing any previously set callback.
+//
+// Clamp-divergence caveat: if p's value falls outside the list's valid
+// range, the control silently displays a clamped selection (or none, for
+// -1) while p retains the unclamped one.
+//
+// Auto-scroll note: lv.SetSelectedIndex — the silent setter this binder's
+// model-push direction calls, both on the initial apply and on every
+// subsequent p.OnChange — ALSO scrolls the newly-selected row into view
+// (see ListView.scrollIntoView's doc comment). So unlike every other
+// two-way binder above, a ListSelected model push doesn't just silently
+// update what the control reports selected — it can also move the
+// viewport, exactly as a user-driven Home/End/Up/Down move would.
+func ListSelected(p *core.Property[int], lv *controls.ListView) (cancel func()) {
+	lv.SetSelectedIndex(p.Get())
+	lv.OnChanged(func(v int) { p.Set(v) })
+	sub := p.OnChange(func(_, v int) { lv.SetSelectedIndex(v) })
+	return func() {
+		sub()
+		lv.OnChanged(nil)
+	}
+}

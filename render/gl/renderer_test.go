@@ -1,11 +1,13 @@
 package gl_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/go-gl/gl/v3.3-core/gl"
 	"golang.org/x/image/font/gofont/goregular"
 
+	"github.com/0xdreadnaught/fluo/bind"
 	"github.com/0xdreadnaught/fluo/controls"
 	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/input"
@@ -380,5 +382,48 @@ func TestComboOpen(t *testing.T) {
 		core.ArrangeWidget(host, frame)
 
 		core.RenderWidget(host, r)
+	})
+}
+
+// TestListView is the Phase 7 Task 3 golden: a ListView of 12 items
+// ("Item 01".."Item 12"), index 3 ("Item 04") selected — showing the
+// SelectionBackground/SelectionForeground row highlight — scrolled to the
+// top (via the Task 3 ScrollTo addition, mirroring ScrollViewer.ScrollTo)
+// so the first several rows are visible with the scroll thumb showing
+// (content taller than the 140px-high viewport), inside a 200x160 frame.
+// Sized and positioned exactly like TestScrollClipRender's ScrollViewer
+// golden: explicit SetWidth/SetHeight on the control, placed via Canvas at
+// a fixed (10,10) offset rather than measured-and-centered.
+func TestListView(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "listview", 200, 160, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		items := bind.NewList[string]()
+		for i := 1; i <= 12; i++ {
+			items.Add(fmt.Sprintf("Item %02d", i))
+		}
+
+		lv := controls.NewListView(face, items)
+		lv.SetWidth(180)
+		lv.SetHeight(140)
+		lv.SetSelectedIndex(3)
+		lv.ScrollTo(0) // pin to the top: rows 1.. visible, "Item 04" highlighted
+
+		root := controls.NewCanvas().Add(lv, 10, 10)
+
+		frame := render.Rect{X: 0, Y: 0, W: 200, H: 160}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(root, frame)
+		core.RenderWidget(root, r)
 	})
 }
