@@ -335,9 +335,9 @@ func (g *DataGrid) ArrangeContent(bounds render.Rect) {
 		for c := 0; c < numCols; c++ {
 			slot := row*numCols + c
 
-			var text string
+			var cellText string
 			if g.columns[c].Value != nil {
-				text = g.columns[c].Value(rowIdx)
+				cellText = g.columns[c].Value(rowIdx)
 			}
 
 			var tb *TextBlock
@@ -347,15 +347,15 @@ func (g *DataGrid) ArrangeContent(bounds render.Rect) {
 				// doc comment for why unconditional SetText would leave
 				// this grid spuriously measure-dirty).
 				tb = g.pool[slot]
-				if tb.Text() != text {
-					tb.SetText(text)
+				if tb.Text() != cellText {
+					tb.SetText(cellText)
 				}
 			} else {
 				// Grow: construct WITH the correct text directly, before
 				// SetParent, so a freshly grown slot never fires
 				// TextBlock's invalidate-parent hook against a not-yet-set
 				// parent.
-				tb = NewTextBlock(g.face, text)
+				tb = NewTextBlock(g.face, cellText)
 				core.SetParent(tb, g)
 				g.pool = append(g.pool, tb)
 			}

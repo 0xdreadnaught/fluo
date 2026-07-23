@@ -77,6 +77,10 @@ type DialogSpec struct {
 // modal popup means OverlayHost already holds that capture — see
 // OverlayHost's own type doc comment.)
 //
+// CAUTION: The dialog steals keyboard focus to its scrim and does NOT
+// restore prior focus on close (v0). Callers needing focus restoration
+// must track and re-apply the prior focused widget themselves.
+//
 // A card button click closes the dialog (via OverlayHost.ClosePopup) and
 // records the matching result (DialogPrimary/DialogSecondary) before doing
 // so; Escape records DialogDismissed the same way. Either path converges on

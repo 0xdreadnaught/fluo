@@ -213,6 +213,11 @@ func (l *ListView) scrollIntoView(index int) {
 }
 
 // SelectedIndex returns the current selection, or -1 if none.
+// CAUTION: ListView does NOT re-clamp or track selection across external
+// list mutations. After a RemoveAt/Remove on the bound list, SelectedIndex()
+// may name a shifted or out-of-range logical row with no OnChanged fired.
+// Callers needing stable selection should re-set it (via SetSelectedIndex)
+// after mutating the list.
 func (l *ListView) SelectedIndex() int {
 	return l.selected
 }
@@ -228,6 +233,8 @@ func (l *ListView) SelectedIndex() int {
 // text color must be recomputed even when the clamped index is unchanged
 // from before (matching Slider.setValueSilent's own "assign, no change
 // tracking" simplicity), and scrollIntoView needs a re-layout to apply.
+//
+// CAUTION: See SelectedIndex's doc comment on list-mutation caveats.
 func (l *ListView) SetSelectedIndex(i int) *ListView {
 	l.selected = clampSelectedIndex(i, l.count())
 	l.scrollIntoView(l.selected)
@@ -357,7 +364,7 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 
 	for i := 0; i < n; i++ {
 		idx := first + i
-		text := l.items.At(idx)
+		rowText := l.items.At(idx)
 
 		var tb *TextBlock
 		if i < len(l.pool) {
@@ -370,8 +377,8 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 			// re-texting (see the sibling growth branch below for why a
 			// brand-new pool entry avoids this by construction).
 			tb = l.pool[i]
-			if tb.Text() != text {
-				tb.SetText(text)
+			if tb.Text() != rowText {
+				tb.SetText(rowText)
 			}
 		} else {
 			// Grow: construct WITH the correct text directly (never via ""
@@ -379,7 +386,7 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 			// fires TextBlock's own invalidate-parent hook — SetParent
 			// below runs after construction, so even if it did fire, there
 			// would be no parent yet to climb into.
-			tb = NewTextBlock(l.face, text)
+			tb = NewTextBlock(l.face, rowText)
 			core.SetParent(tb, l)
 			l.pool = append(l.pool, tb)
 		}
