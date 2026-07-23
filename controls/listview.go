@@ -387,6 +387,13 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 			// below runs after construction, so even if it did fire, there
 			// would be no parent yet to climb into.
 			tb = NewTextBlock(l.face, rowText)
+			// Center the label vertically within the row: the row is
+			// rowH = LineHeight + 2*PaddingS tall, so without this the text
+			// top-aligns and all the slack falls below it — visible once a
+			// selection band is drawn behind the row. Set once at creation
+			// (SetAlign invalidates arrange; setting it every pass would
+			// re-dirty layout every frame).
+			tb.SetAlign(core.Stretch, core.Center)
 			core.SetParent(tb, l)
 			l.pool = append(l.pool, tb)
 		}

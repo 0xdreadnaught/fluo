@@ -110,10 +110,13 @@ func TestDataGridArrangeResolvesColumnsAgainstViewportWidth(t *testing.T) {
 
 	headerH := defaultRowHeight(face, theme.Active())
 	numCols := 3
-	// pool[0] is row0/col0.
+	// pool[0] is row0/col0. Its text is vertically centered within the row
+	// (row 0's rect top is headerH, height rowH), so Y = headerH+(rowH-textH)/2.
+	rowH := defaultRowHeight(face, theme.Active())
 	b := g.pool[0].Bounds()
-	if b.X != 0 || b.Y != headerH || b.W != 80 {
-		t.Fatalf("pool[0].Bounds() = %v, want X=0 Y=%v W=80", b, headerH)
+	wantY := headerH + (rowH-b.H)/2
+	if b.X != 0 || b.Y != wantY || b.W != 80 {
+		t.Fatalf("pool[0].Bounds() = %v, want X=0 Y=%v W=80", b, wantY)
 	}
 	// pool[2] is row0/col2 (Age, Px 60), at the third column offset.
 	b2 := g.pool[2].Bounds()

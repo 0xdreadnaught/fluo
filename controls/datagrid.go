@@ -356,6 +356,11 @@ func (g *DataGrid) ArrangeContent(bounds render.Rect) {
 				// TextBlock's invalidate-parent hook against a not-yet-set
 				// parent.
 				tb = NewTextBlock(g.face, cellText)
+				// Center cell text vertically in its row so body cells line
+				// up with the header (whose titles are centered in Render);
+				// without this the cells top-align and sit above the header
+				// baseline. Set once at creation (SetAlign dirties arrange).
+				tb.SetAlign(core.Stretch, core.Center)
 				core.SetParent(tb, g)
 				g.pool = append(g.pool, tb)
 			}
