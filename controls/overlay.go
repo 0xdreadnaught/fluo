@@ -70,6 +70,16 @@ type OverlayHost struct {
 	// changes: a new popup opens (ShowPopup) or any popup closes
 	// (ClosePopup), since either invalidates whatever it was tracking.
 	popupHover []core.Widget
+
+	// popupHoverGen counts every write to popupHover (both the resets in
+	// ShowPopup/ClosePopup and diffPopupHover's own final assignment), used
+	// by diffPopupHover to detect REENTRANT mutation: delivering a
+	// synthesized Enter/Leave can itself call ShowPopup/ClosePopup
+	// synchronously (e.g. a ToolTipArea with no timers.Queue wired shows or
+	// hides its tip immediately, from inside OnPointer), which would
+	// otherwise be clobbered by diffPopupHover's own stale final write once
+	// the delivery loop returns to it — see diffPopupHover's doc comment.
+	popupHoverGen int
 }
 
 // NewOverlayHost returns an empty OverlayHost with no content and no popups.
@@ -127,8 +137,12 @@ func (h *OverlayHost) ShowPopup(popup core.Widget, anchor render.Rect, onDismiss
 	// popup is now topmost: whatever popupHover was tracking (if anything)
 	// belonged to the previous topmost (or nothing, if this is the first
 	// popup) and is stale either way — reset silently, per the field's doc
-	// comment.
+	// comment. Bumping popupHoverGen here is what lets a diffPopupHover call
+	// further up the stack (if ShowPopup was itself called from a
+	// synthesized Enter/Leave — see popupHoverGen's doc comment) detect that
+	// its own pending final write is now stale and must not clobber this.
 	h.popupHover = nil
+	h.popupHoverGen++
 	if h.router != nil {
 		h.router.Capture(h)
 	}
@@ -163,8 +177,11 @@ func (h *OverlayHost) ClosePopup(popup core.Widget) {
 	h.popups = append(h.popups[:idx], h.popups[idx+1:]...)
 	// The closed popup (or, if idx wasn't the top, the new topmost) may
 	// differ from whatever popupHover was tracking — reset silently, per the
-	// field's doc comment.
+	// field's doc comment. Bumping popupHoverGen (see its doc comment) is
+	// what lets a diffPopupHover call further up the stack detect this and
+	// skip its own now-stale final write.
 	h.popupHover = nil
+	h.popupHoverGen++
 
 	core.SetParent(popup, nil)
 	if h.router != nil {
@@ -374,18 +391,42 @@ func (h *OverlayHost) OnPointer(e *input.PointerEvent) {
 // OverlayHost's modal capture bypasses entirely while any popup is open —
 // see the type doc comment's "Hover" paragraph for why Router's own
 // mechanism never runs during that window).
+//
+// REENTRANCY: delivering a synthesized Enter/Leave below can itself call
+// ShowPopup/ClosePopup synchronously — e.g. a ToolTipArea with no
+// timers.Queue wired shows (Enter) or hides (Leave) its tip immediately,
+// right there inside OnPointer — and either one resets h.popupHover (and
+// bumps popupHoverGen) out from under this call, for whatever is now the
+// (possibly entirely different) topmost popup. So: every read of "the
+// previous path" below uses old, a snapshot taken at entry, NEVER h.popupHover
+// directly (which may have already been overwritten by the time a later
+// iteration of either loop runs) — and the final write only actually commits
+// newPath if h.popupHoverGen still equals the snapshot taken at entry, i.e.
+// nothing nested changed it in the meantime. Skipping that write when it
+// doesn't hold is load-bearing: committing newPath (rooted at THIS call's
+// popup) over whatever a nested ShowPopup/ClosePopup just installed (rooted
+// at a different popup, or nil) would desync popupHover from reality — the
+// concrete failure this guards is a phantom Leave closing a tooltip that a
+// nested ShowPopup just opened, on the very next Move.
 func (h *OverlayHost) diffPopupHover(newPath []core.Widget) {
-	for _, w := range h.popupHover {
+	old := h.popupHover
+	startGen := h.popupHoverGen
+
+	for _, w := range old {
 		if !containsPopupWidget(newPath, w) {
 			deliverPopupHoverEvent(w, input.Leave, h.router)
 		}
 	}
 	for _, w := range newPath {
-		if !containsPopupWidget(h.popupHover, w) {
+		if !containsPopupWidget(old, w) {
 			deliverPopupHoverEvent(w, input.Enter, h.router)
 		}
 	}
-	h.popupHover = newPath
+
+	if h.popupHoverGen == startGen {
+		h.popupHover = newPath
+		h.popupHoverGen++
+	}
 }
 
 // deliverPopupHoverEvent delivers a direct (non-bubbling) Enter or Leave to
