@@ -6,6 +6,7 @@ import (
 	"github.com/0xdreadnaught/fluo/render"
 	"github.com/0xdreadnaught/fluo/text"
 	"github.com/0xdreadnaught/fluo/theme"
+	"github.com/0xdreadnaught/fluo/timers"
 )
 
 // Button is a clickable, focusable, token-styled push button showing a text
@@ -27,6 +28,17 @@ type Button struct {
 
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
+
+	// animated and timerQueue gate the opt-in cross-fade behavior (see
+	// SetAnimated/SetTimers): fillAnim is only ever consulted (and lazily
+	// created) when BOTH are set — nil timerQueue is the "SetAnimated(true)
+	// but no queue wired yet" instant fallback, matching TextBox's
+	// caret-blink wiring pattern. Default zero values (false, nil) leave
+	// Render's fill resolution byte-identical to before this feature
+	// existed.
+	animated   bool
+	timerQueue *timers.Queue
+	fillAnim   *colorAnim
 }
 
 // initButton fills b in place: builds the label, marks it enabled, captures
@@ -84,6 +96,55 @@ func (b *Button) SetEnabled(v bool) *Button {
 // (e.g. overriding its color).
 func (b *Button) Label() *TextBlock {
 	return b.label
+}
+
+// SetAnimated opts this button into cross-fading its fill (rest/hover/
+// pressed/disabled) transitions over colorAnimDuration (~120ms, EaseOut)
+// instead of snapping — PROVIDED a timers.Queue has also been wired via
+// SetTimers; see SetTimers's doc comment for the "animated but no queue"
+// instant fallback. Default false, matching fluo's opt-in-animation
+// convention: every Button built before this feature existed (nothing
+// calls SetAnimated) renders with today's exact snap-to-state colors,
+// byte-identical, so no existing test or golden needs to change. Purely
+// visual: no invalidation needed — the tween is driven by timerQueue's own
+// Advance, and the host redraws every frame regardless (see Render).
+func (b *Button) SetAnimated(v bool) *Button {
+	b.animated = v
+	return b
+}
+
+// SetTimers wires q as the driver for this button's animated fill
+// cross-fades (see SetAnimated); has no effect unless SetAnimated(true) is
+// also set. Passing nil detaches any previously wired queue, reverting to
+// the instant (snap) fallback even with SetAnimated(true) still set — the
+// same "nil detaches" convention as TextBox.SetTimers. A button that is
+// SetAnimated(true) but never had SetTimers called (timerQueue stays nil)
+// behaves exactly like an unanimated one: instant, current behavior.
+func (b *Button) SetTimers(q *timers.Queue) *Button {
+	b.timerQueue = q
+	return b
+}
+
+// animatedFill resolves the fill Render should actually paint: fill
+// unchanged unless this button is BOTH animated and has a timers.Queue
+// wired, in which case fill is threaded through b.fillAnim (lazily created
+// on first use, seeded at fill so the very first animated frame never
+// fades in from a zero-value color) so state-driven fill changes (e.g.
+// rest->hover) cross-fade instead of snapping. Called once per Render with
+// the state's target fill; colorAnim.SetTarget's own same-target guard
+// means repeated calls across steady-state frames (nothing about the
+// button's state changed) are cheap no-ops rather than restarting a tween
+// every frame.
+func (b *Button) animatedFill(fill render.Color) render.Color {
+	if !b.animated || b.timerQueue == nil {
+		return fill
+	}
+	if b.fillAnim == nil {
+		b.fillAnim = newColorAnim(fill)
+	} else {
+		b.fillAnim.SetTarget(b.timerQueue, fill)
+	}
+	return b.fillAnim.Current()
 }
 
 // padding returns the content inset: PaddingL horizontal, PaddingM vertical.
@@ -176,9 +237,12 @@ func (b *Button) stateColors() (fill, stroke, label render.Color) {
 
 // Render paints the button's fill and (if visible) stroke, and recolors the
 // label for the current state; children (the label) render separately via
-// core.RenderWidget.
+// core.RenderWidget. The fill is resolved through animatedFill, which is a
+// no-op pass-through unless SetAnimated(true) and a non-nil SetTimers queue
+// are both set (see animatedFill).
 func (b *Button) Render(r render.Renderer) {
 	fill, stroke, labelColor := b.stateColors()
+	fill = b.animatedFill(fill)
 	bounds := b.Bounds()
 	radius := b.metrics.ControlCornerRadius
 
