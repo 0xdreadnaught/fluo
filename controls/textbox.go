@@ -118,7 +118,10 @@ func (t *TextBox) Text() string {
 // calls InvalidateArrange (carry-in fix A) so hscroll re-clamps to the new
 // caret position on the next layout pass; InvalidateMeasure is NOT needed
 // since MeasureContent's desired size (textBoxDefaultWidth, fixed) never
-// depends on the text content.
+// depends on the text content. Also restarts the caret blink phase
+// (restartBlink), matching every other caret-moving mutation — but only on
+// the real-change path; the no-op-on-equal path above leaves the blink
+// phase (like everything else) untouched.
 func (t *TextBox) SetText(s string) *TextBox {
 	if s == string(t.runes) {
 		return t
@@ -127,6 +130,7 @@ func (t *TextBox) SetText(s string) *TextBox {
 	t.caret = len(t.runes)
 	t.anchor = t.caret
 	t.InvalidateArrange()
+	t.restartBlink()
 	if t.onChanged != nil {
 		t.onChanged(s)
 	}
@@ -166,18 +170,33 @@ func (t *TextBox) OnChanged(fn func(string)) *TextBox {
 // always stops the previously scheduled timer first, so a superseded queue
 // can never keep toggling this textbox's caret after the fact.
 func (t *TextBox) SetTimers(q *timers.Queue) *TextBox {
+	t.timerQueue = q
+	t.restartBlink()
+	return t
+}
+
+// restartBlink resets caretVisible to true and, if a timers.Queue is
+// currently wired (t.timerQueue), stops whatever blink timer is running and
+// starts a fresh one — restarting the blink phase from "visible" rather
+// than wherever it happened to be. Called from SetTimers (wiring a new
+// queue), OnFocusChanged(true) (regaining focus), and every caret-affecting
+// mutation (SetCaret, Select, replaceRange, and therefore SetText) so the
+// caret is always visible the instant it moves, never left mid-blink-off
+// from before the input landed. A nil t.timerQueue leaves blinkTimer nil
+// (solid-caret mode, caretVisible is set true but caretShown() ignores it
+// regardless per its own doc comment) — restartBlink is safe to call
+// unconditionally.
+func (t *TextBox) restartBlink() {
 	if t.blinkTimer != nil {
 		t.blinkTimer.Stop()
 		t.blinkTimer = nil
 	}
-	t.timerQueue = q
 	t.caretVisible = true
-	if q != nil {
-		t.blinkTimer = q.Every(caretBlinkPeriod, func() {
+	if t.timerQueue != nil {
+		t.blinkTimer = t.timerQueue.Every(caretBlinkPeriod, func() {
 			t.caretVisible = !t.caretVisible
 		})
 	}
-	return t
 }
 
 // Caret returns the current caret rune index (0..len(runes)).
@@ -197,12 +216,15 @@ func (t *TextBox) Selection() (start, end int) {
 // SetCaret moves the caret to rune index i (clamped to [0, len(runes)]) and
 // clears any selection (anchor becomes equal to the new caret). Carry-in fix
 // A: calls InvalidateArrange so hscroll re-clamps to the new caret position
-// on the next layout pass, under the gallery's NeedsLayout guard.
+// on the next layout pass, under the gallery's NeedsLayout guard. Also
+// restarts the caret blink phase (restartBlink) so the caret is immediately
+// visible at its new position rather than possibly stuck mid-blink-off.
 func (t *TextBox) SetCaret(i int) *TextBox {
 	i = clampInt(i, 0, len(t.runes))
 	t.caret = i
 	t.anchor = i
 	t.InvalidateArrange()
+	t.restartBlink()
 	return t
 }
 
@@ -211,11 +233,13 @@ func (t *TextBox) SetCaret(i int) *TextBox {
 // normalizes), and Caret() reports the raw caret argument afterward — it is
 // the actual caret position, which is not necessarily the normalized range
 // start. Carry-in fix A: calls InvalidateArrange so hscroll re-clamps to the
-// new caret position on the next layout pass.
+// new caret position on the next layout pass. Also restarts the caret blink
+// phase (restartBlink), matching SetCaret.
 func (t *TextBox) Select(anchor, caret int) *TextBox {
 	t.anchor = clampInt(anchor, 0, len(t.runes))
 	t.caret = clampInt(caret, 0, len(t.runes))
 	t.InvalidateArrange()
+	t.restartBlink()
 	return t
 }
 
@@ -241,6 +265,11 @@ func (t *TextBox) Select(anchor, caret int) *TextBox {
 // OnChanged is fired unconditionally here rather than re-checking for a
 // no-op — unlike SetText, which the caller invokes for arbitrary (possibly
 // unchanged) input and must guard itself.
+//
+// Also restarts the caret blink phase (restartBlink): every edit moves the
+// caret, so — matching SetCaret/Select — the caret must be immediately
+// visible at its new position rather than possibly stuck mid-blink-off from
+// before the keystroke landed.
 func (t *TextBox) replaceRange(start, end int, s string) {
 	ins := []rune(s)
 	next := make([]rune, 0, len(t.runes)-(end-start)+len(ins))
@@ -251,6 +280,7 @@ func (t *TextBox) replaceRange(start, end int, s string) {
 	t.caret = start + len(ins)
 	t.anchor = t.caret
 	t.InvalidateArrange()
+	t.restartBlink()
 	if t.onChanged != nil {
 		t.onChanged(string(t.runes))
 	}
@@ -387,8 +417,25 @@ func (t *TextBox) AcceptsFocus() bool {
 
 // OnFocusChanged implements input.FocusHandler, tracking focus for the
 // focused border color, the focus-ring overlay, and caret visibility.
+// Gaining focus restarts the blink phase (restartBlink) so the caret starts
+// out solidly visible rather than picking up mid-blink; losing focus stops
+// the blink timer outright (caretShown() already returns false while
+// unfocused regardless, but there is no reason to keep a hidden control's
+// timer ticking every caretBlinkPeriod, and a bare Stop — without also
+// clearing blinkTimer — would leave a stale, already-stopped *Timer
+// reference behind that the next restartBlink call would redundantly
+// re-Stop). A later refocus (with a timers.Queue still wired) restarts the
+// timer fresh via restartBlink.
 func (t *TextBox) OnFocusChanged(focused bool) {
 	t.focused = focused
+	if focused {
+		t.restartBlink()
+		return
+	}
+	if t.blinkTimer != nil {
+		t.blinkTimer.Stop()
+		t.blinkTimer = nil
+	}
 }
 
 // lineHeight returns face.LineHeight(), or 0 for a nil face (matching

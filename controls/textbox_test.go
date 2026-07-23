@@ -831,3 +831,108 @@ func TestTextBoxSetTextEqualIsCompleteNoop(t *testing.T) {
 		t.Fatalf("Caret() = %d, want 2 (untouched by the no-op SetText)", c)
 	}
 }
+
+// --- Fix: caret blink phase resets on input / focus lifecycle ---
+
+func TestTextBoxKeystrokeShowsCaretImmediatelyMidBlinkOff(t *testing.T) {
+	start := time.Now()
+	q := timers.NewQueue(start)
+	tb, r := newFocusedTextBox(t, "hi")
+	tb.SetTimers(q)
+
+	q.Advance(start.Add(caretBlinkPeriod))
+	if tb.caretVisible {
+		t.Fatal("test setup: expected caretVisible false after one blink period")
+	}
+
+	r.KeyDown(0, 'x', 0) // typed rune: a caret-affecting mutation via replaceRange
+
+	if !tb.caretVisible {
+		t.Fatal("caretVisible = false immediately after a keystroke landed mid-blink-off, want true (phase reset)")
+	}
+	if !tb.caretShown() {
+		t.Fatal("caretShown() = false immediately after the keystroke, want true")
+	}
+}
+
+func TestTextBoxSetCaretAndSelectResetBlinkPhaseMidOff(t *testing.T) {
+	start := time.Now()
+	q := timers.NewQueue(start)
+	tb, _ := newFocusedTextBox(t, "hello")
+	tb.SetTimers(q)
+
+	q.Advance(start.Add(caretBlinkPeriod))
+	if tb.caretVisible {
+		t.Fatal("test setup: expected caretVisible false after one blink period")
+	}
+	tb.SetCaret(2)
+	if !tb.caretVisible {
+		t.Fatal("caretVisible = false immediately after SetCaret, want true (phase reset)")
+	}
+
+	// SetCaret's restartBlink rescheduled the timer for start+2*period (one
+	// period from when SetCaret ran); advance past that to turn it off again.
+	q.Advance(start.Add(2 * caretBlinkPeriod))
+	if tb.caretVisible {
+		t.Fatal("test setup: expected caretVisible false after another blink period")
+	}
+	tb.Select(0, 3)
+	if !tb.caretVisible {
+		t.Fatal("caretVisible = false immediately after Select, want true (phase reset)")
+	}
+}
+
+func TestTextBoxBlinkStopsOnUnfocusAndResetsOnRefocus(t *testing.T) {
+	start := time.Now()
+	q := timers.NewQueue(start)
+	tb, r := newFocusedTextBox(t, "hi")
+	tb.SetTimers(q)
+
+	if q.Len() != 1 {
+		t.Fatalf("q.Len() right after SetTimers while focused = %d, want 1", q.Len())
+	}
+
+	q.Advance(start.Add(caretBlinkPeriod))
+	if tb.caretVisible {
+		t.Fatal("test setup: expected caretVisible false after one blink period")
+	}
+
+	r.Focus(nil) // blur
+	if q.Len() != 0 {
+		t.Fatalf("q.Len() after blur = %d, want 0 (blink timer stopped while unfocused)", q.Len())
+	}
+
+	// Advancing the queue further while unfocused must not resurrect anything.
+	q.Advance(start.Add(10 * caretBlinkPeriod))
+	if q.Len() != 0 {
+		t.Fatalf("q.Len() after advancing while unfocused = %d, want 0", q.Len())
+	}
+
+	r.Focus(tb) // refocus
+	if !tb.caretVisible {
+		t.Fatal("caretVisible = false immediately after refocus, want true (phase reset)")
+	}
+	if q.Len() != 1 {
+		t.Fatalf("q.Len() after refocus = %d, want 1 (blink timer restarted)", q.Len())
+	}
+}
+
+// --- Fix: Ctrl+Right degrade behavior (locked, not a regression) ---
+
+func TestTextBoxCtrlRightDegradesToPlainRight(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "hello")
+	tb.SetCaret(2)
+
+	e := &input.KeyEvent{Action: input.Press, Key: input.KeyRight, Mods: input.ModCtrl, Router: r}
+	tb.OnKey(e)
+
+	if !e.Handled {
+		t.Fatal("Ctrl+Right: Handled = false, want true")
+	}
+	if c := tb.Caret(); c != 3 {
+		t.Fatalf("Ctrl+Right: Caret() = %d, want 3 (degrades to plain Right: moves exactly one rune, no word-jump)", c)
+	}
+	if s, e2 := tb.Selection(); s != e2 {
+		t.Fatalf("Ctrl+Right: Selection() = (%d,%d), want collapsed (Ctrl without Shift does not extend)", s, e2)
+	}
+}
