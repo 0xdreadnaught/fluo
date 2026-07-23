@@ -404,13 +404,22 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 		}
 		tb.SetColor(rowColor) // purely visual (TextBlock.SetColor), no invalidation
 
+		// Inset the row text by PaddingS on the left (and trim width to keep
+		// a matching right gutter) so labels don't sit flush against the row
+		// edge. The selection band (Render) still spans the full row width;
+		// only the text is inset, the standard list-row look.
+		pad := l.metrics.PaddingS
+		rowW := viewport.W - 2*pad
+		if rowW < 0 {
+			rowW = 0
+		}
 		rowRect := render.Rect{
-			X: viewport.X,
+			X: viewport.X + pad,
 			Y: viewport.Y + float32(idx)*l.rowH - l.offset,
-			W: viewport.W,
+			W: rowW,
 			H: l.rowH,
 		}
-		core.MeasureWidget(tb, render.Size{W: viewport.W, H: l.rowH})
+		core.MeasureWidget(tb, render.Size{W: rowW, H: l.rowH})
 		core.ArrangeWidget(tb, rowRect)
 	}
 }
