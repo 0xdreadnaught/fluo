@@ -1,7 +1,3 @@
-// Package text provides pure-Go font loading and glyph outline
-// rasterization on top of golang.org/x/image/font/sfnt. It has no
-// dependency on any GL/windowing package; higher layers (Task 10-11)
-// build glyph atlases and text layout on top of the primitives here.
 package text
 
 import (

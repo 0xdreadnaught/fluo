@@ -1,8 +1,3 @@
-// Package anim provides easing functions and a frame-driven Tween that
-// interpolates a normalized progress value 0→1 over a duration, using a
-// timers.Queue as its clock. It is the shared foundation controls use to
-// smoothly cross-fade colors (see controls/animation.go) instead of
-// snapping between states.
 package anim
 
 import (

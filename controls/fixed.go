@@ -1,4 +1,3 @@
-// Package controls provides fluo's built-in widgets.
 package controls
 
 import (

@@ -1,8 +1,3 @@
-// Package app provides a minimal desktop window host: it opens a GLFW
-// window with an OpenGL 3.3 core context, wires up render/gl's Renderer,
-// and drives a frame(*Ctx) callback every vsync. It is intentionally thin
-// — layout, input routing, and window chrome are later phases; this is
-// just enough surface for the fluo-demo app and for Phase 2/3 to build on.
 package app
 
 import (
