@@ -472,3 +472,41 @@ func TestTreeExpander(t *testing.T) {
 		core.RenderWidget(root, r)
 	})
 }
+
+// TestTabs is the Phase 7 Task 5 golden: a TabControl with 3 tabs ("One",
+// "Two", "Three"), the second ("Two") selected — showing the Accent
+// underline beneath its header cell and its TextBlock content ("Tab two
+// content") below the strip — inside a 240x120 frame. "One" and "Three"'s
+// own content stays attached (per TabControl's normative "hidden tabs
+// remain in the tree" rule) but is invisible, contributing nothing to this
+// frame.
+func TestTabs(t *testing.T) {
+	theme.SetActive(theme.FluentLight())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "tabs", 240, 120, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tc := controls.NewTabControl(face)
+		tc.AddTab("One", controls.NewTextBlock(face, "Tab one content"))
+		tc.AddTab("Two", controls.NewTextBlock(face, "Tab two content"))
+		tc.AddTab("Three", controls.NewTextBlock(face, "Tab three content"))
+		tc.SetSelectedIndex(1)
+		tc.SetWidth(220)
+		tc.SetHeight(100)
+
+		root := controls.NewCanvas().Add(tc, 10, 10)
+
+		frame := render.Rect{X: 0, Y: 0, W: 240, H: 120}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(root, frame)
+		core.RenderWidget(root, r)
+	})
+}
