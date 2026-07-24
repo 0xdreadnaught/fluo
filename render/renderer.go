@@ -67,7 +67,23 @@ type Renderer interface {
 	DrawQuad(dst, src Rect, tex TextureID, tint Color)
 
 	// DrawSDFQuads draws glyphs from an SDF alpha atlas with the given color.
+	// Retained for future scaled/animated text; text.Face.Draw's default
+	// (HD) path uses DrawGlyphs instead.
 	DrawSDFQuads(quads []GlyphQuad, tex TextureID, c Color)
+
+	// DrawGlyphs draws grayscale-coverage glyph quads from a coverage atlas
+	// (alpha = texture.r) tinted with c. Quads' Dst is in logical px (the
+	// vertex shader applies uScale); Src is 0..1 atlas UV. Used by
+	// text.Face for crisp, direct grayscale-AA UI text. Distinct from
+	// DrawSDFQuads (SDF path, retained for future scaled/animated text).
+	DrawGlyphs(quads []GlyphQuad, tex TextureID, c Color)
+
+	// Scale returns the current frame's device-pixels-per-logical-pixel
+	// factor (as passed to Begin). Valid between Begin and End. The text
+	// layer uses it to rasterize glyphs at device resolution and to
+	// pixel-snap; no other code should multiply by scale (the vertex
+	// shader applies uScale exactly once).
+	Scale() float32
 
 	// PushClip pushes a new clip rectangle that intersects with the current clip.
 	PushClip(r Rect)

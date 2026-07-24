@@ -145,6 +145,45 @@ func TestText2x(t *testing.T) {
 	})
 }
 
+// TestHDText is the HD-text golden: the same logical line of text drawn via
+// Face.Draw (the crisp direct grayscale-AA path, not SDF) twice into one
+// 320x120 framebuffer — once at scale 1 (top row, device px == logical px)
+// and once at scale 2 (bottom row, logical coordinates chosen so the 2x
+// device-pixel result lands in the frame's bottom half) — each its own
+// Begin/End pass against the SAME renderer and framebuffer, exactly as two
+// successive app.Surface.Frame calls at different DPI would. Inspected by
+// hand for crisp, non-clipped glyph edges at both scales (see the
+// implementation plan's Step 4).
+func TestHDText(t *testing.T) {
+	gltest.Run(t, 320, 120, func(fb *gltest.Framebuffer) {
+		r, err := glr.New()
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, 14)
+
+		gl.ClearColor(0.12, 0.12, 0.14, 1)
+		gl.Clear(gl.COLOR_BUFFER_BIT)
+
+		// Row 1: scale 1, top half.
+		r.Begin(fb.W, fb.H, 1)
+		face.Draw(r, render.Point{X: 10, Y: 10}, "HD text 0123 crisp", render.RGB(255, 255, 255))
+		r.End()
+
+		// Row 2: scale 2, same fb — logical Y=35 * scale 2 = device Y=70,
+		// landing in the bottom half (fb height 120).
+		r.Begin(fb.W, fb.H, 2)
+		face.Draw(r, render.Point{X: 5, Y: 35}, "HD text 0123 crisp", render.RGB(255, 255, 255))
+		r.End()
+
+		gltest.CheckGolden(t, "hdtext", fb.Image())
+	})
+}
+
 func TestLayoutRender(t *testing.T) {
 	testFrame(t, "layout", 220, 150, func(r *glr.Renderer) {
 		f, err := text.Load(goregular.TTF)
