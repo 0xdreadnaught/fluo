@@ -40,15 +40,24 @@ type DialogSpec struct {
 }
 
 // ShowDialog opens d as a single MODAL popup (OverlayHost.ShowPopup) on
-// host: a full-host scrim (dialogScrim, ScrimBackground) containing a
-// centered Card (dialogCard: CornerRadius, ShadowBlur shadow, PaddingL
-// padding) with d.Title (SubtitleSize, TextPrimary), d.Body (BodySize,
-// TextSecondary), and a right-aligned button row — d.Secondary (if
-// non-empty) as a default Button, then d.Primary (if non-empty) as an
-// accent Button. face supplies the button/body type ramp; title and body
-// text are drawn at th.Type.SubtitleSize/BodySize via faces derived from
-// face.Font (face itself may be nil, in which case both derived faces stay
-// nil too, per TextBlock's own nil-face convention).
+// host: a full-host dialogScrim (v0.2 classic: painted invisibly — see its
+// own doc comment on why classic Win2000 modals had no dark scrim) wrapping
+// a centered dialogCard (drawRaised ButtonFace, PaddingL padding) with a
+// classic CaptionFrom→CaptionTo gradient caption strip along its top
+// showing d.Title (CaptionText) — provided d.Title is non-empty and face is
+// non-nil; see dialogCard.captionHeight's own "no caption at all otherwise"
+// fallback — d.Body (BodySize, WindowText) below it, and a right-aligned
+// button row: d.Secondary (if non-empty) as a default Button, then
+// d.Primary (if non-empty) as an accent Button. face supplies the
+// button/body/caption type ramp; body and caption text are drawn at
+// th.Type.BodySize/SubtitleSize via faces derived from face.Font (face
+// itself may be nil, in which case both derived faces stay nil too, per
+// TextBlock's own nil-face convention — and, per captionHeight, no caption
+// strip is drawn at all). The content stack's own FIRST child is a
+// zero-size Fixed placeholder, not a title TextBlock: the title now lives
+// solely in the card's caption strip (kept as a real (if invisible) child
+// so the stack's shape — title-slot, body, buttonRow — stays exactly 3
+// children, matching dialogPopupButtons' own white-box navigation).
 //
 // Normative "scrim neutralizes light-dismiss by construction": dialogScrim's
 // own desired size is unconditionally the FULL available space (see its own
@@ -106,18 +115,22 @@ func ShowDialog(host *OverlayHost, face *text.Face, d DialogSpec) {
 		bodyFace = text.NewFace(face.Font, typ.BodySize)
 	}
 
-	title := NewTextBlock(titleFace, d.Title)
-	title.SetColor(colors.TextPrimary)
+	// The title no longer lives in the content flow — it is drawn in the
+	// card's own gradient caption strip (see dialogCard.Render) — but a
+	// zero-size placeholder keeps the stack's shape at exactly 3 children
+	// (title-slot, body, buttonRow), matching dialogPopupButtons' white-box
+	// navigation (children[2] == the button row).
+	titleSlot := NewFixed(0, 0, render.Color{})
 	body := NewTextBlock(bodyFace, d.Body)
-	body.SetColor(colors.TextSecondary)
+	body.SetColor(colors.WindowText)
 
 	buttonRow := NewStackPanel(Horizontal).SetGap(metrics.PaddingM)
 	buttonRow.SetAlign(core.End, core.Start)
 
 	content := NewStackPanel(Vertical).SetGap(metrics.PaddingM)
-	content.Add(title, body, buttonRow)
+	content.Add(titleSlot, body, buttonRow)
 
-	card := newDialogCard(content, colors, metrics)
+	card := newDialogCard(content, d.Title, titleFace, colors, metrics)
 	scrim := newDialogScrim(card, colors)
 
 	fired := false
@@ -217,12 +230,15 @@ func (s *dialogScrim) Children() []core.Widget {
 	return []core.Widget{s.card}
 }
 
-// Render fills the scrim's entire bounds (the whole host — see the type doc
-// comment) with ScrimBackground, dimming whatever content sits beneath the
-// popup.
-func (s *dialogScrim) Render(r render.Renderer) {
-	r.FillRect(s.Bounds(), s.colors.ScrimBackground)
-}
+// Render is intentionally a no-op (v0.2 classic): authentic Windows-2000
+// modal dialogs painted no scrim at all — the raised dialogCard plus its
+// gradient caption strip already read as modal enough on their own. Kept as
+// an explicit (empty) method, rather than omitted entirely, so this
+// decision is documented in place rather than by silent omission; the
+// scrim's full-host MeasureContent/ArrangeContent (see above) are UNCHANGED
+// — it still occupies the whole host for hit-testing (the outside-the-card
+// no-op press) and Esc-key routing, it simply paints nothing.
+func (s *dialogScrim) Render(r render.Renderer) {}
 
 // OnKey implements input.KeyHandler: Escape fires onEscape (wired by
 // ShowDialog to close the dialog with DialogDismissed) and marks the event
@@ -237,25 +253,40 @@ func (s *dialogScrim) OnKey(e *input.KeyEvent) {
 	e.Handled = true
 }
 
-// dialogCard is a Dialog's centered Card chrome: a Card-background,
-// drop-shadowed container (CornerRadius/ShadowBlur/Shadow tokens, matching
-// comboPopupCard/menuPopupCard's own shadow+fill Render) with PaddingL
-// padding around its single child (the title/body/button-row StackPanel) —
-// the one popup-card variant in this package that adds its own padding
-// rather than delegating it entirely to the child, since Dialog has no
-// other wrapper for it.
+// dialogCard is a Dialog's centered card chrome: a classic raised ButtonFace
+// bevel (drawRaised, replacing the pre-restyle rounded, drop-shadowed Card
+// fill) with PaddingL padding around its single child (the
+// title-slot/body/button-row StackPanel — see ShowDialog) — the one
+// popup-card variant in this package that adds its own padding rather than
+// delegating it entirely to the child, since Dialog has no other wrapper
+// for it. When title/titleFace are both non-empty/non-nil, an ADDITIONAL
+// gradient caption strip (CaptionFrom→CaptionTo, CaptionText title) is
+// reserved along the very top, ABOVE that padded content — see
+// captionHeight/Render.
 type dialogCard struct {
 	core.Element
 
 	child core.Widget
 
+	// title and titleFace drive the gradient caption strip (see
+	// captionHeight/Render). titleFace may be nil (ShowDialog's own
+	// nil-face convention), and title may be "" (an app that wants no
+	// visible title) — either collapses captionHeight to 0, so no caption
+	// space is reserved and none is drawn at all — the brief's "skip the
+	// caption entirely" fallback, rather than inventing a title API.
+	title     string
+	titleFace *text.Face
+
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
 }
 
-// newDialogCard returns a dialogCard wrapping child (re-parented to it).
-func newDialogCard(child core.Widget, colors theme.ColorTokens, metrics theme.MetricTokens) *dialogCard {
-	c := &dialogCard{child: child, colors: colors, metrics: metrics}
+// newDialogCard returns a dialogCard wrapping child (re-parented to it),
+// showing title (via titleFace) in its gradient caption strip — see the
+// type doc comment for the "no caption at all" fallback when either is
+// empty/nil.
+func newDialogCard(child core.Widget, title string, titleFace *text.Face, colors theme.ColorTokens, metrics theme.MetricTokens) *dialogCard {
+	c := &dialogCard{child: child, title: title, titleFace: titleFace, colors: colors, metrics: metrics}
 	core.SetParent(child, c)
 	return c
 }
@@ -265,18 +296,32 @@ func (c *dialogCard) padding() render.Thickness {
 	return render.Uniform(c.metrics.PaddingL)
 }
 
+// captionHeight returns the space reserved at the card's top for the
+// gradient caption strip: BevelWidth (so the strip sits inside the card's
+// own raised top/left/right edges, not over them) plus the title face's
+// line height plus PaddingS above and below — or 0 entirely when there is
+// no title text or no titleFace, per the type doc comment's fallback.
+func (c *dialogCard) captionHeight() float32 {
+	if c.title == "" || c.titleFace == nil {
+		return 0
+	}
+	return c.metrics.BevelWidth + c.titleFace.LineHeight() + 2*c.metrics.PaddingS
+}
+
 // MeasureContent measures child within the available space reduced by
-// padding, then adds the padding back to its desired size — the card sizes
-// to its own content, never stretched to available (ArrangeContent, in
-// dialogScrim, arranges it at exactly this desired size).
+// padding AND captionHeight (reserved above the padded content), then adds
+// both back to its desired size — the card sizes to its own content, never
+// stretched to available (ArrangeContent, in dialogScrim, arranges it at
+// exactly this desired size).
 func (c *dialogCard) MeasureContent(available render.Size) render.Size {
 	pad := c.padding()
+	capH := c.captionHeight()
 
 	availW := available.W - pad.Left - pad.Right
 	if availW < 0 {
 		availW = 0
 	}
-	availH := available.H - pad.Top - pad.Bottom
+	availH := available.H - pad.Top - pad.Bottom - capH
 	if availH < 0 {
 		availH = 0
 	}
@@ -284,12 +329,20 @@ func (c *dialogCard) MeasureContent(available render.Size) render.Size {
 	core.MeasureWidget(c.child, render.Size{W: availW, H: availH})
 	d := core.DesiredSizeOf(c.child)
 
-	return render.Size{W: d.W + pad.Left + pad.Right, H: d.H + pad.Top + pad.Bottom}
+	return render.Size{W: d.W + pad.Left + pad.Right, H: d.H + pad.Top + pad.Bottom + capH}
 }
 
-// ArrangeContent arranges child within bounds inset by padding.
+// ArrangeContent arranges child within bounds inset by padding, itself
+// offset down by captionHeight so the content never overlaps the caption
+// strip.
 func (c *dialogCard) ArrangeContent(bounds render.Rect) {
-	inner := bounds.Inset(c.padding())
+	capH := c.captionHeight()
+	body := render.Rect{X: bounds.X, Y: bounds.Y + capH, W: bounds.W, H: bounds.H - capH}
+	if body.H < 0 {
+		body.H = 0
+	}
+
+	inner := body.Inset(c.padding())
 	if inner.W < 0 {
 		inner.W = 0
 	}
@@ -304,12 +357,35 @@ func (c *dialogCard) Children() []core.Widget {
 	return []core.Widget{c.child}
 }
 
-// Render draws the drop shadow first, then the card's own rounded
-// CardBackground fill — identical in shape to comboPopupCard.Render /
-// menuPopupCard.Render.
+// Render paints the classic raised ButtonFace bevel (drawRaised) — replacing
+// the pre-restyle rounded-fill-plus-drop-shadow chrome shared with
+// comboPopupCard/menuPopupCard — then, when captionHeight() > 0, a
+// CaptionFrom→CaptionTo horizontal gradient strip (DrawGradientRect) just
+// inside the card's top/left/right raised edges, with title left-aligned in
+// CaptionText, vertically centered within the strip.
 func (c *dialogCard) Render(r render.Renderer) {
 	bounds := c.Bounds()
-	radius := c.metrics.CornerRadius
-	r.DrawShadow(bounds, radius, c.metrics.ShadowBlur, c.colors.Shadow)
-	r.FillRoundedRect(bounds, radius, c.colors.CardBackground)
+	drawRaised(r, bounds, c.colors.ButtonFace, c.colors)
+
+	capH := c.captionHeight()
+	if capH <= 0 {
+		return
+	}
+
+	bw := c.metrics.BevelWidth
+	caption := render.Rect{
+		X: bounds.X + bw, Y: bounds.Y + bw,
+		W: bounds.W - 2*bw, H: capH - bw,
+	}
+	if caption.W < 0 {
+		caption.W = 0
+	}
+	if caption.H < 0 {
+		caption.H = 0
+	}
+	r.DrawGradientRect(caption, c.colors.CaptionFrom, c.colors.CaptionTo, true)
+
+	ty := caption.Y + (caption.H-c.titleFace.LineHeight())/2
+	tx := caption.X + c.metrics.PaddingS
+	c.titleFace.Draw(r, render.Point{X: tx, Y: ty}, c.title, c.colors.CaptionText)
 }

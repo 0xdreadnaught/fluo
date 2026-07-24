@@ -141,12 +141,13 @@ func buildMenuPopup(items *MenuItems, closeAll func()) *menuPopupCard {
 	return card
 }
 
-// menuPopupCard is a menu popup's outer chrome: a Card-background,
-// drop-shadowed container — identical in every respect to ComboBox's
-// comboPopupCard (see its doc comment) — wrapping a single child (the entry
-// StackPanel), plus the bookkeeping for AT MOST one open submenu at a time
-// (openSubRow/subPopup): opening a second submenu while one is already open
-// closes the first first (see openSub).
+// menuPopupCard is a menu popup's outer chrome: a raised ButtonFace bevel
+// (drawRaised) wrapping a single child (the entry StackPanel) — the bevel
+// itself replaces the pre-restyle rounded, drop-shadowed Card chrome (much
+// like ComboBox's own comboPopupCard — see its doc comment) — plus the
+// bookkeeping for AT MOST one open submenu at a time (openSubRow/subPopup):
+// opening a second submenu while one is already open closes the first first
+// (see openSub).
 type menuPopupCard struct {
 	core.Element
 
@@ -199,17 +200,12 @@ func (card *menuPopupCard) Children() []core.Widget {
 	return []core.Widget{card.child}
 }
 
-// Render draws the drop shadow first, then the card's own rounded
-// CardBackground fill — identical to comboPopupCard.Render.
+// Render draws the classic raised ButtonFace bevel (drawRaised) framing the
+// popup — replacing the pre-restyle rounded CardBackground fill, drop
+// shadow, and hairline stroke: the bevel itself now reads as the popup's
+// border, with no separate shadow/stroke needed.
 func (card *menuPopupCard) Render(r render.Renderer) {
-	bounds := card.Bounds()
-	radius := card.metrics.CornerRadius
-	r.DrawShadow(bounds, radius, card.metrics.ShadowBlur, card.colors.Shadow)
-	r.FillRoundedRect(bounds, radius, card.colors.CardBackground)
-	// A hairline border so the card edge is visible against a same-toned
-	// backdrop (a dark CardBackground over the dark Window background is
-	// otherwise near-invisible; the shadow alone doesn't separate them).
-	r.StrokeRoundedRect(bounds, radius, card.metrics.StrokeWidth, card.colors.ControlStroke)
+	drawRaised(r, card.Bounds(), card.colors.ButtonFace, card.colors)
 }
 
 // openSub opens sub's popup anchored to the right of row (a no-op if row's
@@ -285,9 +281,9 @@ func (card *menuPopupCard) openSub(row *menuSubRow, sub *MenuItems, closeAll fun
 }
 
 // menuItemRow is one clickable item row inside an open menu popup: a
-// left-aligned TextBlock, filled ControlFillHover on hover, firing onClick
-// (which, per buildMenuPopup, both runs the entry's own callback and closes
-// every open menu popup) on a release-inside click.
+// left-aligned TextBlock, filled the classic navy Highlight on hover, firing
+// onClick (which, per buildMenuPopup, both runs the entry's own callback and
+// closes every open menu popup) on a release-inside click.
 type menuItemRow struct {
 	core.Element
 
@@ -303,7 +299,7 @@ type menuItemRow struct {
 func newMenuItemRow(face *text.Face, label string, colors theme.ColorTokens, metrics theme.MetricTokens, onClick func()) *menuItemRow {
 	row := &menuItemRow{colors: colors, metrics: metrics}
 	row.label = NewTextBlock(face, label)
-	row.label.SetColor(colors.TextPrimary)
+	row.label.SetColor(colors.WindowText)
 	core.SetParent(row.label, row)
 	row.click.OnClick = onClick
 	return row
@@ -352,14 +348,18 @@ func (row *menuItemRow) Children() []core.Widget {
 	return []core.Widget{row.label}
 }
 
-// Render fills the row's bounds with ControlFillHover while hovered, else
-// nothing (transparent, showing the popup card's own CardBackground
-// through) — items never show a "selected" fill (contrast comboRow): a menu
-// item is a one-shot action, not a persistent selection.
+// Render fills the row's bounds with the classic navy Highlight (and
+// recolors the label HighlightText) while hovered, else leaves it
+// transparent (showing the popup card's own raised ButtonFace through) with
+// WindowText label color — items never show a persistent "selected" fill
+// (contrast comboRow): a menu item is a one-shot action, not a selection.
 func (row *menuItemRow) Render(r render.Renderer) {
 	if row.click.Hover() {
-		r.FillRect(row.Bounds(), row.colors.ControlFillHover)
+		r.FillRect(row.Bounds(), row.colors.Highlight)
+		row.label.SetColor(row.colors.HighlightText)
+		return
 	}
+	row.label.SetColor(row.colors.WindowText)
 }
 
 // OnPointer implements input.PointerHandler, delegating the entire
@@ -399,27 +399,28 @@ func (row *menuSeparatorRow) MeasureContent(render.Size) render.Size {
 	return render.Size{W: 0, H: menuSeparatorHeight}
 }
 
-// Render draws a single 1px ControlStroke line, inset by PaddingM on both
-// sides and vertically centered within the row's own bounds.
+// Render draws a classic etched groove (drawGroove) spanning the row's own
+// height, inset by PaddingM on both sides — replacing the pre-restyle
+// single 1px ControlStroke rule with the two-tone (ButtonShadow then
+// ButtonHighlight) chiseled line.
 func (row *menuSeparatorRow) Render(r render.Renderer) {
 	bounds := row.Bounds()
-	sw := row.metrics.StrokeWidth
 	line := render.Rect{
 		X: bounds.X + row.metrics.PaddingM,
-		Y: bounds.Y + (bounds.H-sw)/2,
+		Y: bounds.Y,
 		W: bounds.W - 2*row.metrics.PaddingM,
-		H: sw,
+		H: bounds.H,
 	}
 	if line.W > 0 {
-		r.FillRect(line, row.colors.ControlStroke)
+		drawGroove(r, line, true, row.colors)
 	}
 }
 
 // menuSubRow is a submenu-trigger row inside an open menu popup: a
-// left-aligned TextBlock label plus a right-aligned '>' chevron (TextSecondary,
-// matching TreeView's collapsed-node glyph), filled ControlFillHover on
-// hover exactly like menuItemRow. Its submenu opens on HOVER (Enter), not
-// click — see onHover, wired by buildMenuPopup to menuPopupCard.openSub.
+// left-aligned TextBlock label plus a right-aligned '>' chevron (WindowText),
+// both filled the classic navy Highlight on hover exactly like menuItemRow.
+// Its submenu opens on HOVER (Enter), not click — see onHover, wired by
+// buildMenuPopup to menuPopupCard.openSub.
 type menuSubRow struct {
 	core.Element
 
@@ -444,10 +445,10 @@ type menuSubRow struct {
 func newMenuSubRow(face *text.Face, label string, colors theme.ColorTokens, metrics theme.MetricTokens) *menuSubRow {
 	row := &menuSubRow{colors: colors, metrics: metrics}
 	row.label = NewTextBlock(face, label)
-	row.label.SetColor(colors.TextPrimary)
+	row.label.SetColor(colors.WindowText)
 	core.SetParent(row.label, row)
 	row.chevron = NewTextBlock(face, ">")
-	row.chevron.SetColor(colors.TextSecondary)
+	row.chevron.SetColor(colors.WindowText)
 	core.SetParent(row.chevron, row)
 	return row
 }
@@ -519,12 +520,19 @@ func (row *menuSubRow) Children() []core.Widget {
 	return []core.Widget{row.label, row.chevron}
 }
 
-// Render fills the row's bounds with ControlFillHover while hovered, else
-// nothing.
+// Render fills the row's bounds with the classic navy Highlight (and
+// recolors both the label and the chevron HighlightText) while hovered,
+// else leaves it transparent with WindowText label/chevron — mirroring
+// menuItemRow.Render.
 func (row *menuSubRow) Render(r render.Renderer) {
 	if row.click.Hover() {
-		r.FillRect(row.Bounds(), row.colors.ControlFillHover)
+		r.FillRect(row.Bounds(), row.colors.Highlight)
+		row.label.SetColor(row.colors.HighlightText)
+		row.chevron.SetColor(row.colors.HighlightText)
+		return
 	}
+	row.label.SetColor(row.colors.WindowText)
+	row.chevron.SetColor(row.colors.WindowText)
 }
 
 // OnPointer implements input.PointerHandler: the embedded ClickBehavior
@@ -548,10 +556,11 @@ type menuBarEntry struct {
 }
 
 // MenuBar is a horizontal row of top-level menu titles (e.g. "File", "Edit"):
-// clicking one opens its popup menu (see MenuItems) — Card+shadow, MODAL
-// (ShowPopup), placed directly below the clicked title — exactly like
-// ComboBox's own dropdown. MenuBar draws its cells directly (titles measured
-// against face, no per-cell child widgets), mirroring TabControl's tabStrip.
+// clicking one opens its popup menu (see MenuItems) — a raised-bevel-framed
+// MODAL popup (ShowPopup), placed directly below the clicked title —
+// exactly like ComboBox's own dropdown. MenuBar draws its cells directly
+// (titles measured against face, no per-cell child widgets), mirroring
+// TabControl's tabStrip.
 //
 // Normative: MenuBar itself is the ONLY focusable part of the whole menu
 // family (menu popup rows are never focusable) — a title click both opens
@@ -681,12 +690,11 @@ func (m *MenuBar) cellAt(pos render.Point) (idx int, ok bool) {
 	return 0, false
 }
 
-// Render draws each cell: ControlFillHover behind the cell whose menu is
-// currently open (openIdx) OR the hovered cell (hoverIdx) — an open cell's
-// fill takes priority when both would otherwise apply to the same cell,
-// though visually identical either way, since both use the same token — and
-// each title (always TextPrimary; MenuBar has no notion of a "selected"
-// title beyond "currently open"). Skipped entirely with a nil face, matching
+// Render fills the bar's own bounds ButtonFace, then draws each cell: the
+// cell whose menu is currently OPEN gets a classic sunken (drawSunken)
+// "pressed" look; otherwise the HOVERED cell gets a navy Highlight bar (and
+// HighlightText title); every other cell is plain WindowText title over the
+// bar's own ButtonFace. Skipped entirely with a nil face, matching
 // TextBlock/tabStrip's own nil-face-renders-nothing convention.
 func (m *MenuBar) Render(r render.Renderer) {
 	if m.face == nil {
@@ -694,19 +702,28 @@ func (m *MenuBar) Render(r render.Renderer) {
 	}
 	bounds := m.Bounds()
 	cellH := m.cellHeight()
+	c := m.colors
+
+	r.FillRect(bounds, c.ButtonFace)
 
 	var x float32
 	for i, e := range m.entries {
 		w := m.cellWidths[i]
+		cell := render.Rect{X: bounds.X + x, Y: bounds.Y, W: w, H: bounds.H}
 
-		if i == m.openIdx || i == m.hoverIdx {
-			r.FillRect(render.Rect{X: bounds.X + x, Y: bounds.Y, W: w, H: bounds.H}, m.colors.ControlFillHover)
+		textColor := c.WindowText
+		switch {
+		case i == m.openIdx:
+			drawSunken(r, cell, c.ButtonFace, c)
+		case i == m.hoverIdx:
+			r.FillRect(cell, c.Highlight)
+			textColor = c.HighlightText
 		}
 
 		ts := m.face.Measure(e.title)
 		ty := bounds.Y + (cellH-ts.H)/2
 		tx := bounds.X + x + m.metrics.PaddingL
-		m.face.Draw(r, render.Point{X: tx, Y: ty}, e.title, m.colors.TextPrimary)
+		m.face.Draw(r, render.Point{X: tx, Y: ty}, e.title, textColor)
 
 		x += w
 	}

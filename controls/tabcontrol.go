@@ -8,10 +8,15 @@ import (
 	"github.com/0xdreadnaught/fluo/theme"
 )
 
-// tabUnderlineThickness is the height of the 2px Accent underline drawn
-// beneath the SELECTED header cell (per the brief's "selected: 2px Accent
-// underline" normative rule) — reserved as extra height below every cell's
-// own text+padding box, so the underline never overlaps a descender.
+// tabUnderlineThickness is the height, in px, of the band reserved below
+// every header cell's own text+padding box — pre-classic-restyle this held
+// the SELECTED cell's 2px Accent underline; now (v0.2 classic) it is the
+// merge band the selected tab's raised bevel extends INTO so it reads as
+// one continuous raised surface with the body panel below (see
+// tabStrip.Render and TabControl.Render), while every non-selected cell
+// leaves it untouched so the body panel's own raised top edge — drawn
+// flush with this band's top, i.e. exactly at cellHeight() — shows through
+// as the classic separator beneath it.
 const tabUnderlineThickness float32 = 2
 
 // tabItem is one tab owned by a TabControl: its header title and its
@@ -135,11 +140,17 @@ func (s *tabStrip) cellAt(pos render.Point) (idx int, ok bool) {
 	return 0, false
 }
 
-// Render draws each cell: ControlFillHover behind the hovered cell
-// (regardless of selection), the title (TextPrimary for the selected cell,
-// TextSecondary otherwise), and — for the selected cell only — a 2px Accent
-// underline spanning its full width just below the text+padding box.
-// Skipped entirely with a nil face, matching TextBlock/TreeView's own
+// Render draws each header cell as a classic raised ButtonFace bevel
+// (drawRaised), title text always WindowText — classic tab strips don't
+// recolor text for the selected cell, only its bevel changes (see below).
+// The SELECTED cell's raised rect is drawn tabUnderlineThickness px TALLER
+// than every other cell — reaching down across the merge band into where
+// the body panel's own raised top edge would otherwise show (see
+// TabControl.Render) — and its bottom TWO bevel edges (the ones drawn by
+// drawRaised at merged.H-1/-2) are immediately overpainted with ButtonFace,
+// erasing them so the cell reads as one continuous raised surface flowing
+// into the body panel beneath it: the classic "merged" selected tab. Skipped
+// entirely with a nil face, matching TextBlock/TreeView's own
 // nil-face-renders-nothing convention.
 func (s *tabStrip) Render(r render.Renderer) {
 	if s.face == nil {
@@ -148,28 +159,30 @@ func (s *tabStrip) Render(r render.Renderer) {
 	bounds := s.Bounds()
 	cellH := s.cellHeight()
 	selected := s.owner.SelectedIndex()
+	c := s.colors
 
 	var x float32
 	for i, tab := range s.owner.tabs {
 		w := s.cellWidths[i]
+		rect := render.Rect{X: bounds.X + x, Y: bounds.Y, W: w, H: cellH}
 
-		if i == s.hoverIdx {
-			r.FillRect(render.Rect{X: bounds.X + x, Y: bounds.Y, W: w, H: bounds.H}, s.colors.ControlFillHover)
-		}
-
-		color := s.colors.TextSecondary
 		if i == selected {
-			color = s.colors.TextPrimary
+			merged := rect
+			merged.H += tabUnderlineThickness
+			drawRaised(r, merged, c.ButtonFace, c)
+			// Erase the merged cell's own bottom edges (outer dark-shadow at
+			// H-1, inner shadow at H-2 — the exact geometry drawRaised just
+			// painted there) so nothing separates it from the body panel.
+			r.FillRect(render.Rect{X: merged.X, Y: merged.Y + merged.H - 1, W: merged.W, H: 1}, c.ButtonFace)
+			r.FillRect(render.Rect{X: merged.X + 1, Y: merged.Y + merged.H - 2, W: merged.W - 2, H: 1}, c.ButtonFace)
+		} else {
+			drawRaised(r, rect, c.ButtonFace, c)
 		}
+
 		ts := s.face.Measure(tab.title)
 		ty := bounds.Y + (cellH-ts.H)/2
 		tx := bounds.X + x + s.metrics.PaddingM
-		s.face.Draw(r, render.Point{X: tx, Y: ty}, tab.title, color)
-
-		if i == selected {
-			underline := render.Rect{X: bounds.X + x, Y: bounds.Y + cellH, W: w, H: tabUnderlineThickness}
-			r.FillRect(underline, s.colors.Accent)
-		}
+		s.face.Draw(r, render.Point{X: tx, Y: ty}, tab.title, c.WindowText)
 
 		x += w
 	}
@@ -264,9 +277,11 @@ func (s *tabStrip) OnKey(e *input.KeyEvent) {
 }
 
 // TabControl is a composite of a header strip (see tabStrip) and a content
-// area showing the selected tab's content below it. TabControl itself draws
-// no chrome of its own (no Render override — matching Expander/StackPanel,
-// a pure layout composite); all visible chrome belongs to the strip.
+// area showing the selected tab's content below it. Its own Render paints
+// the classic raised ButtonFace body panel behind that content area — the
+// strip's per-cell bevels (and the selected cell's merge into this same
+// panel) are painted separately, by the strip, immediately after (see
+// core.RenderWidget's documented parent-then-children order).
 //
 // Normative, and the key way TabControl differs from Expander's "content
 // participates in layout only while expanded" rule: every tab's content
@@ -297,6 +312,8 @@ type TabControl struct {
 
 	selected  int
 	onChanged func(int)
+
+	colors theme.ColorTokens
 }
 
 // NewTabControl returns an empty TabControl (no tabs yet), drawing header
@@ -305,7 +322,7 @@ type TabControl struct {
 // re-theme).
 func NewTabControl(face *text.Face) *TabControl {
 	th := theme.Active()
-	t := &TabControl{}
+	t := &TabControl{colors: th.Color}
 	t.strip = newTabStrip(face, t, th.Color, th.Metric)
 	core.SetParent(t.strip, t)
 	return t
@@ -445,6 +462,31 @@ func (t *TabControl) ArrangeContent(bounds render.Rect) {
 	for _, tab := range t.tabs {
 		core.ArrangeWidget(tab.content, render.Rect{X: bounds.X, Y: contentY, W: bounds.W, H: contentH})
 	}
+}
+
+// Render paints the raised ButtonFace body panel behind the content area.
+// Its visual top edge is placed tabUnderlineThickness px ABOVE the content
+// area's actual arranged offset (bounds.Y + stripD.H) — i.e. flush with
+// every header cell's own cellHeight() — so the panel's raised top bevel
+// reads as the separator beneath every NON-selected cell, while the
+// SELECTED cell (a child, painted after this method returns — see
+// core.RenderWidget's parent-then-children order) extends down over that
+// same band and erases it, producing the classic merged-selected-tab look
+// (see tabStrip.Render and tabUnderlineThickness's own doc comment).
+func (t *TabControl) Render(r render.Renderer) {
+	bounds := t.Bounds()
+	stripD := core.DesiredSizeOf(t.strip)
+
+	bodyRect := render.Rect{
+		X: bounds.X,
+		Y: bounds.Y + stripD.H - tabUnderlineThickness,
+		W: bounds.W,
+		H: bounds.H - stripD.H + tabUnderlineThickness,
+	}
+	if bodyRect.H < 0 {
+		bodyRect.H = 0
+	}
+	drawRaised(r, bodyRect, t.colors.ButtonFace, t.colors)
 }
 
 // Children returns the strip plus EVERY tab's content, in tab order —
