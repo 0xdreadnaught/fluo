@@ -8,7 +8,7 @@ import (
 	"github.com/0xdreadnaught/fluo/theme"
 )
 
-// comboPlaceholder is the text shown (in TextSecondary) when SelectedIndex()
+// comboPlaceholder is the text shown (in GrayText) when SelectedIndex()
 // is -1 (no selection made yet).
 const comboPlaceholder = "Select…"
 
@@ -73,7 +73,7 @@ func NewComboBox(face *text.Face) *ComboBox {
 	c.label = NewTextBlock(face, comboPlaceholder)
 	core.SetParent(c.label, c)
 	c.chevron = NewTextBlock(face, "v")
-	c.chevron.SetColor(th.Color.TextSecondary)
+	c.chevron.SetColor(th.Color.WindowText)
 	core.SetParent(c.chevron, c)
 
 	c.click.OnClick = func() { c.openPopup() }
@@ -279,12 +279,34 @@ func (c *ComboBox) MeasureContent(available render.Size) render.Size {
 	}
 }
 
-// ArrangeContent places the label at the padded inner rect's left edge
-// (vertically centered) and the chevron at its right edge (also vertically
-// centered) — never stretched to fill any leftover width between them.
+// fieldSplit divides the field's own bounds into the sunken text well (left)
+// and the raised drop-button strip (right, square — its width equals the
+// field's height, the classic Windows combo-button proportion), clamping the
+// button to bounds.W so a degenerately narrow field never produces a
+// negative-width well.
+func (c *ComboBox) fieldSplit(bounds render.Rect) (well, dropButton render.Rect) {
+	btnW := bounds.H
+	if btnW > bounds.W {
+		btnW = bounds.W
+	}
+	well = render.Rect{X: bounds.X, Y: bounds.Y, W: bounds.W - btnW, H: bounds.H}
+	dropButton = render.Rect{X: bounds.X + bounds.W - btnW, Y: bounds.Y, W: btnW, H: bounds.H}
+	return well, dropButton
+}
+
+// ArrangeContent places the label inside the sunken well, inset by the 2px
+// bevel plus PaddingS (vertically centered, never stretched), and centers the
+// chevron glyph within the raised drop-button strip (see fieldSplit) — the
+// classic combo layout: a text well on the left, a square drop button on the
+// right, rather than the pre-restyle "label plus trailing chevron" flow.
 func (c *ComboBox) ArrangeContent(bounds render.Rect) {
-	pad := c.padding()
-	inner := bounds.Inset(pad)
+	well, dropButton := c.fieldSplit(bounds)
+
+	bw := c.metrics.BevelWidth
+	inner := well.Inset(render.Thickness{
+		Left: bw + c.metrics.PaddingS, Right: bw + c.metrics.PaddingS,
+		Top: bw, Bottom: bw,
+	})
 	if inner.W < 0 {
 		inner.W = 0
 	}
@@ -292,14 +314,14 @@ func (c *ComboBox) ArrangeContent(bounds render.Rect) {
 		inner.H = 0
 	}
 
-	chevD := core.DesiredSizeOf(c.chevron)
-	chevX := inner.X + inner.W - chevD.W
-	chevY := inner.Y + (inner.H-chevD.H)/2
-	core.ArrangeWidget(c.chevron, render.Rect{X: chevX, Y: chevY, W: chevD.W, H: chevD.H})
-
 	labelD := core.DesiredSizeOf(c.label)
 	labelY := inner.Y + (inner.H-labelD.H)/2
 	core.ArrangeWidget(c.label, render.Rect{X: inner.X, Y: labelY, W: labelD.W, H: labelD.H})
+
+	chevD := core.DesiredSizeOf(c.chevron)
+	chevX := dropButton.X + (dropButton.W-chevD.W)/2
+	chevY := dropButton.Y + (dropButton.H-chevD.H)/2
+	core.ArrangeWidget(c.chevron, render.Rect{X: chevX, Y: chevY, W: chevD.W, H: chevD.H})
 }
 
 // Children returns the label and chevron.
@@ -307,50 +329,37 @@ func (c *ComboBox) Children() []core.Widget {
 	return []core.Widget{c.label, c.chevron}
 }
 
-// stateColors resolves the field's fill and stroke for the current
-// enabled/hover/pressed state, mirroring Button.stateColors' default
-// (non-accent) chrome walk.
-func (c *ComboBox) stateColors() (fill, stroke render.Color) {
-	if !c.enabled {
-		return c.colors.ControlFillDisabled, c.colors.ControlStrokeDisabled
-	}
-	fill = c.colors.ControlFill
-	switch {
-	case c.click.Pressed():
-		fill = c.colors.ControlFillPressed
-	case c.click.Hover():
-		fill = c.colors.ControlFillHover
-	}
-	return fill, c.colors.ControlStroke
-}
-
-// Render paints the field's chrome (fill/stroke) and recolors the label
-// (TextSecondary while showing the placeholder, else TextPrimary/
-// TextDisabled) and chevron (TextSecondary, or TextDisabled while disabled)
-// for the current state; children (label, chevron) render separately via
-// core.RenderWidget.
+// Render paints the classic field chrome — a sunken white text well (see
+// fieldSplit) and a raised drop-button strip, sunken instead while the
+// button is pressed (ClickBehavior.Pressed(), the field's own click state:
+// v0 has no separate press target for just the button, the whole field
+// opens the popup) — and recolors the label (GrayText while showing the
+// placeholder or disabled, else WindowText) and chevron (WindowText, or
+// GrayText while disabled) for the current state; children (label, chevron)
+// render separately via core.RenderWidget.
 func (c *ComboBox) Render(r render.Renderer) {
-	fill, stroke := c.stateColors()
 	bounds := c.Bounds()
-	radius := c.metrics.ControlCornerRadius
+	well, dropButton := c.fieldSplit(bounds)
 
-	r.FillRoundedRect(bounds, radius, fill)
-	if stroke.A > 0 {
-		r.StrokeRoundedRect(bounds, radius, c.metrics.StrokeWidth, stroke)
+	drawSunken(r, well, c.colors.WindowWell, c.colors)
+	if c.click.Pressed() {
+		drawSunken(r, dropButton, c.colors.ButtonFace, c.colors)
+	} else {
+		drawRaised(r, dropButton, c.colors.ButtonFace, c.colors)
 	}
 
-	labelColor := c.colors.TextPrimary
+	labelColor := c.colors.WindowText
 	switch {
 	case !c.enabled:
-		labelColor = c.colors.TextDisabled
+		labelColor = c.colors.GrayText
 	case c.selected < 0:
-		labelColor = c.colors.TextSecondary
+		labelColor = c.colors.GrayText
 	}
 	c.label.SetColor(labelColor)
 
-	chevColor := c.colors.TextSecondary
+	chevColor := c.colors.WindowText
 	if !c.enabled {
-		chevColor = c.colors.TextDisabled
+		chevColor = c.colors.GrayText
 	}
 	c.chevron.SetColor(chevColor)
 }
@@ -410,12 +419,11 @@ func (c *ComboBox) OnKey(e *input.KeyEvent) {
 	}
 }
 
-// comboPopupCard is the ComboBox popup's outer chrome: a Card-background,
-// drop-shadowed container (CornerRadius/Shadow/ShadowBlur tokens) wrapping a
-// single child (the item StackPanel) with no padding of its own — a
-// Border-like decorator, but one that also draws a shadow (which Border
-// itself does not support), the first consumer of render.Renderer.DrawShadow
-// in the controls package.
+// comboPopupCard is the ComboBox popup's outer chrome: a raised ButtonFace
+// frame (drawRaised) wrapping a single child (the item StackPanel), inset by
+// the 2px bevel so the child sits inside the frame rather than over it — the
+// classic list-popup look (a raised border framing a WindowWell list area),
+// replacing the pre-restyle rounded, drop-shadowed Card chrome.
 type comboPopupCard struct {
 	core.Element
 
@@ -433,16 +441,41 @@ func newComboPopupCard(child core.Widget, colors theme.ColorTokens, metrics them
 	return card
 }
 
-// MeasureContent measures the child with the full available space and
-// reports its desired size unchanged (no padding/chrome to add back).
-func (card *comboPopupCard) MeasureContent(available render.Size) render.Size {
-	core.MeasureWidget(card.child, available)
-	return core.DesiredSizeOf(card.child)
+// innerBounds returns the card's own bounds inset by the 2px bevel — the
+// WindowWell list area the raised frame encloses (see Render/ArrangeContent).
+func (card *comboPopupCard) innerBounds(bounds render.Rect) render.Rect {
+	bw := card.metrics.BevelWidth
+	inner := bounds.Inset(render.Thickness{Top: bw, Bottom: bw, Left: bw, Right: bw})
+	if inner.W < 0 {
+		inner.W = 0
+	}
+	if inner.H < 0 {
+		inner.H = 0
+	}
+	return inner
 }
 
-// ArrangeContent arranges the child to fill the card's own bounds exactly.
+// MeasureContent measures the child within the available space reduced by
+// the 2px bevel on every side, then adds the bevel back to its desired size
+// — the child (the item StackPanel) never overlaps the raised frame.
+func (card *comboPopupCard) MeasureContent(available render.Size) render.Size {
+	bw := card.metrics.BevelWidth
+	innerAvail := render.Size{W: available.W - 2*bw, H: available.H - 2*bw}
+	if innerAvail.W < 0 {
+		innerAvail.W = 0
+	}
+	if innerAvail.H < 0 {
+		innerAvail.H = 0
+	}
+	core.MeasureWidget(card.child, innerAvail)
+	d := core.DesiredSizeOf(card.child)
+	return render.Size{W: d.W + 2*bw, H: d.H + 2*bw}
+}
+
+// ArrangeContent arranges the child to fill the card's inner (bevel-inset)
+// bounds, so item rows sit inside the raised frame rather than over it.
 func (card *comboPopupCard) ArrangeContent(bounds render.Rect) {
-	core.ArrangeWidget(card.child, bounds)
+	core.ArrangeWidget(card.child, card.innerBounds(bounds))
 }
 
 // Children returns the single child.
@@ -450,21 +483,19 @@ func (card *comboPopupCard) Children() []core.Widget {
 	return []core.Widget{card.child}
 }
 
-// Render draws the drop shadow first (so it sits entirely behind the card),
-// then the card's own rounded CardBackground fill.
+// Render draws the raised ButtonFace frame (replacing the old rounded
+// shadow+stroke chrome — the bevel itself now reads as the popup's border),
+// then fills the inner (bevel-inset) list area with WindowWell, the classic
+// combo popup's white list background.
 func (card *comboPopupCard) Render(r render.Renderer) {
 	bounds := card.Bounds()
-	radius := card.metrics.CornerRadius
-	r.DrawShadow(bounds, radius, card.metrics.ShadowBlur, card.colors.Shadow)
-	r.FillRoundedRect(bounds, radius, card.colors.CardBackground)
-	// Hairline border for edge contrast over a same-toned backdrop (see
-	// menuPopupCard.Render for the rationale).
-	r.StrokeRoundedRect(bounds, radius, card.metrics.StrokeWidth, card.colors.ControlStroke)
+	drawRaised(r, bounds, card.colors.ButtonFace, card.colors)
+	r.FillRect(card.innerBounds(bounds), card.colors.WindowWell)
 }
 
 // comboRow is one item row inside an open ComboBox's popup: a left-aligned
-// TextBlock, filled ControlFillHover on hover or SelectionBackground when it
-// is the currently selected item (selected wins over hover — see Render),
+// TextBlock, filled Highlight when it is EITHER hovered OR the currently
+// selected item (see Render — classic combos give both the same look),
 // clickable (selects + closes on release-inside, via onSelect).
 type comboRow struct {
 	core.Element
@@ -493,7 +524,7 @@ func newComboRow(face *text.Face, item string, index int, selected bool, colors 
 		metrics:  metrics,
 	}
 	row.label = NewTextBlock(face, item)
-	row.label.SetColor(colors.TextPrimary)
+	row.label.SetColor(colors.WindowText)
 	core.SetParent(row.label, row)
 
 	row.click.OnClick = func() {
@@ -556,20 +587,21 @@ func (row *comboRow) Children() []core.Widget {
 	return []core.Widget{row.label}
 }
 
-// Render fills the row's bounds with SelectionBackground when selected, else
-// ControlFillHover while hovered, else nothing (transparent, showing the
-// popup card's own CardBackground through).
+// Render fills the row's bounds with Highlight (and recolors the label
+// HighlightText) when the row is EITHER the current selection OR hovered —
+// classic combo popups highlight the hovered row exactly like the selected
+// one, with no separate visual for the two — else leaves it transparent
+// (showing the popup card's own WindowWell through) with WindowText label
+// color.
 func (row *comboRow) Render(r render.Renderer) {
-	var fill render.Color
-	switch {
-	case row.selected:
-		fill = row.colors.SelectionBackground
-	case row.click.Hover():
-		fill = row.colors.ControlFillHover
+	highlighted := row.selected || row.click.Hover()
+
+	labelColor := row.colors.WindowText
+	if highlighted {
+		r.FillRect(row.Bounds(), row.colors.Highlight)
+		labelColor = row.colors.HighlightText
 	}
-	if fill.A > 0 {
-		r.FillRect(row.Bounds(), fill)
-	}
+	row.label.SetColor(labelColor)
 }
 
 // OnPointer implements input.PointerHandler, delegating the entire

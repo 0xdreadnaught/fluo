@@ -90,9 +90,12 @@ func TestDataGridArrangeResolvesColumnsAgainstViewportWidth(t *testing.T) {
 	)
 	g.SetRowCount(5)
 
-	layoutDataGrid(g, 0, 0, 380, 200) // gutter 12 -> viewport.W = 368
+	// gutter 12, plus the 2px bevel inset on both left+right (ArrangeContent
+	// insets bounds by BevelWidth before resolving columns — see
+	// theme.MetricTokens.BevelWidth): viewport.W = 380 - 2*2 - 12 = 364.
+	layoutDataGrid(g, 0, 0, 380, 200)
 
-	want := []float32{80, 228, 60} // 368 - 80 - 60 = 228 star remainder
+	want := []float32{80, 224, 60} // 364 - 80 - 60 = 224 star remainder
 	if len(g.colWidths) != 3 {
 		t.Fatalf("colWidths = %v, want len 3", g.colWidths)
 	}
@@ -101,7 +104,8 @@ func TestDataGridArrangeResolvesColumnsAgainstViewportWidth(t *testing.T) {
 			t.Fatalf("colWidths[%d] = %v, want %v", i, g.colWidths[i], w)
 		}
 	}
-	wantOffsets := []float32{0, 80, 308}
+	// Offsets start at viewport.X = 2 (bounds.X=0 + BevelWidth), not 0.
+	wantOffsets := []float32{2, 82, 306}
 	for i, o := range wantOffsets {
 		if g.colOffsets[i] != o {
 			t.Fatalf("colOffsets[%d] = %v, want %v", i, g.colOffsets[i], o)
@@ -111,20 +115,23 @@ func TestDataGridArrangeResolvesColumnsAgainstViewportWidth(t *testing.T) {
 	headerH := defaultRowHeight(face, theme.Active())
 	numCols := 3
 	// pool[0] is row0/col0. Its text is vertically centered within the row
-	// (row 0's rect top is headerH, height rowH), so Y = headerH+(rowH-textH)/2.
+	// (row 0's rect top is bw+headerH, height rowH), so
+	// Y = bw+headerH+(rowH-textH)/2.
 	rowH := defaultRowHeight(face, theme.Active())
 	pad := theme.Active().Metric.PaddingS
+	bw := theme.Active().Metric.BevelWidth
 	b := g.pool[0].Bounds()
-	// Cell text is inset PaddingS left (to align with the header) and
-	// vertically centered in the row.
-	wantY := headerH + (rowH-b.H)/2
-	if b.X != pad || b.Y != wantY || b.W != 80-2*pad {
-		t.Fatalf("pool[0].Bounds() = %v, want X=%v Y=%v W=%v", b, pad, wantY, 80-2*pad)
+	// Cell text is inset PaddingS left of colOffsets[0] (itself already
+	// bevel-inset) to align with the header, and vertically centered in the
+	// row (whose own top is pushed down by the bevel too).
+	wantY := bw + headerH + (rowH-b.H)/2
+	if b.X != bw+pad || b.Y != wantY || b.W != 80-2*pad {
+		t.Fatalf("pool[0].Bounds() = %v, want X=%v Y=%v W=%v", b, bw+pad, wantY, 80-2*pad)
 	}
 	// pool[2] is row0/col2 (Age, Px 60), at the third column offset + inset.
 	b2 := g.pool[2].Bounds()
-	if b2.X != 308+pad || b2.W != 60-2*pad {
-		t.Fatalf("pool[2].Bounds() = %v, want X=%v W=%v", b2, 308+pad, 60-2*pad)
+	if b2.X != 306+pad || b2.W != 60-2*pad {
+		t.Fatalf("pool[2].Bounds() = %v, want X=%v W=%v", b2, 306+pad, 60-2*pad)
 	}
 	_ = numCols
 }
@@ -138,12 +145,13 @@ func TestDataGridCellPoolSizeIsVisibleRowsTimesColumns(t *testing.T) {
 	g.rowH = 48
 
 	// headerHeight() reuses rowH (see its doc comment), so overriding rowH to
-	// 48 also makes the header 48 tall: body viewport H = 148-48 = 100 ->
-	// rows 0,1,2(partial) visible = 3.
+	// 48 also makes the header 48 tall. ArrangeContent insets bounds by
+	// 2*BevelWidth (4px) before carving off the header, so body viewport H =
+	// (148-4)-48 = 96 -> rows 0,1 fit exactly (96/48==2), no partial row = 2.
 	layoutDataGrid(g, 0, 0, 100, 148)
 
-	if got, want := len(g.pool), 3*2; got != want {
-		t.Fatalf("pool size = %d, want %d (3 visible rows x 2 columns)", got, want)
+	if got, want := len(g.pool), 2*2; got != want {
+		t.Fatalf("pool size = %d, want %d (2 visible rows x 2 columns)", got, want)
 	}
 }
 
@@ -156,9 +164,11 @@ func TestDataGridValueFuncsDriveCellText(t *testing.T) {
 	g.SetRowCount(20)
 	g.rowH = 48
 
-	layoutDataGrid(g, 0, 0, 100, 148) // header 48 + body viewport 100 -> rows 0,1,2 visible x 2 cols
+	// header 48 + bevel-inset body viewport 96 (148-2*BevelWidth-48) -> rows
+	// 0,1 visible x 2 cols (see TestDataGridCellPoolSizeIsVisibleRowsTimesColumns).
+	layoutDataGrid(g, 0, 0, 100, 148)
 
-	want := []string{"r0c0", "r0c1", "r1c0", "r1c1", "r2c0", "r2c1"}
+	want := []string{"r0c0", "r0c1", "r1c0", "r1c1"}
 	for i, w := range want {
 		if got := g.pool[i].Text(); got != w {
 			t.Fatalf("pool[%d].Text() = %q, want %q", i, got, w)
@@ -175,19 +185,21 @@ func TestDataGridPoolReusesTextBlocksAcrossScroll(t *testing.T) {
 	g.SetRowCount(20)
 	g.rowH = 48
 
-	layoutDataGrid(g, 0, 0, 100, 148) // header 48 + body viewport 100 -> rows 0,1,2 visible
+	// header 48 + bevel-inset body viewport 96 (148-2*BevelWidth-48) -> rows
+	// 0,1 visible.
+	layoutDataGrid(g, 0, 0, 100, 148)
 
-	if len(g.pool) != 6 {
-		t.Fatalf("pool size = %d, want 6", len(g.pool))
+	if len(g.pool) != 4 {
+		t.Fatalf("pool size = %d, want 4", len(g.pool))
 	}
 	before := make([]*TextBlock, len(g.pool))
 	copy(before, g.pool)
 
-	g.rawOffset = 2 * 48 // scroll exactly 2 rows: visible rows become 2,3,4
+	g.rawOffset = 2 * 48 // scroll exactly 2 rows: visible rows become 2,3
 	layoutDataGrid(g, 0, 0, 100, 148)
 
-	if len(g.pool) != 6 {
-		t.Fatalf("pool size after scroll = %d, want 6 (unchanged visible count)", len(g.pool))
+	if len(g.pool) != 4 {
+		t.Fatalf("pool size after scroll = %d, want 4 (unchanged visible count)", len(g.pool))
 	}
 	for i := range before {
 		if g.pool[i] != before[i] {
@@ -197,8 +209,8 @@ func TestDataGridPoolReusesTextBlocksAcrossScroll(t *testing.T) {
 	if got, want := g.pool[0].Text(), "r2c0"; got != want {
 		t.Fatalf("pool[0].Text() after scroll = %q, want %q", got, want)
 	}
-	if got, want := g.pool[5].Text(), "r4c1"; got != want {
-		t.Fatalf("pool[5].Text() after scroll = %q, want %q", got, want)
+	if got, want := g.pool[3].Text(), "r3c1"; got != want {
+		t.Fatalf("pool[3].Text() after scroll = %q, want %q", got, want)
 	}
 }
 
@@ -446,7 +458,9 @@ func TestDataGridSetSelectedIndexAutoScrollsIntoView(t *testing.T) {
 	g.SetColumns(Column{Width: Px(50)})
 	g.SetRowCount(20) // 20*48 = 960 content
 	g.rowH = 48
-	layoutDataGrid(g, 0, 0, 100, 148) // header 48 + body viewport H=100, rows 0..2 visible, offset 0
+	// header 48 + bevel-inset body viewport H=96 (148-2*BevelWidth-48), rows
+	// 0,1 visible, offset 0.
+	layoutDataGrid(g, 0, 0, 100, 148)
 
 	if got := g.offset; got != 0 {
 		t.Fatalf("initial offset = %v, want 0", got)
@@ -459,7 +473,7 @@ func TestDataGridSetSelectedIndexAutoScrollsIntoView(t *testing.T) {
 	if got := g.SelectedIndex(); got != 19 {
 		t.Fatalf("SelectedIndex() = %d, want 19", got)
 	}
-	wantOffset := float32(20)*48 - 100 // last row's bottom edge minus viewport H
+	wantOffset := float32(20)*48 - 96 // last row's bottom edge minus viewport H (96)
 	if got := g.offset; got != wantOffset {
 		t.Fatalf("offset after auto-scroll = %v, want %v", got, wantOffset)
 	}
@@ -475,8 +489,10 @@ func TestDataGridHeaderYConstantWhileBodyScrolls(t *testing.T) {
 
 	layoutDataGrid(g, 10, 20, 100, 116)
 	firstHeaderY := g.header.Y
-	if firstHeaderY != 20 {
-		t.Fatalf("header.Y = %v, want 20 (bounds.Y)", firstHeaderY)
+	// header.Y = bounds.Y + BevelWidth: the header's raised cell buttons sit
+	// inset from the outer sunken well's frame, not flush against bounds.Y.
+	if firstHeaderY != 22 {
+		t.Fatalf("header.Y = %v, want 22 (bounds.Y=20 + BevelWidth=2)", firstHeaderY)
 	}
 
 	g.rawOffset = 300 // scroll the body well past the top
