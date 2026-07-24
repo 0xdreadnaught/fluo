@@ -25,11 +25,10 @@ const progressChunkGap float32 = 2
 // receives pointer/key events in the first place; there is no "ignore
 // input" branch to write because there is no input path to ignore it on.
 //
-// Visuals (normative): track is a 4px-tall rounded rect, ControlFill only
-// (no stroke, unlike Slider's track — a progress bar has no thumb to
-// visually anchor a hairline border against); the Accent-filled portion
-// spans from the track's left edge over Value proportion of the full
-// width, with no thumb.
+// Visuals (normative): the track is a classic sunken well (drawSunken,
+// WindowWell) with a 2px bevel; the Value-proportion fill is drawn inside
+// that inset as discrete Highlight "chunks" (the Windows-2000 marching-
+// blocks look) rather than a single solid bar, with no thumb.
 type ProgressBar struct {
 	core.Element
 

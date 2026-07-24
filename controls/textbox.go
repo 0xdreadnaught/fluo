@@ -517,17 +517,17 @@ func (t *TextBox) localTextX(windowX float32) float32 {
 }
 
 // displayText resolves what Render actually draws as the main text run and
-// in what color: the placeholder (TextDisabled) whenever there is no text,
-// regardless of focus; otherwise the real text, TextDisabled if disabled
-// else TextPrimary.
+// in what color: the placeholder (GrayText) whenever there is no text,
+// regardless of focus; otherwise the real text, GrayText if disabled
+// else WindowText.
 func (t *TextBox) displayText() (s string, color render.Color) {
 	if len(t.runes) == 0 {
-		return t.placeholder, t.colors.TextDisabled
+		return t.placeholder, t.colors.GrayText
 	}
 	if !t.enabled {
-		return string(t.runes), t.colors.TextDisabled
+		return string(t.runes), t.colors.GrayText
 	}
-	return string(t.runes), t.colors.TextPrimary
+	return string(t.runes), t.colors.WindowText
 }
 
 // caretShown reports whether the caret should be drawn this frame: never

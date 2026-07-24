@@ -8,10 +8,10 @@ import (
 )
 
 // Fixed geometry for Slider, per the Phase 5 Task 7 visuals spec: a 4px-tall
-// rounded track (radius = height/2, a stadium cross-section) with a 16x16
-// circular thumb (radius 8, i.e. half its own diameter — the same
-// "square rect + radius == half side" trick ToggleSwitch's thumb and
-// RadioButton's outer circle use to draw a circle via FillRoundedRect).
+// sunken groove track with a 16x16 circular thumb (radius 8, i.e. half its
+// own diameter — the same "square rect + radius == half side" trick
+// ToggleSwitch's thumb and RadioButton's outer circle use to draw a circle
+// via FillRoundedRect).
 // sliderDesiredWidth/Height are the fixed MeasureContent size {160, 24}: an
 // explicit SetWidth/SetHeight (inherited from core.Element) overrides this
 // through core.MeasureWidget's normal explicit-size precedence, exactly as
