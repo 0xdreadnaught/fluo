@@ -166,7 +166,7 @@ func (h *expanderHeader) RenderOverlay(r render.Renderer) {
 	if !h.focused {
 		return
 	}
-	drawFocusRing(r, h.Bounds(), h.metrics.ControlCornerRadius, h.colors, h.metrics)
+	drawFocusRing(r, h.Bounds(), h.colors)
 }
 
 // AcceptsFocus implements input.Focusable: the header always accepts focus

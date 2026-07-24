@@ -658,7 +658,7 @@ func (t *TextBox) RenderOverlay(r render.Renderer) {
 	if !t.focused {
 		return
 	}
-	drawFocusRing(r, t.Bounds(), t.metrics.ControlCornerRadius, t.colors, t.metrics)
+	drawFocusRing(r, t.Bounds(), t.colors)
 }
 
 // OnKey implements input.KeyHandler, the normative Task 6 keyboard map.

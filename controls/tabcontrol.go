@@ -201,7 +201,7 @@ func (s *tabStrip) cellRect(i int) render.Rect {
 // focusable unit; this only changes where the ring is drawn.
 func (s *tabStrip) RenderOverlay(r render.Renderer) {
 	if s.focused && s.face != nil && len(s.owner.tabs) > 0 {
-		drawFocusRing(r, s.cellRect(s.owner.SelectedIndex()), s.metrics.ControlCornerRadius, s.colors, s.metrics)
+		drawFocusRing(r, s.cellRect(s.owner.SelectedIndex()), s.colors)
 	}
 }
 

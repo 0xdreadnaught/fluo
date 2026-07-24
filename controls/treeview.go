@@ -449,7 +449,7 @@ func (t *TreeView) RenderOverlay(r render.Renderer) {
 	if !t.focused {
 		return
 	}
-	drawFocusRing(r, t.Bounds(), t.metrics.ControlCornerRadius, t.colors, t.metrics)
+	drawFocusRing(r, t.Bounds(), t.colors)
 }
 
 // AcceptsFocus implements input.Focusable: a TreeView always accepts focus

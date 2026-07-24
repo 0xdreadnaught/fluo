@@ -270,7 +270,7 @@ func (s *Slider) RenderOverlay(r render.Renderer) {
 	if !s.focused {
 		return
 	}
-	drawFocusRing(r, s.Bounds(), s.metrics.ControlCornerRadius, s.colors, s.metrics)
+	drawFocusRing(r, s.Bounds(), s.colors)
 }
 
 // AcceptsFocus implements input.Focusable: a disabled slider never accepts

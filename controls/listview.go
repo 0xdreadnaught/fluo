@@ -495,7 +495,7 @@ func (l *ListView) RenderOverlay(r render.Renderer) {
 		r.FillRoundedRect(rect, l.thumbRadius, l.thumbColor)
 	}
 	if l.focused {
-		drawFocusRing(r, l.Bounds(), l.metrics.ControlCornerRadius, l.colors, l.metrics)
+		drawFocusRing(r, l.Bounds(), l.colors)
 	}
 }
 

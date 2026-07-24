@@ -467,7 +467,7 @@ func (g *DataGrid) RenderOverlay(r render.Renderer) {
 		r.FillRoundedRect(rect, g.thumbRadius, g.thumbColor)
 	}
 	if g.focused {
-		drawFocusRing(r, g.Bounds(), g.metrics.ControlCornerRadius, g.colors, g.metrics)
+		drawFocusRing(r, g.Bounds(), g.colors)
 	}
 }
 

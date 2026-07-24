@@ -361,7 +361,7 @@ func (c *ComboBox) RenderOverlay(r render.Renderer) {
 	if !c.focused {
 		return
 	}
-	drawFocusRing(r, c.Bounds(), c.metrics.ControlCornerRadius, c.colors, c.metrics)
+	drawFocusRing(r, c.Bounds(), c.colors)
 }
 
 // AcceptsFocus implements input.Focusable: a disabled combo never accepts
