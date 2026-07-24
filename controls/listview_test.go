@@ -562,3 +562,151 @@ func TestListViewDisposeIsIdempotent(t *testing.T) {
 	l.Dispose()
 	l.Dispose() // must not panic
 }
+
+// --- Horizontal scroll (control-variants Task 4) ---
+
+// wideText is far wider, at typical face sizes, than any viewport used by
+// the tests below — chosen to reliably trigger horizontal overflow without
+// depending on exact face metrics.
+const wideText = "This is a very long row of text that is far wider than the viewport width used in these tests"
+
+func TestListViewNilFaceNeverShowsHorizontalThumb(t *testing.T) {
+	// A nil face can't measure text (contentWidth() reports 0, see its doc
+	// comment), so this must behave byte-identically to before Task 4:
+	// no horizontal thumb, ever, regardless of row content.
+	items := newFakeListItems(wideText, "b", "c")
+	l := NewListView(nil, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 100)
+
+	if _, ok := l.thumbRectX(); ok {
+		t.Fatal("expected no horizontal thumb for a nil-face ListView")
+	}
+	if l.offsetX != 0 {
+		t.Fatalf("offsetX = %v, want 0 (nothing to scroll horizontally)", l.offsetX)
+	}
+}
+
+func TestListViewShortTextNeverShowsHorizontalThumb(t *testing.T) {
+	// A real face but short row text (well under the viewport width) is the
+	// existing listview.png golden's own shape — must not spuriously grow a
+	// horizontal thumb.
+	face := testFace(t)
+	items := newFakeListItems("Item 01", "Item 02", "Item 03")
+	l := NewListView(face, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 200, 100)
+
+	if _, ok := l.thumbRectX(); ok {
+		t.Fatal("expected no horizontal thumb: short row text fits well within the viewport")
+	}
+}
+
+func TestListViewHorizontalThumbShowsForWideRowText(t *testing.T) {
+	face := testFace(t)
+	items := newFakeListItems(wideText, "short")
+	l := NewListView(face, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 100)
+
+	if _, ok := l.thumbRectX(); !ok {
+		t.Fatal("expected a horizontal thumb: row text is far wider than the 100px viewport")
+	}
+}
+
+func TestListViewOffsetXShiftsRowX(t *testing.T) {
+	face := testFace(t)
+	items := newFakeListItems(wideText)
+	l := NewListView(face, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 100)
+
+	beforeX := l.pool[0].Bounds().X
+
+	l.rawOffsetX = 40
+	layoutListView(l, 0, 0, 100, 100)
+	if l.offsetX != 40 {
+		t.Fatalf("offsetX = %v, want 40 (well within the clamped range for this much overflow)", l.offsetX)
+	}
+	afterX := l.pool[0].Bounds().X
+
+	if got, want := beforeX-afterX, float32(40); got != want {
+		t.Fatalf("row X shift = %v, want %v (row X is offset by -offsetX)", got, want)
+	}
+}
+
+func TestListViewShiftWheelScrollsXPlainWheelScrollsY(t *testing.T) {
+	face := testFace(t)
+	items := newFakeListItems(wideText, "b", "c", "d", "e", "f", "g", "h")
+	l := NewListView(face, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 100)
+
+	r := input.NewRouter()
+
+	// Plain wheel: Y only.
+	plain := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -2}, Router: r}
+	l.OnPointer(plain)
+	if !plain.Handled {
+		t.Fatal("plain wheel not marked Handled")
+	}
+	layoutListView(l, 0, 0, 100, 100)
+	if l.offset == 0 {
+		t.Fatal("offset (Y) = 0 after plain wheel, want nonzero (plain wheel scrolls Y)")
+	}
+	if l.offsetX != 0 {
+		t.Fatalf("offsetX = %v after plain wheel, want 0 (plain wheel never scrolls X)", l.offsetX)
+	}
+	yAfterPlain := l.offset
+
+	// Shift+wheel: X only, Y unchanged.
+	shift := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -2}, Mods: input.ModShift, Router: r}
+	l.OnPointer(shift)
+	if !shift.Handled {
+		t.Fatal("shift+wheel not marked Handled")
+	}
+	layoutListView(l, 0, 0, 100, 100)
+	if l.offset != yAfterPlain {
+		t.Fatalf("offset (Y) = %v after shift+wheel, want unchanged %v (shift+wheel scrolls X only)", l.offset, yAfterPlain)
+	}
+	if l.offsetX == 0 {
+		t.Fatal("offsetX = 0 after shift+wheel, want nonzero (shift+wheel scrolls X)")
+	}
+}
+
+func TestListViewRowSelectionUnaffectedByHorizontalOffset(t *testing.T) {
+	// Horizontal scroll must not disturb the (Y-only) row hit-test.
+	face := testFace(t)
+	items := newFakeListItems(wideText, "1", "2", "3", "4")
+	l := NewListView(face, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 100)
+
+	l.rawOffsetX = 30
+	layoutListView(l, 0, 0, 100, 100)
+	if l.offsetX == 0 {
+		t.Fatal("expected a nonzero offsetX for this test to be meaningful")
+	}
+
+	r := input.NewRouter()
+	pos := render.Point{X: l.viewport.X + 5, Y: l.viewport.Y + 60} // row 1's band
+	e := &input.PointerEvent{Action: input.Press, Pos: pos, Router: r}
+	l.OnPointer(e)
+
+	if !e.Handled {
+		t.Fatal("press on a real row not marked Handled")
+	}
+	if got, want := l.SelectedIndex(), 1; got != want {
+		t.Fatalf("SelectedIndex() = %d, want %d (row hit-test unaffected by horizontal scroll)", got, want)
+	}
+}
+
+func TestListViewScrollToXAndOffsetX(t *testing.T) {
+	face := testFace(t)
+	items := newFakeListItems(wideText)
+	l := NewListView(face, items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 100)
+
+	l.ScrollToX(25)
+	if !l.NeedsLayout() {
+		t.Fatal("ScrollToX did not invalidate arrange")
+	}
+	layoutListView(l, 0, 0, 100, 100)
+	if got := l.OffsetX(); got != 25 {
+		t.Fatalf("OffsetX() = %v, want 25", got)
+	}
+}

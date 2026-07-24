@@ -154,12 +154,28 @@ func (l *ListView) OffsetY() float32 {
 	return l.offset
 }
 
+// OffsetX returns the current horizontal scroll offset, clamped to
+// [0, max(0, contentWidth-viewport.W)] as of the last arrange pass —
+// mirroring ScrollViewer.OffsetX exactly (contentWidth is l.contentWidth(),
+// the widest row's measured text width — see its doc comment).
+func (l *ListView) OffsetX() float32 {
+	return l.offsetX
+}
+
 // ScrollTo requests a new vertical offset, clamped on the next layout pass
 // (virtualizer.layout, invoked from ArrangeContent, is the single source of
 // truth for clamping — see its doc comment), mirroring
 // ScrollViewer.ScrollTo exactly.
 func (l *ListView) ScrollTo(y float32) *ListView {
 	l.rawOffset = y
+	l.InvalidateArrange()
+	return l
+}
+
+// ScrollToX requests a new horizontal offset, clamped on the next layout
+// pass like ScrollTo, mirroring ScrollViewer.ScrollToX exactly.
+func (l *ListView) ScrollToX(x float32) *ListView {
+	l.rawOffsetX = x
 	l.InvalidateArrange()
 	return l
 }
@@ -334,6 +350,36 @@ func (l *ListView) MeasureContent(available render.Size) render.Size {
 	return render.Size{W: w, H: h}
 }
 
+// contentWidth returns the max row content width — the widest row's
+// face-measured text width plus the same lpad/rpad horizontal inset
+// ArrangeContent gives every row (see its row-rect comment) — across every
+// item, the "natural" width the widest row would need if never clipped to
+// the viewport. This is the contentWidth virtualizer.layout clamps offsetX
+// against and ArrangeContent compares against the viewport width to decide
+// whether to reserve the horizontal thumb's gutter (see its doc comment).
+//
+// A nil face can't meaningfully measure text (TextBlock.MeasureContent's own
+// nil-face convention: measures to zero), and a nil items has nothing to
+// measure either, so both report 0 — content that can't be measured never
+// triggers horizontal scrolling, keeping every existing nil-face ListView
+// (every current behavior test, and the existing listview.png golden, which
+// uses a real face but text far narrower than its viewport) byte-identical.
+func (l *ListView) contentWidth() float32 {
+	if l.face == nil || l.items == nil {
+		return 0
+	}
+	n := l.items.Len()
+	var maxW float32
+	for i := 0; i < n; i++ {
+		if w := l.face.Measure(l.items.At(i)).W; w > maxW {
+			maxW = w
+		}
+	}
+	lpad := 2 * l.metrics.PaddingS
+	rpad := l.metrics.PaddingS
+	return maxW + lpad + rpad
+}
+
 // contentBounds returns l's own bounds inset by the 2px sunken bevel (see
 // theme.MetricTokens.BevelWidth) — the area the well's raised/sunken frame
 // encloses, which ArrangeContent further insets by the thumb gutter to reach
@@ -355,16 +401,28 @@ func (l *ListView) contentBounds() render.Rect {
 // virtualizer.layout) and for row realization: it insets bounds by the 2px
 // sunken bevel first (see contentBounds' doc comment — rows must sit inside
 // the well's frame, not over it), computes the viewport within that inset
-// rect (minus the thumb gutter on the right), clamps the scroll offset,
-// determines the visible row range (recorded in visibleFirst for Render's
-// selection-band lookup), resizes the TextBlock pool to exactly that many
-// rows (see shrinkPool and the grow/reuse branches below — existing pool
-// entries are re-texted in place, never reallocated), arranges each pool
-// entry at its row's position offset by the current scroll, and recolors
-// it: HighlightText for the selected row's text, WindowText for every
-// other (set unconditionally on every pass, unlike the conditional re-text
-// below, since a selection change alone — no text change — must still
-// repaint the right rows the next time this runs).
+// rect (minus the vertical thumb's gutter on the right and, control-variants
+// Task 4, the horizontal thumb's gutter on the bottom), clamps the scroll
+// offset on both axes, determines the visible row range (recorded in
+// visibleFirst for Render's selection-band lookup), resizes the TextBlock
+// pool to exactly that many rows (see shrinkPool and the grow/reuse branches
+// below — existing pool entries are re-texted in place, never reallocated),
+// arranges each pool entry at its row's position offset by the current
+// scroll on both axes, and recolors it: HighlightText for the selected
+// row's text, WindowText for every other (set unconditionally on every
+// pass, unlike the conditional re-text below, since a selection change
+// alone — no text change — must still repaint the right rows the next time
+// this runs).
+//
+// The two gutter decisions are independent (the right gutter only reduces
+// width, the bottom gutter only reduces height) and each is made against the
+// pre-gutter inset dimension on its own axis: vGutter compares totalHeight
+// to inset.H, then hGutter compares contentWidth to the resulting viewport.W
+// (inset.W minus vGutter — NOT inset.W itself, since vGutter has already
+// permanently claimed that space from any row's actual content width; the
+// Bottom inset applied afterward doesn't touch W, so this is the same W
+// thumbGeometryX later reads back from v.viewport.W — see its doc comment
+// for why that agreement matters).
 func (l *ListView) ArrangeContent(bounds render.Rect) {
 	inset := bounds.Inset(render.Thickness{
 		Top: l.metrics.BevelWidth, Bottom: l.metrics.BevelWidth,
@@ -377,16 +435,17 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 		inset.H = 0
 	}
 
-	// Reserve the thumb gutter only when the content actually scrolls. When
-	// it fits (no thumb), the viewport is the full inset rect so rows and the
-	// selection band reach its right edge; when it scrolls, the gutter keeps
-	// the band clear of the (translucent) thumb so the highlight sits fully
-	// beside the scrollbar rather than bleeding through it.
-	gutter := float32(0)
+	// Reserve the vertical thumb's gutter only when the content actually
+	// scrolls vertically. When it fits (no thumb), the viewport is the full
+	// inset rect so rows and the selection band reach its right edge; when
+	// it scrolls, the gutter keeps the band clear of the (translucent) thumb
+	// so the highlight sits fully beside the scrollbar rather than bleeding
+	// through it.
+	vGutter := float32(0)
 	if l.totalHeight() > inset.H {
-		gutter = l.gutter
+		vGutter = l.gutter
 	}
-	viewport := inset.Inset(render.Thickness{Right: gutter})
+	viewport := inset.Inset(render.Thickness{Right: vGutter})
 	if viewport.W < 0 {
 		viewport.W = 0
 	}
@@ -394,7 +453,22 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 		viewport.H = 0
 	}
 
-	l.layout(viewport)
+	// Reserve the horizontal thumb's gutter only when the widest row's
+	// natural content actually exceeds the (already vGutter-reduced)
+	// viewport width — mirroring the vertical decision above, generalized to
+	// the X axis (see the doc comment above for why viewport.W, not inset.W,
+	// is the correct comparison here).
+	contentW := l.contentWidth()
+	hGutter := float32(0)
+	if contentW > viewport.W {
+		hGutter = l.gutter
+	}
+	viewport = viewport.Inset(render.Thickness{Bottom: hGutter})
+	if viewport.H < 0 {
+		viewport.H = 0
+	}
+
+	l.layout(viewport, contentW)
 
 	first, last := l.visibleRange()
 	n := last - first
@@ -446,7 +520,14 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 		// Inset the row text off the row edges so labels don't sit flush:
 		// 2*PaddingS on the left, PaddingS on the right. The selection band
 		// (Render) still spans the full row width; only the text is inset,
-		// the standard list-row look.
+		// the standard list-row look. X is additionally offset by -l.offsetX
+		// (0 for any ListView that doesn't scroll horizontally, so this is a
+		// no-op for every existing behavior test/golden): TextBlock.Render
+		// draws its natural-width text unclamped from its own bounds
+		// top-left (ignoring the W given here, see TextBlock.MeasureContent's
+		// own doc comment), so shifting X left as offsetX grows is what
+		// reveals text that would otherwise sit past the row's — and thus
+		// the ListView's own ClipRect's — right edge.
 		lpad := 2 * l.metrics.PaddingS
 		rpad := l.metrics.PaddingS
 		rowW := viewport.W - lpad - rpad
@@ -454,7 +535,7 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 			rowW = 0
 		}
 		rowRect := render.Rect{
-			X: viewport.X + lpad,
+			X: viewport.X + lpad - l.offsetX,
 			Y: viewport.Y + float32(idx)*l.rowH - l.offset,
 			W: rowW,
 			H: l.rowH,
@@ -524,14 +605,19 @@ func (l *ListView) ClipRect() (render.Rect, bool) {
 }
 
 // RenderOverlay implements core.OverlayRenderer, drawing the classic
-// track+thumb (drawScrollThumb, matching ScrollViewer.RenderOverlay) above
-// the clipped rows when there is content to scroll to, then the focus ring
-// while focused — per the global focus constraint shared by every
-// focusable control in this package (Slider, ComboBox, ...) — drawn last so
-// it sits above the thumb.
+// track+thumb (drawScrollThumb, matching ScrollViewer.RenderOverlay) for
+// each axis that has content to scroll to — vertical along the right edge,
+// horizontal (control-variants Task 4) along the bottom — above the clipped
+// rows, then the focus ring while focused — per the global focus constraint
+// shared by every focusable control in this package (Slider, ComboBox,
+// ...) — drawn last so it sits above both thumbs.
 func (l *ListView) RenderOverlay(r render.Renderer) {
 	if track, _, ok := l.thumbGeometry(); ok {
 		thumb, _ := l.thumbRect()
+		drawScrollThumb(r, track, thumb, l.colors)
+	}
+	if track, _, ok := l.thumbGeometryX(); ok {
+		thumb, _ := l.thumbRectX()
 		drawScrollThumb(r, track, thumb, l.colors)
 	}
 	if l.focused {
@@ -552,22 +638,44 @@ func (l *ListView) OnFocusChanged(focused bool) {
 }
 
 // OnPointer implements input.PointerHandler, extending ScrollViewer's own
-// wheel/thumb-drag handling with row click-to-select: Wheel scrolls by
-// scrollWheelStep logical px per notch and is always handled; a Press
-// inside the current thumb rect starts a drag and is handled; otherwise a
-// Press that lands on a real row (rowAt) selects it as a user-driven change
-// (selectUser) and is handled, while a Press over the gutter or empty space
-// below a short list (rowAt reports ok == false) is left unhandled;
-// Move/Release are only acted on while this ListView holds the capture.
+// wheel/thumb-drag handling with row click-to-select:
+//
+// Wheel scrolls vertically (row scroll) by scrollWheelStep logical px per
+// notch by default, and horizontally instead when Shift is held (matching
+// ScrollViewer's Shift+Wheel convention) — always handled, exactly as
+// before Task 4 for the plain-wheel case. Unlike ScrollViewer, a plain wheel
+// never falls back to X even when only X overflows: a ListView's rows are
+// its primary scroll axis, so plain wheel always means row scroll.
+//
+// A Press inside the current vertical thumb rect starts a vertical drag,
+// checked first (matching the original single-axis priority); otherwise a
+// Press inside the current horizontal thumb rect starts a horizontal drag;
+// otherwise a Press that lands on a real row (rowAt) selects it as a
+// user-driven change (selectUser) and is handled, while a Press over a
+// gutter or empty space below a short list (rowAt reports ok == false) is
+// left unhandled. Either drag records which axis it's tracking (l.drag) so
+// a subsequent Move/Release — only acted on while this ListView holds the
+// capture — knows which offset to update.
 func (l *ListView) OnPointer(e *input.PointerEvent) {
 	switch e.Action {
 	case input.Wheel:
-		l.scrollBy(-e.Delta.Y * scrollWheelStep)
+		delta := -e.Delta.Y * scrollWheelStep
+		if e.Mods&input.ModShift != 0 {
+			l.scrollByX(delta)
+		} else {
+			l.scrollBy(delta)
+		}
 		l.InvalidateArrange()
 		e.Handled = true
 	case input.Press:
 		if rect, ok := l.thumbRect(); ok && rect.Contains(e.Pos) {
 			l.dragGrabY = e.Pos.Y - rect.Y
+			l.drag = scrollDragVertical
+			e.Router.Capture(l)
+			e.Handled = true
+		} else if rect, ok := l.thumbRectX(); ok && rect.Contains(e.Pos) {
+			l.dragGrabX = e.Pos.X - rect.X
+			l.drag = scrollDragHorizontal
 			e.Router.Capture(l)
 			e.Handled = true
 		} else if idx, ok := l.rowAt(e.Pos); ok {
@@ -576,13 +684,18 @@ func (l *ListView) OnPointer(e *input.PointerEvent) {
 		}
 	case input.Move:
 		if e.Router.Captured() == l {
-			l.dragTo(e.Pos.Y)
+			if l.drag == scrollDragHorizontal {
+				l.dragToX(e.Pos.X)
+			} else {
+				l.dragTo(e.Pos.Y)
+			}
 			l.InvalidateArrange()
 			e.Handled = true
 		}
 	case input.Release:
 		if e.Router.Captured() == l {
 			e.Router.Release()
+			l.drag = scrollDragNone
 			e.Handled = true
 		}
 	}

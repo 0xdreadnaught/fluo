@@ -881,6 +881,61 @@ func TestMenuOpen(t *testing.T) {
 	})
 }
 
+// TestDataGridHScroll is the control-variants Task 4 golden for the shared
+// virtualizer's horizontal scroll: a DataGrid with 3 wide Px columns ("Name"
+// 140, "Email" 160, "Age" 140 — 440 total, exceeding the grid's own 260px
+// width and thus the viewport, the deliberate Px-only overflow scenario
+// contentWidth=sum(colWidths) targets) and 10 rows, scrolled right via
+// ScrollToX(120) so "Name" is mostly/fully scrolled past the left edge,
+// "Email" sits mid-frame, and "Age" is fully visible — showing the header's
+// cells scrolled in lockstep with the body's cells (both read the same
+// offsetX, see DataGrid.ArrangeContent/Render's doc comments) so each
+// column's title still lines up exactly over its own cells, plus the
+// horizontal thumb along the bottom edge (offset right, past its own
+// left-most position) alongside the vertical thumb (10 rows taller than the
+// visible body), inside a 280x160 frame. Sized and positioned like
+// TestDataGrid's own golden: explicit SetWidth/SetHeight, Canvas at (10,10).
+func TestDataGridHScroll(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "datagrid_hscroll", 280, 160, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		dg := controls.NewDataGrid(face)
+		dg.SetColumns(
+			controls.Column{Title: "Name", Width: controls.Px(140), Value: func(row int) string {
+				return fmt.Sprintf("User %d", row)
+			}},
+			controls.Column{Title: "Email", Width: controls.Px(160), Value: func(row int) string {
+				return fmt.Sprintf("u%d@example.com", row)
+			}},
+			controls.Column{Title: "Age", Width: controls.Px(140), Value: func(row int) string {
+				return fmt.Sprintf("%d", 20+row)
+			}},
+		)
+		dg.SetRowCount(10)
+		dg.SetWidth(260)
+		dg.SetHeight(140)
+		dg.SetSelectedIndex(1)
+		dg.ScrollToX(120)
+
+		root := controls.NewCanvas().Add(dg, 10, 10)
+
+		frame := render.Rect{X: 0, Y: 0, W: 280, H: 160}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(root, frame)
+		core.RenderWidget(root, r)
+	})
+}
+
 // TestDialog is the Phase 7 Task 7 golden: a ShowDialog modal — scrim
 // dimming two colored Fixed blocks sitting behind it in the host's own
 // content, a centered shadowed Card with "Delete file?" / "This cannot be
