@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project intends to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches 1.0.
 
+## [0.2.0] - 2026-07-23
+
+The classic-depth restyle: fluo drops its Fluent/WinUI look for an authentic
+Windows-2000 four-tone bevel chrome — every control now draws
+raised/sunken 3D edges, square corners, and gradient title bars from theme
+tokens rather than the old flat Fluent fills.
+
+### Added
+
+- **Classic color tokens** (`theme.ColorTokens`) — `ButtonFace`,
+  `ButtonHighlight`, `ButtonLight`, `ButtonShadow`, `ButtonDarkShadow`
+  (the four-tone raised/sunken bevel), `WindowWell`/`WindowText`/`GrayText`
+  (recessed content areas), `Highlight`/`HighlightText` (selection), and
+  `CaptionFrom`/`CaptionTo`/`CaptionText`/`InactiveCaption` (the title bar's
+  gradient and its unfocused fallback). Every control's fill/stroke now
+  reads exclusively from these tokens — zero literal colors in `controls`.
+- **`render.Renderer.DrawGradientRect`** (+ `*gl.Renderer` implementation) —
+  a two-stop linear-gradient fill, used by `controls.TitleBar` for the
+  classic `CaptionFrom`→`CaptionTo` caption bar.
+- Bevel-drawing helpers in `controls` for the raised/sunken four-tone edge
+  treatment shared by `Button`, `CheckBox`, `TextBox`, `ListView`, and every
+  other chrome-drawing control.
+- `theme.MetricTokens.BevelWidth` — the pixel width of each bevel step;
+  `CornerRadius`/`ControlCornerRadius` are now `0` in both bundled themes
+  (classic chrome is square, not rounded).
+
+### Changed
+
+- **Breaking:** `theme.FluentLight()`/`theme.FluentDark()` are replaced by
+  `theme.Light()`/`theme.Dark()`, returning the classic palette instead of
+  the old flat Fluent one. `theme.Theme.Name` is now `"classic-light"` /
+  `"classic-dark"`.
+- **Breaking:** roughly two dozen pre-v0.2 flat-look `ColorTokens` fields
+  (`WindowBackground`, `LayerBackground`, `CardBackground`, `TextPrimary`,
+  `Accent`, `ControlFill`, ...) are marked `// deprecated:` and mapped onto
+  the classic palette so any code still reading them keeps rendering in
+  classic colors during migration; five with zero remaining references
+  (`FocusStroke`, `ScrollThumb`, `SelectionText`, `Shadow`,
+  `CloseButtonHover`) were removed outright.
+- `cmd/fluo-gallery` no longer uses `controls.AcrylicSurface` for its
+  content pane (a translucent backdrop-blur doesn't fit the classic look);
+  it now uses a plain `controls.Border` filled with `theme.Active().Color.
+  ButtonFace`. `AcrylicSurface` itself is unchanged and still available as
+  a control for apps that want it.
+- Every control's raised/pressed/hover/disabled visual states now render as
+  classic bevel transitions (e.g. a pressed `Button` swaps to a sunken
+  bevel) rather than the old flat Fluent color swap.
+
 ## [0.1.0] - unreleased
 
 Initial feature-complete pre-release: a full Fluent/WinUI-styled retained-mode

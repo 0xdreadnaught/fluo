@@ -70,37 +70,22 @@ type ColorTokens struct {
 	//
 	// deprecated: migrating to classic tokens; removed after control restyle
 	ControlFill, ControlFillHover, ControlFillPressed render.Color
-	// ControlStroke is a control's default border; FocusStroke is the
-	// keyboard-focus ring color.
+	// ControlStroke is a control's default border.
 	//
 	// deprecated: migrating to classic tokens; removed after control restyle
-	ControlStroke, FocusStroke render.Color
-	// ScrollThumb is a scrollbar/scroll-gutter thumb's fill.
+	ControlStroke render.Color
+	// SelectionBackground is the fill for selected text/content regions.
 	//
 	// deprecated: migrating to classic tokens; removed after control restyle
-	ScrollThumb render.Color
-	// SelectionBackground and SelectionText for selected text/content regions.
-	//
-	// deprecated: migrating to classic tokens; removed after control restyle
-	SelectionBackground, SelectionText render.Color
+	SelectionBackground render.Color
 	// ControlFillDisabled, ControlStrokeDisabled, and AccentDisabled for disabled control states.
 	//
 	// deprecated: migrating to classic tokens; removed after control restyle
 	ControlFillDisabled, ControlStrokeDisabled, AccentDisabled render.Color
-	// Shadow is a drop-shadow tint for elevated surfaces (menus, dialogs).
-	//
-	// deprecated: migrating to classic tokens; removed after control restyle
-	Shadow render.Color
 	// SelectionForeground and ScrimBackground for text selection and scrim overlays.
 	//
 	// deprecated: migrating to classic tokens; removed after control restyle
 	SelectionForeground, ScrimBackground render.Color
-	// CloseButtonHover is the distinct red a window's close caption button
-	// uses for its hover/pressed fill (a common close-button convention), same value in
-	// both bundled themes — RGBA(232,17,35,255).
-	//
-	// deprecated: migrating to classic tokens; removed after control restyle
-	CloseButtonHover render.Color
 	// AcrylicTint is the translucent tint composited over a backdrop-blur
 	// acrylic/mica surface (see controls.AcrylicSurface).
 	//
