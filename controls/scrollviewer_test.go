@@ -175,6 +175,199 @@ func TestScrollViewerThumbDragViaCapture(t *testing.T) {
 	}
 }
 
+// TestScrollViewerXOffsetClampsBeyondContent mirrors
+// TestScrollViewerOffsetClampsBeyondContent on the X axis: a child much
+// wider than the viewport, scrolled far past its right edge, clamps to
+// childW-viewportW.
+func TestScrollViewerXOffsetClampsBeyondContent(t *testing.T) {
+	child := NewFixed(300, 20, render.RGB(1, 2, 3))
+	s := NewScrollViewer().SetChild(child)
+	s.ScrollToX(10000)
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	// bounds.W=100, gutter=12: childW(300) > bounds.W(100) reserves the
+	// bottom gutter too, so viewport = {W:88, H:38}; maxOffsetX = 300-88=212.
+	want := float32(300 - 88)
+	if got := s.OffsetX(); got != want {
+		t.Fatalf("offsetX=%v, want %v", got, want)
+	}
+}
+
+// TestScrollViewerXOffsetClampsNegativeToZero mirrors
+// TestScrollViewerOffsetClampsNegativeToZero on the X axis.
+func TestScrollViewerXOffsetClampsNegativeToZero(t *testing.T) {
+	child := NewFixed(300, 20, render.RGB(1, 2, 3))
+	s := NewScrollViewer().SetChild(child)
+	s.ScrollToX(-50)
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	if got := s.OffsetX(); got != 0 {
+		t.Fatalf("offsetX=%v, want 0", got)
+	}
+}
+
+// TestScrollViewerChildXPositionReflectsOffsetX mirrors
+// TestScrollViewerChildPositionReflectsOffset on the X axis: the child is
+// arranged at viewport.X-offsetX, and — since its natural width (300)
+// exceeds the viewport width — at its full desired width rather than being
+// squeezed to the viewport, so it can actually scroll into view.
+func TestScrollViewerChildXPositionReflectsOffsetX(t *testing.T) {
+	child := NewFixed(300, 20, render.RGB(1, 2, 3))
+	s := NewScrollViewer().SetChild(child)
+	s.ScrollToX(75) // within [0, 212]
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	if got := s.OffsetX(); got != 75 {
+		t.Fatalf("offsetX=%v, want 75", got)
+	}
+	// viewport.X = bounds.X = 10 (only Right/Bottom are inset).
+	wantX := float32(10 - 75)
+	if got := core.BoundsOf(child); got.X != wantX {
+		t.Fatalf("child bounds=%v, want X=%v", got, wantX)
+	}
+	if got := core.BoundsOf(child); got.W != 300 {
+		t.Fatalf("child bounds=%v, want W=300 (full desired width, not squeezed)", got)
+	}
+}
+
+// TestScrollViewerHThumbVisibleOnlyWhenContentWiderThanBounds asserts the
+// horizontal thumb appears iff the child's natural width exceeds the
+// ScrollViewer's own bounds width, mirroring the vertical thumb's existing
+// "shown iff childH > viewport.H" contract.
+func TestScrollViewerHThumbVisibleOnlyWhenContentWiderThanBounds(t *testing.T) {
+	narrow := NewFixed(80, 20, render.RGB(1, 2, 3))
+	s := NewScrollViewer().SetChild(narrow)
+	layoutScrollViewer(s, 10, 20, 100, 50)
+	if _, ok := s.thumbRectX(); ok {
+		t.Fatal("expected no horizontal thumb for content narrower than bounds")
+	}
+
+	wide := NewFixed(300, 20, render.RGB(1, 2, 3))
+	s2 := NewScrollViewer().SetChild(wide)
+	layoutScrollViewer(s2, 10, 20, 100, 50)
+	if _, ok := s2.thumbRectX(); !ok {
+		t.Fatal("expected a horizontal thumb for content wider than bounds")
+	}
+}
+
+// TestScrollViewerPlainWheelScrollsYWhenBothOverflow asserts a plain wheel
+// (no Shift) still scrolls the vertical offset when both axes overflow —
+// vertical wheel scrolling stays the default, unaffected by the content
+// also being horizontally scrollable.
+func TestScrollViewerPlainWheelScrollsYWhenBothOverflow(t *testing.T) {
+	child := NewFixed(300, 200, render.RGB(1, 2, 3))
+	s := NewScrollViewer().SetChild(child)
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	r := input.NewRouter()
+	e := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -2}, Router: r}
+	s.OnPointer(e)
+	if !e.Handled {
+		t.Fatal("wheel event not marked Handled")
+	}
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	if got := s.OffsetY(); got != 96 {
+		t.Fatalf("offset after plain wheel=%v, want 96 (Y scrolled)", got)
+	}
+	if got := s.OffsetX(); got != 0 {
+		t.Fatalf("offsetX after plain wheel=%v, want 0 (X untouched)", got)
+	}
+}
+
+// TestScrollViewerShiftWheelScrollsX asserts Shift+Wheel scrolls the
+// horizontal offset instead of the vertical one, on content that overflows
+// both axes.
+func TestScrollViewerShiftWheelScrollsX(t *testing.T) {
+	child := NewFixed(300, 200, render.RGB(1, 2, 3))
+	s := NewScrollViewer().SetChild(child)
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	r := input.NewRouter()
+	e := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -2}, Mods: input.ModShift, Router: r}
+	s.OnPointer(e)
+	if !e.Handled {
+		t.Fatal("shift+wheel event not marked Handled")
+	}
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	if got := s.OffsetX(); got != 96 {
+		t.Fatalf("offsetX after shift+wheel=%v, want 96 (X scrolled)", got)
+	}
+	if got := s.OffsetY(); got != 0 {
+		t.Fatalf("offset after shift+wheel=%v, want 0 (Y untouched)", got)
+	}
+}
+
+// TestScrollViewerPlainWheelScrollsXWhenOnlyXOverflows asserts a plain
+// wheel (no Shift) scrolls the horizontal offset when the content overflows
+// only horizontally (no vertical content to scroll to) — per the type doc
+// comment, the horizontal axis takes over the plain wheel in that case so a
+// purely horizontally-scrollable ScrollViewer doesn't require Shift.
+func TestScrollViewerPlainWheelScrollsXWhenOnlyXOverflows(t *testing.T) {
+	child := NewFixed(300, 20, render.RGB(1, 2, 3)) // fits vertically, overflows horizontally
+	s := NewScrollViewer().SetChild(child)
+	layoutScrollViewer(s, 10, 20, 100, 50)
+	if s.canScrollY() {
+		t.Fatal("test fixture unexpectedly scrolls vertically; fix the fixture")
+	}
+
+	r := input.NewRouter()
+	e := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -2}, Router: r}
+	s.OnPointer(e)
+	if !e.Handled {
+		t.Fatal("wheel event not marked Handled")
+	}
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	if got := s.OffsetX(); got != 96 {
+		t.Fatalf("offsetX after plain wheel=%v, want 96 (X scrolled since only X overflows)", got)
+	}
+}
+
+// TestScrollViewerThumbXDragViaCapture mirrors TestScrollViewerThumbDragViaCapture
+// on the X axis.
+func TestScrollViewerThumbXDragViaCapture(t *testing.T) {
+	child := NewFixed(300, 20, render.RGB(1, 2, 3))
+	s := NewScrollViewer().SetChild(child)
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	rect, ok := s.thumbRectX()
+	if !ok {
+		t.Fatal("expected a horizontal thumb rect (childW 300 > bounds W 100)")
+	}
+
+	r := input.NewRouter()
+	pressPos := render.Point{X: rect.X + 1, Y: rect.Y + rect.H/2}
+	press := &input.PointerEvent{Action: input.Press, Pos: pressPos, Router: r}
+	s.OnPointer(press)
+	if !press.Handled {
+		t.Fatal("press inside horizontal thumb not marked Handled")
+	}
+	if r.Captured() != s {
+		t.Fatal("press inside horizontal thumb did not capture the ScrollViewer")
+	}
+
+	move := &input.PointerEvent{Action: input.Move, Pos: render.Point{X: rect.X + 20, Y: pressPos.Y}, Router: r}
+	s.OnPointer(move)
+	if !move.Handled {
+		t.Fatal("move while captured not marked Handled")
+	}
+	layoutScrollViewer(s, 10, 20, 100, 50)
+	if got := s.OffsetX(); got <= 0 {
+		t.Fatalf("offsetX after drag=%v, want > 0", got)
+	}
+
+	release := &input.PointerEvent{Action: input.Release, Router: r}
+	s.OnPointer(release)
+	if !release.Handled {
+		t.Fatal("release while captured not marked Handled")
+	}
+	if r.Captured() != nil {
+		t.Fatal("release did not clear capture")
+	}
+}
+
 func TestScrollViewerNonThumbPressNotHandled(t *testing.T) {
 	child := NewFixed(80, 200, render.RGB(1, 2, 3))
 	s := NewScrollViewer().SetChild(child)

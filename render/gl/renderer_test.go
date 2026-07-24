@@ -233,6 +233,40 @@ func TestScrollClipRender(t *testing.T) {
 	})
 }
 
+// TestScrollHorizontal is the control-variants Task 3 golden for
+// ScrollViewer's horizontal scrolling: a horizontal StackPanel of 6 alternating
+// -color Fixed(60,40) blocks (desired width 380, taller than the 140x60
+// ScrollViewer's viewport is wide but not tall) scrolled right via
+// ScrollToX(100), showing the horizontal thumb along the bottom edge and no
+// vertical thumb (the content fits vertically — this is a purely
+// horizontally-overflowing ScrollViewer, per the type doc comment's
+// single-axis scenario).
+func TestScrollHorizontal(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+
+	testFrame(t, "scroll_horizontal", 160, 120, func(r *glr.Renderer) {
+		stack := controls.NewStackPanel(controls.Horizontal).SetGap(4)
+		for i := 0; i < 6; i++ {
+			c := render.RGB(0, 120, 215)
+			if i%2 == 1 {
+				c = render.RGB(255, 185, 0)
+			}
+			stack.Add(controls.NewFixed(60, 40, c))
+		}
+
+		sv := controls.NewScrollViewer().SetChild(stack)
+		sv.SetWidth(140)
+		sv.SetHeight(60)
+		sv.ScrollToX(100)
+
+		root := controls.NewCanvas().Add(sv, 10, 10)
+		core.MeasureWidget(root, render.Size{W: 160, H: 120})
+		core.ArrangeWidget(root, render.Rect{X: 0, Y: 0, W: 160, H: 120})
+		core.RenderWidget(root, r)
+	})
+}
+
 // TestClassicButton is the Phase 4 milestone golden: a themed, laid-out
 // button in a real GL context, composed ONLY from theme.Light tokens (no
 // literal colors/metrics) — a card-colored Border filling the frame (inset
