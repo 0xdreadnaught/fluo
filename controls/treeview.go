@@ -172,7 +172,7 @@ func findAncestors(roots []*TreeNode, target *TreeNode) []*TreeNode {
 // TreeView is a clickable, focusable, token-styled tree of TreeNodes: rows
 // are the depth-first flatten of every currently-expanded node (see
 // flattenTree), each drawn as an optional 'v'/'>' chevron (only when the
-// node has children — text glyphs, TextSecondary, never rotated: '>' means
+// node has children — text glyphs, WindowText, never rotated: '>' means
 // collapsed, 'v' means expanded) followed by its label, indented 16px per
 // depth level.
 //

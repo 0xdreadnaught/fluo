@@ -33,11 +33,14 @@ type Column struct {
 }
 
 // DataGrid is a virtualized, multi-column grid: a FIXED header row (drawn
-// directly — LayerBackground fill, TextSecondary titles, a 1px ControlStroke
-// bottom border) sitting above a VIRTUALIZED body that reuses the same
+// directly — each column its own raised bevel, drawRaised, ButtonFace, with a
+// WindowText title) sitting above a VIRTUALIZED body that reuses the same
 // uniform-row virtualizer ListView is built on (see virtualizer.go) for its
 // viewport/scroll/thumb math. Only the body scrolls; the header's own rect
-// depends solely on the grid's arranged bounds, never on scroll offset.
+// depends solely on the grid's arranged bounds, never on scroll offset. The
+// outer frame is a sunken WindowWell (drawSunken), with the header's raised
+// cells and every body row inset inside it by BevelWidth (see
+// ArrangeContent).
 //
 // Column widths are resolved against the body viewport's width exactly like
 // Grid's own column tracks (see resolveTracks in grid.go, reused directly
@@ -55,10 +58,11 @@ type Column struct {
 // contract as ListView (SetSelectedIndex silent+clamped; SetSelectedIndex/
 // row click/Up+Down keyboard all route through selectUser or
 // scrollIntoView). A hovered row (row hit under the pointer, tracked
-// separately from selection) fills ControlFillHover; the selected row fills
-// SelectionBackground with SelectionForeground cell text.
+// separately from selection) is tracked but NOT painted — classic lists have
+// no hover fill; the selected row paints a Highlight band with
+// HighlightText cell text.
 //
-// v0 grid lines: horizontal only — a 1px ControlStroke line beneath every
+// v0 grid lines: horizontal only — a 1px ButtonShadow line beneath every
 // realized row. There are no vertical column separators in v0; a later
 // phase may add them as an opt-in.
 type DataGrid struct {
@@ -94,9 +98,10 @@ type DataGrid struct {
 	// (-1 == none). It is an ABSOLUTE row index, not a screen position, so
 	// any offset change that happens without a fresh Move to re-hit-test
 	// against (Wheel, thumb dragTo) would otherwise leave it naming a row
-	// that has since scrolled to a different on-screen position —
-	// OnPointer clears it to -1 in both of those cases rather than let the
-	// hover band paint on the wrong row.
+	// that has since scrolled to a different on-screen position — OnPointer
+	// clears it to -1 in both of those cases so it never names a stale row.
+	// Render does not paint hoverRow at all (the classic look has no hover
+	// fill); it is tracked purely for other consumers.
 	hoverRow int
 	focused  bool
 
@@ -516,8 +521,9 @@ func (g *DataGrid) OnFocusChanged(focused bool) {
 // Press landing on a real body row (rowAt) selects it as a user-driven
 // change (selectUser) and is handled, while a Press over the header, the
 // gutter, or empty space below a short grid (rowAt reports ok == false) is
-// left unhandled. Move updates hoverRow (for the ControlFillHover band) when
-// not mid-drag; Leave clears it.
+// left unhandled. Move updates hoverRow when not mid-drag; Leave clears it —
+// hoverRow is tracked purely for other consumers, since Render paints no
+// hover fill in the classic look.
 func (g *DataGrid) OnPointer(e *input.PointerEvent) {
 	switch e.Action {
 	case input.Wheel:
@@ -525,8 +531,8 @@ func (g *DataGrid) OnPointer(e *input.PointerEvent) {
 		// The offset just moved but this isn't a Move (no fresh pointer
 		// position to re-hit-test against), so whatever row hoverRow named
 		// no longer necessarily sits under the pointer on screen — clear it
-		// rather than paint ControlFillHover on the wrong row (see the row
-		// hover doc comment on hoverRow's field).
+		// rather than leave it naming the wrong row (see the row hover doc
+		// comment on hoverRow's field).
 		g.hoverRow = -1
 		g.InvalidateArrange()
 		e.Handled = true
