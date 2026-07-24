@@ -52,9 +52,18 @@ func (f *Font) rasterGlyph(gi sfnt.GlyphIndex, sizePx float32, pad int) (mask *i
 	maxX := float32(bounds.Max.X) / 64
 	maxY := float32(bounds.Max.Y) / 64
 
-	// 2) mask size: ceil(bounds) + 2*pad on each axis.
-	w := int(math.Ceil(float64(maxX-minX))) + 2*pad
-	h := int(math.Ceil(float64(maxY-minY))) + 2*pad
+	// 2) mask size: integer-aligned so the glyph's baseline (y=0) and left
+	// origin (x=0) land on whole mask rows/columns. Flooring minX/minY
+	// (rather than using the fractional value directly) means offX/offY
+	// below are integers, so bearingX/bearingY (== -offX/-offY, see step 5)
+	// come out as whole device pixels for every glyph. Since every glyph is
+	// later placed at the same (already pixel-snapped) integer baseline,
+	// integer bearings are what make baselines line up exactly across
+	// glyphs instead of jittering by the glyph's fractional minY.
+	fminX := int(math.Floor(float64(minX)))
+	fminY := int(math.Floor(float64(minY)))
+	w := int(math.Ceil(float64(maxX))) - fminX + 2*pad
+	h := int(math.Ceil(float64(maxY))) - fminY + 2*pad
 	if w <= 0 {
 		w = 1
 	}
@@ -63,9 +72,14 @@ func (f *Font) rasterGlyph(gi sfnt.GlyphIndex, sizePx float32, pad int) (mask *i
 	}
 
 	// 3) rasterize, offsetting every point so the tight outline bounds
-	// (expanded by pad) land inside [0, w) x [0, h).
-	offX := -minX + float32(pad)
-	offY := -minY + float32(pad)
+	// (expanded by pad) land inside [0, w) x [0, h). offX/offY are integers
+	// (see above), so this only shifts the outline by a whole number of
+	// mask pixels; the sub-pixel part of minX/minY is preserved in the
+	// rasterized coverage, it just lands at a fractional position within
+	// pixel row/column fminX-pad/fminY-pad rather than being folded into
+	// the offset itself.
+	offX := float32(pad - fminX)
+	offY := float32(pad - fminY)
 
 	rast := vector.NewRasterizer(w, h)
 	rast.DrawOp = draw.Src
@@ -97,9 +111,11 @@ func (f *Font) rasterGlyph(gi sfnt.GlyphIndex, sizePx float32, pad int) (mask *i
 	mask = image.NewAlpha(image.Rect(0, 0, w, h))
 	rast.Draw(mask, mask.Bounds(), image.Opaque, image.Point{})
 
-	// 5) bearings: offset from pen position to mask top-left.
-	bearingX = minX - float32(pad)
-	bearingY = minY - float32(pad)
+	// 5) bearings: offset from pen position to mask top-left. These are
+	// exactly -offX/-offY (whole pixels, see step 2) rather than the
+	// fractional minX/minY used pre-integer-alignment.
+	bearingX = float32(fminX - pad)
+	bearingY = float32(fminY - pad)
 
 	return mask, bearingX, bearingY, nil
 }

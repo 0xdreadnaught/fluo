@@ -1,6 +1,7 @@
 package text
 
 import (
+	"math"
 	"testing"
 
 	"golang.org/x/image/font/gofont/goregular"
@@ -79,4 +80,48 @@ func TestRasterGlyph(t *testing.T) {
 		t.Errorf("bearingY should be negative (above baseline), got %v", by)
 	}
 	_ = bx
+}
+
+// TestRasterGlyphIntegerBearings is the anti-jitter unit test for the fix
+// in rasterGlyph: bearingX/bearingY must be whole device pixels for every
+// glyph, since Face.Draw snaps the shared device baseline to an integer
+// pixel once and then combines it with each glyph's bearingY unrounded — if
+// bearingY carried a fractional part (as it did pre-fix, coming straight
+// from the glyph's fractional outline minY), different glyphs would land on
+// different baseline rows even though the pen's baseline is the same. Covers
+// letters and digits (the reported "0123456789 bobbing" symptom) plus a
+// couple of ascender/descender-heavy glyphs likely to have very different
+// fractional minY/minX.
+func TestRasterGlyphIntegerBearings(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, r := range "0123456789AgjQ" {
+		gi := mustGlyph(t, f, r)
+		mask, bx, by, err := f.rasterGlyph(gi, 37, 4) // odd, non-power-of-two px to surface fractional bounds
+		if err != nil {
+			t.Fatalf("rasterGlyph(%q): %v", r, err)
+		}
+
+		if bx != float32(math.Trunc(float64(bx))) {
+			t.Errorf("rasterGlyph(%q): bearingX = %v, not integer", r, bx)
+		}
+		if by != float32(math.Trunc(float64(by))) {
+			t.Errorf("rasterGlyph(%q): bearingY = %v, not integer", r, by)
+		}
+
+		b := mask.Bounds()
+		if b.Dx() <= 0 || b.Dy() <= 0 {
+			t.Errorf("rasterGlyph(%q): empty mask bounds %v", r, b)
+		}
+		sum := 0
+		for _, a := range mask.Pix {
+			sum += int(a)
+		}
+		if sum == 0 {
+			t.Errorf("rasterGlyph(%q): mask has no coverage", r)
+		}
+	}
 }

@@ -1,6 +1,7 @@
 package text
 
 import (
+	"math"
 	"testing"
 
 	"golang.org/x/image/font/gofont/goregular"
@@ -115,6 +116,63 @@ func TestFaceDrawUsesDrawGlyphs(t *testing.T) {
 			}
 			if rdy := dy - float32(int(dy+0.5)); rdy > 1e-3 || rdy < -1e-3 {
 				t.Errorf("scale=%v quad[%d]: Dst.Y*scale = %v not pixel-snapped", scale, i, dy)
+			}
+		}
+	}
+}
+
+// TestFaceDrawBaselineConsistent is the anti-jitter regression test: it
+// renders a string of uniform-height digits (plus a mixed-case string with
+// ascenders/descenders) and asserts every emitted glyph quad shares the same
+// integer device baseline. Before the rasterGlyph integer-bearing fix, each
+// glyph's bearingY carried the outline's fractional minY, so
+// quad.Dst.Y*scale - bearingY (device baseline) varied by up to 1px between
+// glyphs even though Face.Draw computes a single shared baseline for the
+// whole string — the reported "0123456789 bobbing" bug. Checked at scale 1
+// and scale 2 since px (and so which coverage-atlas entries are used) is
+// recomputed per scale.
+func TestFaceDrawBaselineConsistent(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := NewFace(f, 16)
+	atlas := fa.Font.sharedAtlas()
+
+	for _, s := range []string{"0123456789", "Hi fluo Qgjy"} {
+		for _, scale := range []float32{1, 2} {
+			rr := &recordingRenderer{scale: scale}
+			fa.Draw(rr, render.Point{X: 2, Y: 3}, s, render.RGB(255, 255, 255))
+
+			px := int(fa.SizePx*scale + 0.5)
+			if px < 1 {
+				px = 1
+			}
+
+			var wantBaseline float32
+			have := false
+			qi := 0
+			for _, ch := range s {
+				gi, _ := fa.Font.glyphIndex(ch)
+				e, err := atlas.glyphCoverage(gi, px)
+				if err != nil || e.empty {
+					continue
+				}
+				if qi >= len(rr.glyphQuads) {
+					t.Fatalf("s=%q scale=%v: ran out of quads at visible glyph %d", s, scale, qi)
+				}
+				q := rr.glyphQuads[qi]
+				baseline := q.Dst.Y*scale - e.bearingY
+
+				if rounded := float32(math.Round(float64(baseline))); baseline-rounded > 1e-3 || baseline-rounded < -1e-3 {
+					t.Errorf("s=%q scale=%v glyph %q: device baseline %v not integer", s, scale, ch, baseline)
+				}
+				if !have {
+					wantBaseline, have = baseline, true
+				} else if baseline-wantBaseline > 1e-3 || baseline-wantBaseline < -1e-3 {
+					t.Errorf("s=%q scale=%v glyph %q: device baseline = %v, want %v (same as other glyphs in the string)", s, scale, ch, baseline, wantBaseline)
+				}
+				qi++
 			}
 		}
 	}
