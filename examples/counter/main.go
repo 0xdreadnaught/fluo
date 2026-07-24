@@ -32,7 +32,7 @@ func main() {
 	// (there are none here but a real app might have several sources)
 	// would push through the same binding.
 	count := new(core.Property[int])
-	label := controls.NewTextBlock(body, "").SetColor(th.Color.TextPrimary)
+	label := controls.NewTextBlock(body, "").SetColor(th.Color.WindowText)
 	cancel := bind.OneWay(count, func(n int) {
 		label.SetText(fmt.Sprintf("Clicked %d times", n))
 	})

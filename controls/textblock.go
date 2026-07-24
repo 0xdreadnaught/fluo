@@ -21,7 +21,7 @@ type TextBlock struct {
 // color is styled from theme.Active() at construction; rebuild to re-theme.
 // SetColor overrides the theme default.
 func NewTextBlock(face *text.Face, s string) *TextBlock {
-	tb := &TextBlock{face: face, color: theme.Active().Color.TextPrimary}
+	tb := &TextBlock{face: face, color: theme.Active().Color.WindowText}
 	tb.text.OnChange(func(_, _ string) { tb.InvalidateMeasure() })
 	tb.text.Set(s)
 	return tb

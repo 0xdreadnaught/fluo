@@ -282,11 +282,10 @@ face := text.NewFace(font, 14)
 tb := controls.NewTextBlock(face, "Hello, fluo")
 ```
 
-**Notes** — The theme default reads `theme.Active().Color.TextPrimary`,
-which is one of theme's deprecated flat tokens (mapped to `WindowText` in
-both built-in themes — see the [theming](theming.md#colortokens) page).
-`TextBlock` is the one live reader of `TextPrimary` still on the pre-v0.2
-token path.
+**Notes** — The theme default reads `theme.Active().Color.WindowText`, the
+classic primary-text token (see the [theming](theming.md#colortokens) page).
+The color is captured at construction, so changing the active theme does not
+recolor an existing `TextBlock` — rebuild the tree after `theme.SetActive`.
 
 ### Methods
 
