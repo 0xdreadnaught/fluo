@@ -523,14 +523,16 @@ func (l *ListView) ClipRect() (render.Rect, bool) {
 	return l.contentBounds(), true
 }
 
-// RenderOverlay implements core.OverlayRenderer, drawing the thumb above the
-// clipped rows when there is content to scroll to (matching
-// ScrollViewer.RenderOverlay), then the focus ring while focused — per the
-// global focus constraint shared by every focusable control in this
-// package (Slider, ComboBox, ...) — drawn last so it sits above the thumb.
+// RenderOverlay implements core.OverlayRenderer, drawing the classic
+// track+thumb (drawScrollThumb, matching ScrollViewer.RenderOverlay) above
+// the clipped rows when there is content to scroll to, then the focus ring
+// while focused — per the global focus constraint shared by every
+// focusable control in this package (Slider, ComboBox, ...) — drawn last so
+// it sits above the thumb.
 func (l *ListView) RenderOverlay(r render.Renderer) {
-	if rect, ok := l.thumbRect(); ok {
-		r.FillRoundedRect(rect, l.thumbRadius, l.thumbColor)
+	if track, _, ok := l.thumbGeometry(); ok {
+		thumb, _ := l.thumbRect()
+		drawScrollThumb(r, track, thumb, l.colors)
 	}
 	if l.focused {
 		drawFocusRing(r, l.Bounds(), l.colors)

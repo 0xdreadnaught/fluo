@@ -45,12 +45,12 @@ type ScrollViewer struct {
 	// edge to the cursor.
 	dragGrabY float32
 
-	// gutter, thumbColor, and thumbRadius are captured from theme.Active()
-	// at construction (see NewScrollViewer); structural constants (thumb
-	// min height, wheel step) are not themed.
-	gutter      float32
-	thumbColor  render.Color
-	thumbRadius float32
+	// gutter is captured from theme.Active() at construction (see
+	// NewScrollViewer); structural constants (thumb min height, wheel step)
+	// are not themed. colors is the full classic token set, needed by
+	// RenderOverlay's drawScrollThumb call (raised thumb bevel + track).
+	gutter float32
+	colors theme.ColorTokens
 }
 
 // NewScrollViewer returns an empty ScrollViewer with no child and offset 0,
@@ -58,9 +58,8 @@ type ScrollViewer struct {
 func NewScrollViewer() *ScrollViewer {
 	t := theme.Active()
 	return &ScrollViewer{
-		gutter:      t.Metric.ScrollGutter,
-		thumbColor:  t.Color.ScrollThumb,
-		thumbRadius: t.Metric.ControlCornerRadius,
+		gutter: t.Metric.ScrollGutter,
+		colors: t.Color,
 	}
 }
 
@@ -232,15 +231,17 @@ func (s *ScrollViewer) thumbRect() (render.Rect, bool) {
 	return render.Rect{X: track.X, Y: thumbY, W: track.W, H: thumbH}, true
 }
 
-// RenderOverlay implements core.OverlayRenderer, drawing the thumb (a
-// rounded-rect fill in the theme's ScrollThumb color, captured at
-// construction) above the clipped child when there is content to scroll to.
+// RenderOverlay implements core.OverlayRenderer, drawing the classic
+// scrollbar track+thumb (drawScrollThumb — a flat ButtonFace track with a
+// raised ButtonFace thumb) above the clipped child when there is content to
+// scroll to.
 func (s *ScrollViewer) RenderOverlay(r render.Renderer) {
-	rect, ok := s.thumbRect()
+	track, _, ok := s.thumbGeometry()
 	if !ok {
 		return
 	}
-	r.FillRoundedRect(rect, s.thumbRadius, s.thumbColor)
+	thumb, _ := s.thumbRect()
+	drawScrollThumb(r, track, thumb, s.colors)
 }
 
 // dragTo recomputes rawOffset from a drag's current pointer y-position,

@@ -490,12 +490,14 @@ func (g *DataGrid) ClipRect() (render.Rect, bool) {
 	return inset.Inset(render.Thickness{Top: g.headerHeight()}), true
 }
 
-// RenderOverlay implements core.OverlayRenderer, drawing the thumb above the
-// clipped body rows when there is content to scroll to, then the focus ring
-// while focused — matching ListView.RenderOverlay exactly.
+// RenderOverlay implements core.OverlayRenderer, drawing the classic
+// track+thumb (drawScrollThumb) above the clipped body rows when there is
+// content to scroll to, then the focus ring while focused — matching
+// ListView.RenderOverlay exactly.
 func (g *DataGrid) RenderOverlay(r render.Renderer) {
-	if rect, ok := g.thumbRect(); ok {
-		r.FillRoundedRect(rect, g.thumbRadius, g.thumbColor)
+	if track, _, ok := g.thumbGeometry(); ok {
+		thumb, _ := g.thumbRect()
+		drawScrollThumb(r, track, thumb, g.colors)
 	}
 	if g.focused {
 		drawFocusRing(r, g.Bounds(), g.colors)

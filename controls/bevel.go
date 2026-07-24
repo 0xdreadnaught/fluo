@@ -66,6 +66,22 @@ func drawGroove(r render.Renderer, rect render.Rect, horizontal bool, c theme.Co
 	r.FillRect(render.Rect{X: cx + 1, Y: rect.Y, W: 1, H: rect.H}, c.ButtonHighlight)
 }
 
+// drawScrollThumb paints a classic scrollbar's track and thumb, replacing
+// the pre-restyle translucent rounded thumb (drawn alone, over whatever
+// background showed through the gutter) shared by ScrollViewer and the
+// virtualizer behind ListView/DataGrid: the track is a flat `c.ButtonFace`
+// fill with a 1px `c.ButtonShadow` groove line on its inner edge (the edge
+// bordering the scrolled content, i.e. `track`'s own left edge for a
+// right-side vertical scrollbar) so it reads as a shallow well, then the
+// thumb is painted as a solid raised bevel (drawRaised) so it stands out
+// against the flat track. Geometry (both rects) is entirely the caller's —
+// this only changes how they are painted.
+func drawScrollThumb(r render.Renderer, track, thumb render.Rect, c theme.ColorTokens) {
+	r.FillRect(track, c.ButtonFace)
+	r.FillRect(render.Rect{X: track.X, Y: track.Y, W: 1, H: track.H}, c.ButtonShadow)
+	drawRaised(r, thumb, c.ButtonFace, c)
+}
+
 // drawFocusRect paints the classic 1px inset focus rectangle (Highlight
 // color), one pixel inside rect, as four 1px-thick edge FillRects forming
 // the border of the inset rectangle. A solid line; the classic dotted XOR
