@@ -699,11 +699,14 @@ func TestDataGrid(t *testing.T) {
 	})
 }
 
-// TestTitleBar is the Phase 8 Task 4 golden: a TitleBar reading "fluo" with
-// its close caption button hovered — showing the distinct CloseButtonHover
-// red fill behind the white X glyph — inside a 300x40 frame. The bar itself
-// is exactly titleBarHeight (32) tall, vertically centered in the taller
-// frame (4px of WindowBackground showing above and below it).
+// TestTitleBar is the Phase 8 Task 4 golden (v0.2 classic restyle): a
+// TitleBar reading "fluo" with a horizontal gradient caption
+// (CaptionFrom->CaptionTo) and its close caption button hovered — in the
+// classic look this is a plain gray raised caption button (the old
+// CloseButtonHover red was dropped), with a WindowText X glyph. Inside a
+// 300x40 frame; the bar itself is exactly titleBarHeight (32) tall,
+// vertically centered in the taller frame (4px of window background showing
+// above and below it).
 func TestTitleBar(t *testing.T) {
 	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
