@@ -204,30 +204,18 @@ func (s *Slider) ArrangeContent(bounds render.Rect) {}
 // Children returns nil: Slider is a leaf widget.
 func (s *Slider) Children() []core.Widget { return nil }
 
-// trackColors resolves the track's fill and stroke (ControlFill/
-// ControlStroke normally, ControlFillDisabled/ControlStrokeDisabled while
-// disabled) — the track itself has no hover/pressed feedback, unlike the
-// thumb (see thumbColor).
-func (s *Slider) trackColors() (fill, stroke render.Color) {
-	if !s.enabled {
-		return s.colors.ControlFillDisabled, s.colors.ControlStrokeDisabled
-	}
-	return s.colors.ControlFill, s.colors.ControlStroke
-}
-
-// filledColor resolves the accent-filled portion's color: Accent normally,
-// AccentDisabled while disabled.
-func (s *Slider) filledColor() render.Color {
-	if !s.enabled {
-		return s.colors.AccentDisabled
-	}
-	return s.colors.Accent
-}
-
 // thumbColor resolves the thumb's color: Accent at rest, AccentHover while
 // the pointer hovers the slider, AccentDisabled while disabled (checked
 // first — a disabled slider ignores hover entirely, per OnPointer never
 // updating s.hover while disabled).
+//
+// Render no longer calls thumbColor (the classic restyle draws the thumb via
+// drawRaised keyed directly off s.hover — ButtonLight/ButtonFace, not this
+// method's Accent-family colors); it is kept solely because
+// TestSliderHoverTracked exercises it directly as its regression proof that
+// hover and rest resolve to different colors (the pre-restyle deprecated
+// tokens this method reads, Accent/AccentHover, are still distinct in both
+// classic themes, so the test still passes unchanged).
 func (s *Slider) thumbColor() render.Color {
 	if !s.enabled {
 		return s.colors.AccentDisabled
@@ -238,30 +226,32 @@ func (s *Slider) thumbColor() render.Color {
 	return s.colors.Accent
 }
 
-// Render paints the rounded track (fill + hairline stroke), the
-// accent-filled portion from the track's left edge to the thumb's center,
-// and the 16x16 circular thumb on top.
+// Render paints the classic trackbar: a thin sunken groove (drawSunken,
+// ButtonFace) across the slider's full width, a Highlight-filled band from
+// the track's left edge to the thumb's center overlaid on top of it, and a
+// square 16x16 raised thumb (drawRaised) centered on the thumb position —
+// ButtonLight while hovered.
 func (s *Slider) Render(r render.Renderer) {
+	c := s.colors
 	bounds := s.Bounds()
-	radius := sliderTrackHeight / 2
 	trackY := bounds.Y + (bounds.H-sliderTrackHeight)/2
 
 	track := render.Rect{X: bounds.X, Y: trackY, W: bounds.W, H: sliderTrackHeight}
-	fill, stroke := s.trackColors()
-	r.FillRoundedRect(track, radius, fill)
-	if stroke.A > 0 {
-		r.StrokeRoundedRect(track, radius, s.metrics.StrokeWidth, stroke)
-	}
+	drawSunken(r, track, c.ButtonFace, c)
 
 	thumbX := s.thumbCenterX()
 	filled := render.Rect{X: bounds.X, Y: trackY, W: thumbX - bounds.X, H: sliderTrackHeight}
-	r.FillRoundedRect(filled, radius, s.filledColor())
+	r.FillRect(filled, c.Highlight)
 
+	thumbFace := c.ButtonFace
+	if s.hover {
+		thumbFace = c.ButtonLight
+	}
 	thumb := render.Rect{
 		X: thumbX - sliderThumbRadius, Y: bounds.Y + (bounds.H-sliderThumbSize)/2,
 		W: sliderThumbSize, H: sliderThumbSize,
 	}
-	r.FillRoundedRect(thumb, sliderThumbRadius, s.thumbColor())
+	drawRaised(r, thumb, thumbFace, c)
 }
 
 // RenderOverlay draws the focus ring while focused, per the global focus

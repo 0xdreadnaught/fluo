@@ -84,8 +84,10 @@ func (c *ClickBehavior) Activate() {
 }
 
 // drawFocusRing draws the focus-ring overlay shared by every focusable
-// control (Button, CheckBox, RadioButton, ToggleSwitch, TextBox, Slider,
-// ListView, tabStrip): the classic solid-line inset focus rectangle (see
+// control except TextBox (whose sunken well plus caret already reads as
+// focused — see TextBox.RenderOverlay's doc comment) — Button, CheckBox,
+// RadioButton, ToggleSwitch, Slider, ListView, tabStrip: the classic
+// solid-line inset focus rectangle (see
 // drawFocusRect in bevel.go), using colors.Highlight. Callers pass their own
 // bounds and are expected to have already checked their focused flag.
 //

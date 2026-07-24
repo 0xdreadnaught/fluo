@@ -599,27 +599,28 @@ func (t *TextBox) ClipRect() (render.Rect, bool) {
 	return t.Bounds(), true
 }
 
-// Render paints the chrome (fill/stroke, focused/disabled state), then the
-// selection highlight, main text run (or placeholder), and caret, all
-// clipped to the textbox's own bounds (see ClipRect) since TextBox draws its
-// content directly rather than through a child widget that RenderWidget
-// would clip via ClipProvider on its own.
+// Render paints the classic sunken input well (drawSunken, WindowWell fill —
+// ButtonFace while disabled, per the classic "grayed-out field" convention),
+// then the selection highlight, main text run (or placeholder, split around
+// any active selection so the selected glyphs recolor to HighlightText), and
+// caret, all clipped to the textbox's own bounds (see ClipRect) since TextBox
+// draws its content directly rather than through a child widget that
+// RenderWidget would clip via ClipProvider on its own.
+//
+// No separate focus ring: PaddingM (8px) already clears the 2px sunken
+// bevel drawn by drawSunken on every edge, so the existing text/caret origin
+// needs no further draw-only inset — see RenderOverlay's doc comment for why
+// TextBox alone, among the focusable controls in this package, paints no
+// focus ring at all.
 func (t *TextBox) Render(r render.Renderer) {
+	c := t.colors
 	bounds := t.Bounds()
-	radius := t.metrics.ControlCornerRadius
 
-	fill := t.colors.ControlFill
-	stroke := t.colors.ControlStroke
-	switch {
-	case !t.enabled:
-		fill = t.colors.ControlFillDisabled
-		stroke = t.colors.ControlStrokeDisabled
-	case t.focused:
-		stroke = t.colors.FocusStroke
+	fill := c.WindowWell
+	if !t.enabled {
+		fill = c.ButtonFace
 	}
-
-	r.FillRoundedRect(bounds, radius, fill)
-	r.StrokeRoundedRect(bounds, radius, t.metrics.StrokeWidth, stroke)
+	drawSunken(r, bounds, fill, c)
 
 	rect, clip := t.ClipRect()
 	if clip {
@@ -632,34 +633,58 @@ func (t *TextBox) Render(r render.Renderer) {
 	textY := bounds.Y + (bounds.H-lh)/2
 	textX := bounds.X + pad - t.hscroll
 
-	if start, end := t.Selection(); start != end {
-		selX0 := bounds.X + pad + t.xOf(start) - t.hscroll
-		selX1 := bounds.X + pad + t.xOf(end) - t.hscroll
-		r.FillRect(render.Rect{X: selX0, Y: textY, W: selX1 - selX0, H: lh}, t.colors.SelectionBackground)
+	start, end := t.Selection()
+	hasSel := start != end
+
+	if hasSel {
+		selX0 := textX + t.xOf(start)
+		selX1 := textX + t.xOf(end)
+		r.FillRect(render.Rect{X: selX0, Y: textY, W: selX1 - selX0, H: lh}, c.Highlight)
 	}
 
 	if s, color := t.displayText(); t.face != nil && s != "" {
-		t.face.Draw(r, render.Point{X: textX, Y: textY}, s, color)
+		if hasSel {
+			t.drawTextWithSelection(r, []rune(s), start, end, textX, textY, color)
+		} else {
+			t.face.Draw(r, render.Point{X: textX, Y: textY}, s, color)
+		}
 	}
 
 	if t.caretShown() {
-		cx := bounds.X + pad + t.xOf(t.caret) - t.hscroll
-		r.FillRect(render.Rect{X: cx, Y: textY, W: caretWidth, H: lh}, t.colors.Accent)
+		cx := textX + t.xOf(t.caret)
+		r.FillRect(render.Rect{X: cx, Y: textY, W: caretWidth, H: lh}, c.WindowText)
 	}
 }
 
-// RenderOverlay draws the focus ring while focused, per the global focus
-// constraint: StrokeRoundedRect on the textbox's bounds inflated by 2,
-// radius = control radius + 2, FocusStroke color and FocusStrokeWidth. This
-// is IN ADDITION to Render's own focused-border color (FocusStroke at the
-// normal StrokeWidth) — v0 has no WinUI-style bottom accent bar, just the
-// stroke recolor plus the shared ring.
-func (t *TextBox) RenderOverlay(r render.Renderer) {
-	if !t.focused {
-		return
+// drawTextWithSelection draws runes in three pieces — before [start,end),
+// inside it (recolored to HighlightText over the Highlight selection band),
+// and after — so the selected glyphs read correctly over the band instead of
+// the whole run drawing uniformly in color. textX/textY is the same
+// unselected-run origin Render itself would have used; each piece's x
+// offset derives from t.xOf, matching how selX0/selX1 above were computed.
+func (t *TextBox) drawTextWithSelection(r render.Renderer, runes []rune, start, end int, textX, textY float32, color render.Color) {
+	if pre := string(runes[:start]); pre != "" {
+		t.face.Draw(r, render.Point{X: textX, Y: textY}, pre, color)
 	}
-	drawFocusRing(r, t.Bounds(), t.colors)
+	if sel := string(runes[start:end]); sel != "" {
+		x := textX + t.xOf(start)
+		t.face.Draw(r, render.Point{X: x, Y: textY}, sel, t.colors.HighlightText)
+	}
+	if post := string(runes[end:]); post != "" {
+		x := textX + t.xOf(end)
+		t.face.Draw(r, render.Point{X: x, Y: textY}, post, color)
+	}
 }
+
+// RenderOverlay is a deliberate no-op: classic Windows textboxes draw no
+// separate focus ring (unlike every other focusable control in this
+// package, per drawFocusRing's doc comment in clickable.go) — the caret and
+// the sunken well already read as "this is the focused field," and the box
+// has no raised/sunken chrome swap to signal focus with either (unlike
+// Button's press-sunken state). TextBox still implements OverlayRenderer so
+// core.RenderWidget's overlay dispatch (see core/widget.go) finds a stable
+// method here rather than silently falling through, but it paints nothing.
+func (t *TextBox) RenderOverlay(r render.Renderer) {}
 
 // OnKey implements input.KeyHandler, the normative Task 6 keyboard map.
 // Ignored entirely (no mutation, Handled left false) while disabled or

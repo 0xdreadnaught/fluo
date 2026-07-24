@@ -6,13 +6,16 @@ import (
 	"github.com/0xdreadnaught/fluo/theme"
 )
 
-// Fixed geometry for ProgressBar: a 4px-tall rounded track (radius =
-// height/2, matching Slider's track), desired size {160, 8}.
+// Fixed geometry for ProgressBar: desired size {160, 8}.
 const (
-	progressTrackHeight   float32 = 4
 	progressDesiredWidth  float32 = 160
 	progressDesiredHeight float32 = 8
 )
+
+// progressChunkGap is the gap, in px, between adjacent classic "chunked"
+// fill blocks (see Render) — the Windows-2000 progress bar's signature
+// marching-blocks look, as opposed to a single solid bar.
+const progressChunkGap float32 = 2
 
 // ProgressBar is a non-interactive, token-styled horizontal progress
 // indicator over [0, 1]. Unlike every other control in this package, it
@@ -67,16 +70,32 @@ func (p *ProgressBar) ArrangeContent(bounds render.Rect) {}
 // Children returns nil: ProgressBar is a leaf widget.
 func (p *ProgressBar) Children() []core.Widget { return nil }
 
-// Render paints the rounded track (ControlFill, no stroke) and the
-// Accent-filled portion spanning Value proportion of the full width.
+// Render paints the classic sunken well (drawSunken, WindowWell) and, inside
+// it (inset by the well's own 2px bevel), the Value-proportion fill as
+// discrete "chunked" Highlight blocks — the Windows-2000 progress bar's
+// marching-blocks look, rather than one solid bar. Each block is exactly as
+// wide as the inset well is tall (a square chunk) with a progressChunkGap
+// gap to the next; only whole blocks that fit entirely within the filled
+// region are drawn (a naturally simple stopping rule: iterate x in
+// blockWidth+gap steps while the next block still fits inside
+// innerLeft+filledWidth), so the fill grows one whole chunk at a time as
+// Value increases rather than ever drawing a partial block.
 func (p *ProgressBar) Render(r render.Renderer) {
+	c := p.colors
 	bounds := p.Bounds()
-	radius := progressTrackHeight / 2
-	trackY := bounds.Y + (bounds.H-progressTrackHeight)/2
 
-	track := render.Rect{X: bounds.X, Y: trackY, W: bounds.W, H: progressTrackHeight}
-	r.FillRoundedRect(track, radius, p.colors.ControlFill)
+	drawSunken(r, bounds, c.WindowWell, c)
 
-	filled := render.Rect{X: bounds.X, Y: trackY, W: bounds.W * p.value, H: progressTrackHeight}
-	r.FillRoundedRect(filled, radius, p.colors.Accent)
+	inner := bounds.Inset(render.Uniform(2))
+	if inner.W <= 0 || inner.H <= 0 {
+		return
+	}
+
+	blockWidth := inner.H
+	filledRight := inner.X + inner.W*p.value
+	step := blockWidth + progressChunkGap
+
+	for x := inner.X; x+blockWidth <= filledRight; x += step {
+		r.FillRect(render.Rect{X: x, Y: inner.Y, W: blockWidth, H: inner.H}, c.Highlight)
+	}
 }
