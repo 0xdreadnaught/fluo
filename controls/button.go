@@ -9,6 +9,27 @@ import (
 	"github.com/0xdreadnaught/fluo/timers"
 )
 
+// ButtonShape selects a Button's outer silhouette. ShapeRect (the default,
+// zero value) is the classic square four-tone bevel, unchanged from before
+// this type existed. ShapePill renders a stadium — fully rounded ends,
+// radius = bounds.H/2. ShapeCircle renders a circle, radius = min(bounds.W,
+// bounds.H)/2; see MeasureContent's doc comment for how a circle's desired
+// size is additionally forced square so the circle fully encloses its
+// label. Only Button and ToggleButton support shapes (see Button.SetShape /
+// ToggleButton.SetShape); it is not a general Border/control-wide concept.
+type ButtonShape int
+
+const (
+	// ShapeRect is the default: the classic square four-tone bevel (the
+	// zero value, so every Button built before this feature existed renders
+	// byte-identically).
+	ShapeRect ButtonShape = iota
+	// ShapePill renders a stadium (fully rounded ends), radius = bounds.H/2.
+	ShapePill
+	// ShapeCircle renders a circle, radius = min(bounds.W, bounds.H)/2.
+	ShapeCircle
+)
+
 // Button is a clickable, focusable, token-styled push button showing a text
 // label. It is a composite widget: its own Render paints the fill/stroke
 // chrome (varying by accent/hover/pressed/disabled state), RenderOverlay
@@ -25,6 +46,7 @@ type Button struct {
 	accent  bool
 	enabled bool
 	focused bool
+	shape   ButtonShape
 
 	// isToggle marks this Button as the embedded chrome of a ToggleButton
 	// (set once, by NewToggleButton). ToggleButton reuses the accent field/
@@ -98,6 +120,43 @@ func (b *Button) OnClick(fn func()) *Button {
 func (b *Button) SetAccent(a bool) *Button {
 	b.accent = a
 	return b
+}
+
+// SetShape sets the button's outer silhouette (see ButtonShape); default
+// ShapeRect. Switching to/from ShapeCircle changes what MeasureContent
+// returns (a forced square aspect), so this invalidates measure exactly
+// when the shape actually changes — a no-op call (same shape) leaves layout
+// untouched, matching Border.SetBorder's changed-check pattern. Switching
+// between ShapeRect/ShapePill never affects desired size (only how Render
+// paints the chrome), but is still routed through the same changed-check
+// for a single, simple rule rather than special-casing which shape pairs
+// need it.
+func (b *Button) SetShape(s ButtonShape) *Button {
+	if b.shape == s {
+		return b
+	}
+	b.shape = s
+	b.InvalidateMeasure()
+	return b
+}
+
+// shapeRadius returns the corner radius Render/RenderOverlay should use for
+// the button's current shape, given its arranged bounds: bounds.H/2 for
+// ShapePill (a stadium), min(bounds.W, bounds.H)/2 for ShapeCircle, and 0
+// for ShapeRect (never actually consulted — the rect path paints via
+// drawRaised/drawSunken directly, not the rounded helpers).
+func (b *Button) shapeRadius(bounds render.Rect) float32 {
+	switch b.shape {
+	case ShapePill:
+		return bounds.H / 2
+	case ShapeCircle:
+		if bounds.W < bounds.H {
+			return bounds.W / 2
+		}
+		return bounds.H / 2
+	default:
+		return 0
+	}
 }
 
 // SetEnabled toggles whether the button accepts focus and pointer/keyboard
@@ -181,7 +240,12 @@ func (b *Button) padding() render.Thickness {
 }
 
 // MeasureContent measures the label within the available space reduced by
-// padding, then adds the padding back to its desired size.
+// padding, then adds the padding back to its desired size. For ShapeCircle
+// only, the result is additionally forced SQUARE — side = max(paddedWidth,
+// paddedHeight) — so the circle (radius = min(W,H)/2, see shapeRadius/
+// Render) fully encloses the label; ShapeRect and ShapePill keep the
+// natural content-shaped rect unchanged (a pill's radius, bounds.H/2,
+// already encloses its label without forcing a square aspect).
 func (b *Button) MeasureContent(available render.Size) render.Size {
 	pad := b.padding()
 
@@ -197,7 +261,18 @@ func (b *Button) MeasureContent(available render.Size) render.Size {
 	core.MeasureWidget(b.label, render.Size{W: availW, H: availH})
 	d := core.DesiredSizeOf(b.label)
 
-	return render.Size{W: d.W + pad.Left + pad.Right, H: d.H + pad.Top + pad.Bottom}
+	w := d.W + pad.Left + pad.Right
+	h := d.H + pad.Top + pad.Bottom
+
+	if b.shape == ShapeCircle {
+		side := w
+		if h > side {
+			side = h
+		}
+		return render.Size{W: side, H: side}
+	}
+
+	return render.Size{W: w, H: h}
 }
 
 // ArrangeContent arranges the label centered (both axes) within bounds inset
@@ -297,17 +372,40 @@ func (b *Button) Render(r render.Renderer) {
 
 	sunken := b.click.Pressed() || (b.isToggle && b.accent)
 
-	switch {
-	case sunken:
-		drawSunken(r, bounds, c.ButtonFace, c)
-	case b.click.Hover():
-		drawRaised(r, bounds, c.ButtonLight, c)
-	default:
-		drawRaised(r, bounds, c.ButtonFace, c)
-	}
+	if b.shape == ShapeRect {
+		switch {
+		case sunken:
+			drawSunken(r, bounds, c.ButtonFace, c)
+		case b.click.Hover():
+			drawRaised(r, bounds, c.ButtonLight, c)
+		default:
+			drawRaised(r, bounds, c.ButtonFace, c)
+		}
 
-	if b.accent && !b.isToggle {
-		drawOuterBorder(r, bounds.Inflate(1), c.ButtonDarkShadow)
+		if b.accent && !b.isToggle {
+			drawOuterBorder(r, bounds.Inflate(1), c.ButtonDarkShadow)
+		}
+	} else {
+		// Pill/circle: the same rest/hover/pressed states as the rect path,
+		// but painted via the rounded bevel helpers (see bevel.go) at the
+		// shape's radius instead of drawRaised/drawSunken's square edges.
+		radius := b.shapeRadius(bounds)
+		switch {
+		case sunken:
+			drawSunkenRounded(r, bounds, radius, c.ButtonFace, c)
+		case b.click.Hover():
+			drawRaisedRounded(r, bounds, radius, c.ButtonLight, c)
+		default:
+			drawRaisedRounded(r, bounds, radius, c.ButtonFace, c)
+		}
+
+		if b.accent && !b.isToggle {
+			// bounds.Inflate(1) grows W/H by 2 (1px each side), so the
+			// matching concentric radius for the same shape formula is
+			// radius+1 (e.g. a pill's (H+2)/2 == H/2+1) — no separate
+			// recomputation needed.
+			r.StrokeRoundedRect(bounds.Inflate(1), radius+1, 1, c.ButtonDarkShadow)
+		}
 	}
 
 	nudge := float32(0)
@@ -330,14 +428,28 @@ func (b *Button) Render(r render.Renderer) {
 	}
 }
 
-// RenderOverlay draws the classic focus rectangle while focused, inset a few
-// px from the button's bounds so it sits within the raised/sunken bevel
-// rather than overlapping it.
+// RenderOverlay draws the focus ring while focused, inset a few px from the
+// button's bounds so it sits within the raised/sunken bevel rather than
+// overlapping it. ShapeRect draws the classic square drawFocusRect; pill/
+// circle instead draw a rounded ring — StrokeRoundedRect on bounds inset 1px
+// at radius-1 (floored at 0), matching how the rounded chrome itself insets
+// (see Render) — so the ring's corners follow the button's own curve
+// instead of cutting across it.
 func (b *Button) RenderOverlay(r render.Renderer) {
 	if !b.focused {
 		return
 	}
-	drawFocusRing(r, b.Bounds().Inset(render.Uniform(3)), b.colors)
+	if b.shape == ShapeRect {
+		drawFocusRing(r, b.Bounds().Inset(render.Uniform(3)), b.colors)
+		return
+	}
+
+	bounds := b.Bounds()
+	radius := b.shapeRadius(bounds) - 1
+	if radius < 0 {
+		radius = 0
+	}
+	r.StrokeRoundedRect(bounds.Inset(render.Uniform(1)), radius, b.metrics.FocusStrokeWidth, b.colors.Highlight)
 }
 
 // Children returns the label as the button's sole child.
@@ -463,6 +575,17 @@ func (t *ToggleButton) OnClick(fn func()) *ToggleButton {
 // it again. Use SetChecked instead.
 func (t *ToggleButton) SetAccent(a bool) *ToggleButton {
 	panic("controls: ToggleButton.SetAccent is not supported (checked state alone drives the accent chrome) — use SetChecked instead")
+}
+
+// SetShape sets the outer silhouette (see ButtonShape); default ShapeRect.
+// Shadowed (not left promoted) purely for its return type: a promoted
+// Button.SetShape would return *Button, breaking ToggleButton's fluent
+// chaining (tb.SetShape(...).OnChanged(...) wouldn't compile) — unlike
+// OnClick/SetAccent above, there's no wiring conflict here to guard
+// against, so this simply forwards to the embedded Button and returns t.
+func (t *ToggleButton) SetShape(s ButtonShape) *ToggleButton {
+	t.Button.SetShape(s)
+	return t
 }
 
 // Checked reports the current toggle state.

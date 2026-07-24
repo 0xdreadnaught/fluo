@@ -322,6 +322,131 @@ func TestToggleButtonSetAccentPanics(t *testing.T) {
 	tb.SetAccent(true)
 }
 
+func TestButtonShapeDefaultIsRect(t *testing.T) {
+	b := NewButton(nil, "X")
+	if b.shape != ShapeRect {
+		t.Fatalf("default shape = %v, want ShapeRect (zero value)", b.shape)
+	}
+	tb := NewToggleButton(nil, "T")
+	if tb.shape != ShapeRect {
+		t.Fatalf("ToggleButton default shape = %v, want ShapeRect", tb.shape)
+	}
+}
+
+// TestButtonCircleMeasureContentReturnsSquare pins spec §3's circle-aspect
+// rule: MeasureContent forces a SQUARE (side = max(paddedWidth,
+// paddedHeight)) for ShapeCircle, so the circle (radius = min(W,H)/2, see
+// shapeRadius) fully encloses a label that isn't itself square. A plain
+// ShapeRect button with the same label is used as the width oracle: the
+// circle's square side must equal that rect's (necessarily wider-than-tall)
+// width, and — for the test to be meaningful at all — that rect must
+// actually be wider than tall.
+func TestButtonCircleMeasureContentReturnsSquare(t *testing.T) {
+	circle := NewButton(buttonFace(t), "Wide label text").SetShape(ShapeCircle)
+	got := circle.MeasureContent(render.Size{W: 1000, H: 1000})
+	if got.W != got.H {
+		t.Fatalf("ShapeCircle MeasureContent = %+v, want a square (W == H)", got)
+	}
+
+	rectB := NewButton(buttonFace(t), "Wide label text")
+	rectSize := rectB.MeasureContent(render.Size{W: 1000, H: 1000})
+	if rectSize.W <= rectSize.H {
+		t.Fatalf("test setup: rect size = %+v, want W > H for this test to be meaningful", rectSize)
+	}
+	if got.W != rectSize.W {
+		t.Fatalf("circle square side = %v, want max(paddedW, paddedH) = rect W %v", got.W, rectSize.W)
+	}
+}
+
+// TestButtonShapeRadius pins shapeRadius's per-shape formula: 0 for
+// ShapeRect (never actually consulted by the rect Render path), bounds.H/2
+// for ShapePill regardless of aspect, and min(bounds.W, bounds.H)/2 for
+// ShapeCircle for both a wide and a tall bounds rect.
+func TestButtonShapeRadius(t *testing.T) {
+	b := &Button{}
+
+	cases := []struct {
+		shape  ButtonShape
+		bounds render.Rect
+		want   float32
+	}{
+		{ShapeRect, render.Rect{W: 100, H: 30}, 0},
+		{ShapePill, render.Rect{W: 100, H: 30}, 15},
+		{ShapeCircle, render.Rect{W: 100, H: 30}, 15}, // min(100,30)/2
+		{ShapeCircle, render.Rect{W: 30, H: 100}, 15}, // min(30,100)/2
+	}
+	for _, c := range cases {
+		b.shape = c.shape
+		if got := b.shapeRadius(c.bounds); got != c.want {
+			t.Errorf("shape=%v bounds=%+v: shapeRadius = %v, want %v", c.shape, c.bounds, got, c.want)
+		}
+	}
+}
+
+// TestButtonSetShapeInvalidatesMeasureOnlyOnChange pins SetShape's
+// changed-check: switching to a genuinely different shape invalidates
+// layout (ShapeCircle's square aspect, in particular, changes desired
+// size), but re-setting the SAME shape is a silent no-op, matching
+// Border.SetBorder's changed-check convention.
+func TestButtonSetShapeInvalidatesMeasureOnlyOnChange(t *testing.T) {
+	b := NewButton(buttonFace(t), "X")
+	b.SetWidth(80)
+	b.SetHeight(30)
+	layoutButton(b, render.Rect{X: 0, Y: 0, W: 80, H: 30})
+
+	if b.NeedsLayout() {
+		t.Fatal("clean after initial layout")
+	}
+
+	b.SetShape(ShapeRect) // no-op: already ShapeRect
+	if b.NeedsLayout() {
+		t.Fatal("SetShape to the SAME shape invalidated layout, want a no-op")
+	}
+
+	b.SetShape(ShapePill)
+	if !b.NeedsLayout() {
+		t.Fatal("SetShape to a DIFFERENT shape did not invalidate layout")
+	}
+}
+
+// TestToggleButtonSetShapeReturnsToggleButton is a compile-time-flavored
+// regression: ToggleButton.SetShape is shadowed (not left promoted) so it
+// returns *ToggleButton, not the promoted Button.SetShape's *Button — if
+// this test compiles at all, the chain (.SetShape(...).OnChanged(...))
+// proves the return type is right; the runtime assertion below confirms it
+// also actually set the shape on the embedded Button.
+func TestToggleButtonSetShapeReturnsToggleButton(t *testing.T) {
+	tb := NewToggleButton(nil, "T")
+	tb.SetShape(ShapePill).OnChanged(func(bool) {})
+	if tb.shape != ShapePill {
+		t.Fatalf("shape = %v, want ShapePill", tb.shape)
+	}
+}
+
+// TestButtonRectShapeRenderMatchesDrawRaised is a regression pinning that a
+// default (ShapeRect) button's Render is BYTE-IDENTICAL to before
+// ButtonShape existed: exactly drawRaised's signature (1 face fill + 4
+// outer edges + 4 inner edges = 9 FillRect calls, first call = the face
+// fill over the full bounds), never a FillRoundedRect/StrokeRoundedRect
+// call (recordRenderer's no-op stubs for those would silently swallow a
+// leak into the rect path without this call-count check).
+func TestButtonRectShapeRenderMatchesDrawRaised(t *testing.T) {
+	b := NewButton(buttonFace(t), "X")
+	b.SetWidth(80)
+	b.SetHeight(30)
+	layoutButton(b, render.Rect{X: 0, Y: 0, W: 80, H: 30})
+
+	rr := &recordRenderer{}
+	b.Render(rr)
+
+	if len(rr.fills) != 9 {
+		t.Fatalf("ShapeRect Render emitted %d FillRect calls, want 9 (drawRaised's signature)", len(rr.fills))
+	}
+	if got := rr.fills[0]; got.rect != b.Bounds() || got.color != b.colors.ButtonFace {
+		t.Fatalf("first FillRect = %+v, want face fill %v over %v", got, b.colors.ButtonFace, b.Bounds())
+	}
+}
+
 func TestButtonStateColorsAccentDisabledUsesAccentDisabledFill(t *testing.T) {
 	b := NewButton(nil, "X").SetAccent(true).SetEnabled(false)
 	fill, stroke, label := b.stateColors()

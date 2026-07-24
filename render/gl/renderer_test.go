@@ -308,6 +308,91 @@ func TestButtons(t *testing.T) {
 	})
 }
 
+// TestButtonPill is the control-variants Task 2 golden for ButtonShape:
+// four pill (stadium, radius = bounds.H/2) buttons side by side — rest,
+// accent (raised + outer StrokeRoundedRect ring), checked (a ToggleButton,
+// sunken/pressed-in bevel), and focused (a rounded StrokeRoundedRect focus
+// ring instead of the square drawFocusRect) — proving drawRaisedRounded/
+// drawSunkenRounded and the rounded focus/accent chrome all render
+// correctly together. Focus is set directly via OnFocusChanged (no router
+// involved), the same shortcut TestTextBox's golden uses.
+func TestButtonPill(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "button_pill", 420, 60, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		rest := controls.NewButton(face, "Play").SetShape(controls.ShapePill)
+		accent := controls.NewButton(face, "Go").SetShape(controls.ShapePill).SetAccent(true)
+		checked := controls.NewToggleButton(face, "On").SetShape(controls.ShapePill)
+		checked.SetChecked(true)
+		focused := controls.NewButton(face, "Tab").SetShape(controls.ShapePill)
+		focused.OnFocusChanged(true)
+
+		row := controls.NewStackPanel(controls.Horizontal).SetGap(12).Add(rest, accent, checked, focused)
+
+		frame := render.Rect{X: 0, Y: 0, W: 420, H: 60}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(row, render.Size{W: frame.W, H: frame.H})
+		desired := core.DesiredSizeOf(row)
+		bounds := render.Rect{
+			X: (frame.W - desired.W) / 2, Y: (frame.H - desired.H) / 2,
+			W: desired.W, H: desired.H,
+		}
+		core.ArrangeWidget(row, bounds)
+		core.RenderWidget(row, r)
+	})
+}
+
+// TestButtonCircle is the control-variants Task 2 golden for ButtonShape:
+// four circle (radius = min(bounds.W, bounds.H)/2) buttons side by side —
+// rest, accent, checked (ToggleButton, sunken), and focused — the circle
+// counterpart of TestButtonPill. Each label is a single short glyph, typical
+// circle-button content (an icon-like badge); MeasureContent's square-aspect
+// forcing (see Button.MeasureContent) is what makes bounds.W == bounds.H
+// here despite the label itself not being square.
+func TestButtonCircle(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "button_circle", 320, 70, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		rest := controls.NewButton(face, "1").SetShape(controls.ShapeCircle)
+		accent := controls.NewButton(face, "2").SetShape(controls.ShapeCircle).SetAccent(true)
+		checked := controls.NewToggleButton(face, "3").SetShape(controls.ShapeCircle)
+		checked.SetChecked(true)
+		focused := controls.NewButton(face, "4").SetShape(controls.ShapeCircle)
+		focused.OnFocusChanged(true)
+
+		row := controls.NewStackPanel(controls.Horizontal).SetGap(12).Add(rest, accent, checked, focused)
+
+		frame := render.Rect{X: 0, Y: 0, W: 320, H: 70}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(row, render.Size{W: frame.W, H: frame.H})
+		desired := core.DesiredSizeOf(row)
+		bounds := render.Rect{
+			X: (frame.W - desired.W) / 2, Y: (frame.H - desired.H) / 2,
+			W: desired.W, H: desired.H,
+		}
+		core.ArrangeWidget(row, bounds)
+		core.RenderWidget(row, r)
+	})
+}
+
 // TestToggles is the Phase 5 Task 4 golden: a checkbox (unchecked, checked),
 // a radio button (off, on), and a toggle switch (off, on), side by side in
 // a StackPanel. Normative: all six show bare glyphs with no labels (empty

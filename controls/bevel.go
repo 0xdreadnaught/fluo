@@ -82,6 +82,54 @@ func drawScrollThumb(r render.Renderer, track, thumb render.Rect, c theme.ColorT
 	drawRaised(r, thumb, c.ButtonFace, c)
 }
 
+// drawRaisedRounded paints a raised 3D look on a rounded rect (pill/circle
+// button chrome): a `face`-filled interior with a light top-left / dark
+// bottom-right 1px bevel. StrokeRoundedRect only strokes a single flat
+// color, so directional lighting can't come from a stroke — instead it is
+// faked by layering three offset FillRoundedRect calls: (1) the full rect in
+// ButtonDarkShadow, which ends up exposed only along the bottom+right edge
+// once step 2 paints over the rest; (2) the rect shifted (-1,-1) in
+// ButtonHighlight, which — because it's offset up-left — covers the
+// top+left edge plus the interior but falls 1px short of the bottom+right
+// edge, letting step 1's dark shadow show through there; (3) the rect inset
+// by 1px (radius shrunk by 1, floored at 0 so a small radius never goes
+// negative) filled with `face`, painting over everything but the 1px
+// directional rim left by steps 1-2. Net result: a light top-left / dark
+// bottom-right 1px ring around a flat `face` interior, matching the classic
+// square drawRaised's corner directionality on a rounded shape.
+func drawRaisedRounded(r render.Renderer, rect render.Rect, radius float32, face render.Color, c theme.ColorTokens) {
+	r.FillRoundedRect(rect, radius, c.ButtonDarkShadow)
+	r.FillRoundedRect(render.Rect{X: rect.X - 1, Y: rect.Y - 1, W: rect.W, H: rect.H}, radius, c.ButtonHighlight)
+
+	innerRadius := radius - 1
+	if innerRadius < 0 {
+		innerRadius = 0
+	}
+	r.FillRoundedRect(rect.Inset(render.Uniform(1)), innerRadius, face)
+}
+
+// drawSunkenRounded paints the inverted rounded bevel — a recessed pill/
+// circle, for a pressed or checked-toggle button — using the same layered
+// offset-fill technique as drawRaisedRounded so it reads as pushed in rather
+// than raised: dark top-left / light bottom-right (the same corner
+// directionality as the classic square drawSunken). Structurally this is
+// drawRaisedRounded with the offset layer's sign flipped from (-1,-1) to
+// (+1,+1) — shifting the ButtonHighlight layer down-right instead of
+// up-left mirrors which edge each color is exposed along, inverting the
+// bevel's read without needing to also swap which color each step uses
+// (swapping both the offset AND the two colors would cancel back out to the
+// raised look, which is why only the offset flips here).
+func drawSunkenRounded(r render.Renderer, rect render.Rect, radius float32, fill render.Color, c theme.ColorTokens) {
+	r.FillRoundedRect(rect, radius, c.ButtonDarkShadow)
+	r.FillRoundedRect(render.Rect{X: rect.X + 1, Y: rect.Y + 1, W: rect.W, H: rect.H}, radius, c.ButtonHighlight)
+
+	innerRadius := radius - 1
+	if innerRadius < 0 {
+		innerRadius = 0
+	}
+	r.FillRoundedRect(rect.Inset(render.Uniform(1)), innerRadius, fill)
+}
+
 // drawFocusRect paints the classic 1px inset focus rectangle (Highlight
 // color), one pixel inside rect, as four 1px-thick edge FillRects forming
 // the border of the inset rectangle. A solid line; the classic dotted XOR
