@@ -319,6 +319,130 @@ func TestSliderFocusRingTracked(t *testing.T) {
 	}
 }
 
+// TestSliderDefaultOrientationIsHorizontal pins the opt-in invariant: a
+// bare NewSlider() is Horizontal, matching every existing test/golden in
+// this file (none of which call SetOrientation).
+func TestSliderDefaultOrientationIsHorizontal(t *testing.T) {
+	s := NewSlider()
+	if s.orientation != Horizontal {
+		t.Fatalf("NewSlider().orientation = %v, want Horizontal", s.orientation)
+	}
+}
+
+// TestSliderVerticalMeasuresToSwappedDesiredSize proves Vertical's
+// MeasureContent swaps the fixed {160, 24} Horizontal desired size to a
+// tall-narrow {24, 160}, per the type doc comment.
+func TestSliderVerticalMeasuresToSwappedDesiredSize(t *testing.T) {
+	s := NewSlider().SetOrientation(Vertical)
+	core.MeasureWidget(s, render.Size{W: 1000, H: 1000})
+	d := core.DesiredSizeOf(s)
+	if d.W != 24 || d.H != 160 {
+		t.Fatalf("DesiredSize() = %v, want {24 160}", d)
+	}
+}
+
+// TestSliderThumbCenterVerticalMaxAtTopMinAtBottom pins the vertical value-
+// to-position mapping directly: thumbCenter (the Y coordinate the thumb is
+// painted at and the exact inverse valueFromLocal reproduces) sits at the
+// TOP edge inset (thumbRadius) when Value==Max, and at the BOTTOM edge
+// inset (axisLength-thumbRadius) when Value==Min — the reverse of the
+// Horizontal convention, per the type doc comment.
+func TestSliderThumbCenterVerticalMaxAtTopMinAtBottom(t *testing.T) {
+	s := NewSlider().SetOrientation(Vertical).SetRange(0, 100)
+	layoutSlider(s, render.Rect{X: 0, Y: 0, W: 24, H: 160})
+
+	s.SetValue(100)
+	if got, want := s.thumbCenter(), float32(8); got != want {
+		t.Fatalf("thumbCenter() at Value=Max(100) = %v, want %v (top edge inset)", got, want)
+	}
+
+	s.SetValue(0)
+	if got, want := s.thumbCenter(), float32(152); got != want {
+		t.Fatalf("thumbCenter() at Value=Min(0) = %v, want %v (bottom edge inset)", got, want)
+	}
+}
+
+// TestSliderVerticalPressAtTopAndBottomClampsToMaxAndMin is the Vertical
+// counterpart of TestSliderPressAtEdgesClampsToMinMax: pressing the track's
+// TOP edge jumps to Max, and the bottom edge jumps to Min — reversed from
+// Horizontal's left-edge-is-Min/right-edge-is-Max, per the type doc
+// comment's vertical convention.
+func TestSliderVerticalPressAtTopAndBottomClampsToMaxAndMin(t *testing.T) {
+	s := NewSlider().SetOrientation(Vertical).SetRange(0, 200)
+	layoutSlider(s, render.Rect{X: 0, Y: 0, W: 24, H: 160})
+
+	r := input.NewRouter()
+	r.SetRoot(s)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 12, Y: 0}, 0)
+	r.PointerButton(input.ButtonLeft, false, render.Point{X: 12, Y: 0}, 0)
+	if s.Value() != 200 {
+		t.Fatalf("Value() after press at track's top edge = %v, want 200 (Max)", s.Value())
+	}
+
+	// Bounds.Contains is half-open, so the bottom-most hittable point is
+	// just under Bounds().Bottom() (160), not 160 itself — mirroring
+	// TestSliderPressAtEdgesClampsToMinMax's 159.99 on the X axis.
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 12, Y: 159.99}, 0)
+	r.PointerButton(input.ButtonLeft, false, render.Point{X: 12, Y: 159.99}, 0)
+	if s.Value() != 0 {
+		t.Fatalf("Value() after press at track's bottom edge = %v, want 0 (Min)", s.Value())
+	}
+}
+
+// TestSliderVerticalPressAtSeventyFivePercentJumpsTowardMin is the Vertical
+// counterpart of TestSliderPressAtSeventyFivePercentJumpsValue: pressing
+// 75% of the way DOWN the usable span (top-anchored, since Max is at the
+// top) lands the value 75% of the way from Max toward Min.
+func TestSliderVerticalPressAtSeventyFivePercentJumpsTowardMin(t *testing.T) {
+	s := NewSlider().SetOrientation(Vertical).SetRange(0, 200)
+	layoutSlider(s, render.Rect{X: 0, Y: 0, W: 24, H: 160})
+
+	// Usable span = height - 2*thumbRadius = 160 - 16 = 144. 75% down from
+	// the top, offset by the top inset: 8 + 0.75*144 = 116.
+	r := input.NewRouter()
+	r.SetRoot(s)
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 12, Y: 116}, 0)
+
+	want := float32(200 - 0.75*200) // 75% of the way from Max(200) toward Min(0)
+	if diff := s.Value() - want; diff > 0.01 || diff < -0.01 {
+		t.Fatalf("Value() after press at 75%% down = %v, want ~%v (tolerance 0.01)", s.Value(), want)
+	}
+}
+
+// TestSliderVerticalRenderFillsMinSideBelowThumb proves Render's fill
+// geometry for Vertical: the Highlight band runs from the thumb's center
+// DOWN to the track's bottom edge (the Min side), mirroring Horizontal's
+// left-of-thumb fill — per the type doc comment.
+func TestSliderVerticalRenderFillsMinSideBelowThumb(t *testing.T) {
+	s := NewSlider().SetOrientation(Vertical).SetRange(0, 100).SetValue(50)
+	layoutSlider(s, render.Rect{X: 0, Y: 0, W: 24, H: 160})
+
+	rr := &recordRenderer{}
+	s.Render(rr)
+
+	thumbPos := s.thumbCenter()
+	bounds := s.Bounds()
+
+	var filled filledRect
+	found := false
+	for _, f := range rr.fills {
+		if f.color == s.colors.Highlight {
+			filled = f
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("Render emitted no Highlight fill")
+	}
+	if filled.rect.Y != thumbPos {
+		t.Fatalf("fill Y = %v, want %v (the thumb's center — fill starts there and extends down)", filled.rect.Y, thumbPos)
+	}
+	if wantH := bounds.Y + bounds.H - thumbPos; filled.rect.H != wantH {
+		t.Fatalf("fill H = %v, want %v (extends to the track's bottom edge)", filled.rect.H, wantH)
+	}
+}
+
 func TestSliderHoverTracked(t *testing.T) {
 	s := NewSlider()
 	layoutSlider(s, render.Rect{X: 0, Y: 0, W: 160, H: 24})

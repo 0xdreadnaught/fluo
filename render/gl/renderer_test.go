@@ -412,6 +412,86 @@ func TestSliderProgress(t *testing.T) {
 	})
 }
 
+// TestSliderVertical is the control-variants golden for Slider's Vertical
+// orientation: a single vertical slider at Value 65 (over [0,100] — Max at
+// the TOP per the type doc comment) centered in a 60x200 frame. Confirms
+// the raised thumb sits above center (closer to Max/top) and the
+// Highlight fill covers the Min side (below the thumb).
+func TestSliderVertical(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "slider_vertical", 60, 200, func(r *glr.Renderer) {
+		slider := controls.NewSlider().SetOrientation(controls.Vertical).SetRange(0, 100).SetValue(65)
+
+		frame := render.Rect{X: 0, Y: 0, W: 60, H: 200}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(slider, render.Size{W: frame.W, H: frame.H})
+		desired := core.DesiredSizeOf(slider)
+		bounds := render.Rect{
+			X: (frame.W - desired.W) / 2, Y: (frame.H - desired.H) / 2,
+			W: desired.W, H: desired.H,
+		}
+		core.ArrangeWidget(slider, bounds)
+		core.RenderWidget(slider, r)
+	})
+}
+
+// TestProgressVertical is the control-variants golden for ProgressBar's
+// Vertical orientation: a single vertical chunked progress bar at Value
+// 0.6, centered in a 60x200 frame. Confirms the chunks stack bottom-to-top
+// (Value 0.6 fills roughly the bottom 60% of the well).
+func TestProgressVertical(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "progress_vertical", 60, 200, func(r *glr.Renderer) {
+		progress := controls.NewProgressBar().SetOrientation(controls.Vertical).SetValue(0.6)
+
+		frame := render.Rect{X: 0, Y: 0, W: 60, H: 200}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(progress, render.Size{W: frame.W, H: frame.H})
+		desired := core.DesiredSizeOf(progress)
+		bounds := render.Rect{
+			X: (frame.W - desired.W) / 2, Y: (frame.H - desired.H) / 2,
+			W: desired.W, H: desired.H,
+		}
+		core.ArrangeWidget(progress, bounds)
+		core.RenderWidget(progress, r)
+	})
+}
+
+// TestProgressSolid is the control-variants golden for ProgressBar's solid
+// fill variant: a single Horizontal solid progress bar at Value 0.6,
+// centered in a 200x40 frame. Confirms the fill is one continuous
+// Highlight bar (no chunk gaps), contrasting with TestSliderProgress's
+// default chunked look.
+func TestProgressSolid(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "progress_solid", 200, 40, func(r *glr.Renderer) {
+		progress := controls.NewProgressBar().SetSolid(true).SetValue(0.6)
+
+		frame := render.Rect{X: 0, Y: 0, W: 200, H: 40}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(progress, render.Size{W: frame.W, H: frame.H})
+		desired := core.DesiredSizeOf(progress)
+		bounds := render.Rect{
+			X: (frame.W - desired.W) / 2, Y: (frame.H - desired.H) / 2,
+			W: desired.W, H: desired.H,
+		}
+		core.ArrangeWidget(progress, bounds)
+		core.RenderWidget(progress, r)
+	})
+}
+
 // TestComboOpen is the Phase 5 Task 8 golden: an open ComboBox — 3 items
 // ("Red", "Green", "Blue"), "Green" (index 1) selected-highlighted — inside
 // a 220x160 frame. The popup is opened via the SAME router-driven path a

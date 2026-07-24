@@ -23,20 +23,34 @@ const (
 	sliderDesiredHeight float32 = 24
 )
 
-// Slider is a horizontal, focusable, token-styled continuous value picker
-// over [Min, Max] (defaulting to [0, 1]). Value is reported and set as a
-// plain float32; SetRange/SetValue both clamp into the current range.
+// Slider is a focusable, token-styled continuous value picker over [Min,
+// Max] (defaulting to [0, 1]). Value is reported and set as a plain
+// float32; SetRange/SetValue both clamp into the current range.
 //
-// Normative geometry (see the const block above): the accent-filled portion
-// of the track runs from the track's left edge to the thumb's CENTER x, and
-// the thumb's center itself is only ever placed within the "usable track
-// span" [thumbRadius, width-thumbRadius] — a thumb centered at x=thumbRadius
-// sits flush against the track's left edge (Value==Min), and one centered at
-// x=width-thumbRadius sits flush against the right edge (Value==Max). This
-// inset is why proportion() and its inverse valueFromLocalX() both divide by
-// (width - 2*thumbRadius) rather than the raw bounds width: a naive
-// pos/width mapping would let the thumb's edge overhang the track by a full
-// radius at either extreme.
+// Orientation defaults to Horizontal (see SetOrientation) and generalizes
+// the normative geometry below onto whichever axis is the slider's MAIN
+// axis (X for Horizontal, Y for Vertical):
+//
+// Horizontal (see the const block above): the accent-filled portion of the
+// track runs from the track's left edge to the thumb's CENTER x, and the
+// thumb's center itself is only ever placed within the "usable track span"
+// [thumbRadius, width-thumbRadius] — a thumb centered at x=thumbRadius sits
+// flush against the track's left edge (Value==Min), and one centered at
+// x=width-thumbRadius sits flush against the right edge (Value==Max).
+//
+// Vertical: Max is at the TOP, Min is at the bottom (the reverse of a
+// naive top-to-bottom mapping) — a thumb centered at y=thumbRadius (the
+// track's top edge) is Value==Max, and one centered at
+// y=height-thumbRadius (the bottom edge) is Value==Min. The filled portion
+// mirrors horizontal's "fill the Min side": it runs from the thumb's
+// center DOWN to the track's bottom edge.
+//
+// This inset is why proportion() and its inverse valueFromLocal() both
+// divide by (mainAxisLength - 2*thumbRadius) rather than the raw bounds
+// length: a naive pos/length mapping would let the thumb's edge overhang
+// the track by a full radius at either extreme. thumbCenter/valueFromLocal/
+// Render/MeasureContent all share this one axis-parameterized
+// implementation, keyed off s.orientation.
 //
 // OnChanged parity follows fluo's uniform setter convention (matching
 // CheckBox/ToggleSwitch/ToggleButton/ComboBox/TextBox): programmatic
@@ -51,6 +65,7 @@ type Slider struct {
 	core.Element
 
 	min, max, value float32
+	orientation     Orientation
 
 	enabled bool
 	focused bool
@@ -62,16 +77,28 @@ type Slider struct {
 	metrics theme.MetricTokens
 }
 
-// NewSlider returns an enabled Slider ranging over [0, 1] with Value 0.
+// NewSlider returns an enabled, Horizontal Slider ranging over [0, 1] with
+// Value 0.
 func NewSlider() *Slider {
 	th := theme.Active()
 	return &Slider{
-		min:     0,
-		max:     1,
-		enabled: true,
-		colors:  th.Color,
-		metrics: th.Metric,
+		min:         0,
+		max:         1,
+		enabled:     true,
+		orientation: Horizontal,
+		colors:      th.Color,
+		metrics:     th.Metric,
 	}
+}
+
+// SetOrientation sets the slider's orientation — Horizontal (the default)
+// lays the track left-to-right with Min at the left edge and Max at the
+// right; Vertical lays the track top-to-bottom with Max at the TOP and Min
+// at the bottom (see the type doc comment). Takes effect on the next
+// Measure/Arrange/Render pass.
+func (s *Slider) SetOrientation(o Orientation) *Slider {
+	s.orientation = o
+	return s
 }
 
 // Min returns the current minimum of the range.
@@ -115,8 +142,9 @@ func (s *Slider) setValueSilent(v float32) {
 	s.value = clampF(v, s.min, s.max)
 }
 
-// setValue is the USER-driven mutation primitive drag (setValueFromWindowX),
-// click-on-track, and the arrow-key handler all funnel through: clamp into
+// setValue is the USER-driven mutation primitive drag
+// (setValueFromWindowPos), click-on-track, and the arrow-key handler all
+// funnel through: clamp into
 // [min, max] via setValueSilent, then fire OnChanged if (and only if) that
 // clamped value differs from the value beforehand.
 func (s *Slider) setValue(v float32) {
@@ -153,47 +181,84 @@ func (s *Slider) proportion() float32 {
 	return (s.value - s.min) / (s.max - s.min)
 }
 
-// thumbCenterX returns the thumb's center x in absolute (window-space)
-// coordinates, placed within the usable track span [thumbRadius,
-// width-thumbRadius] per the type doc comment's inset rule. This is the
-// exact inverse of valueFromLocalX (given the same bounds width), so a
-// press exactly at a rendered thumb's center reproduces its current value.
-func (s *Slider) thumbCenterX() float32 {
+// axisLength returns the slider's extent along its MAIN axis: bounds.W for
+// Horizontal, bounds.H for Vertical — the length thumbCenter/valueFromLocal
+// use for the usable-span inset.
+func (s *Slider) axisLength() float32 {
 	bounds := s.Bounds()
-	span := bounds.W - 2*sliderThumbRadius
+	if s.orientation == Vertical {
+		return bounds.H
+	}
+	return bounds.W
+}
+
+// thumbCenter returns the thumb's center coordinate along the MAIN axis, in
+// absolute (window-space) coordinates — X for Horizontal, Y for Vertical —
+// placed within the usable track span [thumbRadius, axisLength-thumbRadius]
+// per the type doc comment's inset rule. This is the exact inverse of
+// valueFromLocal (given the same bounds), so a press exactly at a rendered
+// thumb's center reproduces its current value.
+//
+// Horizontal: center = origin + thumbRadius + proportion*span (Min at the
+// origin, Max at the far end). Vertical: center = origin + thumbRadius +
+// (1-proportion)*span — Max at the origin (top), Min at the far end
+// (bottom), per the type doc comment's vertical convention.
+func (s *Slider) thumbCenter() float32 {
+	bounds := s.Bounds()
+	span := s.axisLength() - 2*sliderThumbRadius
 	if span < 0 {
 		span = 0
 	}
-	return bounds.X + sliderThumbRadius + s.proportion()*span
+	p := s.proportion()
+	if s.orientation == Vertical {
+		return bounds.Y + sliderThumbRadius + (1-p)*span
+	}
+	return bounds.X + sliderThumbRadius + p*span
 }
 
-// valueFromLocalX maps localX (an x offset in logical px from the track's
-// left edge, i.e. already relative to Bounds().X) to a value in [Min, Max],
-// via the same usable-span inset thumbCenterX uses: localX below
-// thumbRadius clamps to Min, localX above width-thumbRadius clamps to Max.
-func (s *Slider) valueFromLocalX(localX float32) float32 {
-	bounds := s.Bounds()
-	span := bounds.W - 2*sliderThumbRadius
+// valueFromLocal maps local (an offset in logical px from the track's
+// origin along the MAIN axis — the left edge for Horizontal, the TOP edge
+// for Vertical — i.e. already relative to Bounds().X or Bounds().Y) to a
+// value in [Min, Max], via the same usable-span inset thumbCenter uses:
+// local below thumbRadius clamps to one extreme, local above
+// axisLength-thumbRadius clamps to the other. Horizontal: increasing local
+// maps toward Max. Vertical: increasing local (moving down) maps toward
+// Min, since Max is at the top (see the type doc comment).
+func (s *Slider) valueFromLocal(local float32) float32 {
+	span := s.axisLength() - 2*sliderThumbRadius
 	if span <= 0 {
 		return s.min
 	}
-	t := clampF((localX-sliderThumbRadius)/span, 0, 1)
+	t := clampF((local-sliderThumbRadius)/span, 0, 1)
+	if s.orientation == Vertical {
+		t = 1 - t
+	}
 	return s.min + t*(s.max-s.min)
 }
 
-// setValueFromWindowX converts a pointer event's window-space x (e.Pos.X)
-// into the track-local space valueFromLocalX operates in (by subtracting
-// Bounds().X) and applies it via setValue — the shared implementation for
-// both click-on-track (Press) and drag (captured Move).
-func (s *Slider) setValueFromWindowX(windowX float32) {
-	s.setValue(s.valueFromLocalX(windowX - s.Bounds().X))
+// setValueFromWindowPos converts a pointer event's window-space position
+// into the track-local coordinate valueFromLocal operates in (by
+// subtracting Bounds().X for Horizontal or Bounds().Y for Vertical) and
+// applies it via setValue — the shared implementation for both
+// click-on-track (Press) and drag (captured Move).
+func (s *Slider) setValueFromWindowPos(pos render.Point) {
+	bounds := s.Bounds()
+	if s.orientation == Vertical {
+		s.setValue(s.valueFromLocal(pos.Y - bounds.Y))
+		return
+	}
+	s.setValue(s.valueFromLocal(pos.X - bounds.X))
 }
 
-// MeasureContent always returns the fixed {160, 24} desired size: Slider
+// MeasureContent returns the fixed desired size: {160, 24} for Horizontal
+// (the default), swapped to {24, 160} (tall-narrow) for Vertical. Slider
 // has no content to size around (an explicit SetWidth/SetHeight overrides
 // this through core.MeasureWidget's normal precedence, matching
 // ToggleSwitch/TextBox).
 func (s *Slider) MeasureContent(available render.Size) render.Size {
+	if s.orientation == Vertical {
+		return render.Size{W: sliderDesiredHeight, H: sliderDesiredWidth}
+	}
 	return render.Size{W: sliderDesiredWidth, H: sliderDesiredHeight}
 }
 
@@ -226,29 +291,54 @@ func (s *Slider) thumbColor() render.Color {
 }
 
 // Render paints the classic trackbar: a thin sunken groove (drawSunken,
-// ButtonFace) across the slider's full width, a Highlight-filled band from
-// the track's left edge to the thumb's center overlaid on top of it, and a
-// square 16x16 raised thumb (drawRaised) centered on the thumb position —
-// ButtonLight while hovered.
+// ButtonFace) across the slider's full main-axis length, a Highlight-filled
+// band covering the track's Min side up to the thumb's center overlaid on
+// top of it, and a square 16x16 raised thumb (drawRaised) centered on the
+// thumb position — ButtonLight while hovered.
+//
+// Horizontal: the groove runs left-to-right and the fill spans the track's
+// left edge to the thumb center. Vertical: the groove runs top-to-bottom
+// and the fill spans the thumb center DOWN to the track's bottom edge (Min
+// is at the bottom — see the type doc comment).
 func (s *Slider) Render(r render.Renderer) {
 	c := s.colors
 	bounds := s.Bounds()
-	trackY := bounds.Y + (bounds.H-sliderTrackHeight)/2
 
-	track := render.Rect{X: bounds.X, Y: trackY, W: bounds.W, H: sliderTrackHeight}
+	var track render.Rect
+	if s.orientation == Vertical {
+		trackX := bounds.X + (bounds.W-sliderTrackHeight)/2
+		track = render.Rect{X: trackX, Y: bounds.Y, W: sliderTrackHeight, H: bounds.H}
+	} else {
+		trackY := bounds.Y + (bounds.H-sliderTrackHeight)/2
+		track = render.Rect{X: bounds.X, Y: trackY, W: bounds.W, H: sliderTrackHeight}
+	}
 	drawSunken(r, track, c.ButtonFace, c)
 
-	thumbX := s.thumbCenterX()
-	filled := render.Rect{X: bounds.X, Y: trackY, W: thumbX - bounds.X, H: sliderTrackHeight}
+	thumbPos := s.thumbCenter()
+
+	var filled render.Rect
+	if s.orientation == Vertical {
+		filled = render.Rect{X: track.X, Y: thumbPos, W: track.W, H: bounds.Y + bounds.H - thumbPos}
+	} else {
+		filled = render.Rect{X: bounds.X, Y: track.Y, W: thumbPos - bounds.X, H: sliderTrackHeight}
+	}
 	r.FillRect(filled, c.Highlight)
 
 	thumbFace := c.ButtonFace
 	if s.hover {
 		thumbFace = c.ButtonLight
 	}
-	thumb := render.Rect{
-		X: thumbX - sliderThumbRadius, Y: bounds.Y + (bounds.H-sliderThumbSize)/2,
-		W: sliderThumbSize, H: sliderThumbSize,
+	var thumb render.Rect
+	if s.orientation == Vertical {
+		thumb = render.Rect{
+			X: bounds.X + (bounds.W-sliderThumbSize)/2, Y: thumbPos - sliderThumbRadius,
+			W: sliderThumbSize, H: sliderThumbSize,
+		}
+	} else {
+		thumb = render.Rect{
+			X: thumbPos - sliderThumbRadius, Y: bounds.Y + (bounds.H-sliderThumbSize)/2,
+			W: sliderThumbSize, H: sliderThumbSize,
+		}
 	}
 	drawRaised(r, thumb, thumbFace, c)
 }
@@ -275,10 +365,10 @@ func (s *Slider) OnFocusChanged(focused bool) {
 }
 
 // OnPointer implements input.PointerHandler: click-on-track jumps the value
-// straight to the clicked x (via setValueFromWindowX), and the pointer is
-// captured on Press so a subsequent drag survives leaving the slider's own
-// bounds — Move only updates the value while this slider holds the
-// capture, matching TextBox's click-to-caret/drag-to-select pattern.
+// straight to the clicked position (via setValueFromWindowPos), and the
+// pointer is captured on Press so a subsequent drag survives leaving the
+// slider's own bounds — Move only updates the value while this slider holds
+// the capture, matching TextBox's click-to-caret/drag-to-select pattern.
 // Ignored entirely while disabled (not handled, so pointer events bubble
 // past a disabled slider rather than being swallowed by it) — but a
 // SetEnabled(false) landing MID-DRAG (this slider still holds the router's
@@ -301,12 +391,12 @@ func (s *Slider) OnPointer(e *input.PointerEvent) {
 	case input.Leave:
 		s.hover = false
 	case input.Press:
-		s.setValueFromWindowX(e.Pos.X)
+		s.setValueFromWindowPos(e.Pos)
 		e.Router.Capture(s)
 		e.Handled = true
 	case input.Move:
 		if e.Router.Captured() == s {
-			s.setValueFromWindowX(e.Pos.X)
+			s.setValueFromWindowPos(e.Pos)
 			e.Handled = true
 		}
 	case input.Release:
