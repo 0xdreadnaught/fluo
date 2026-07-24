@@ -254,7 +254,7 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 	// Row 1: Button (with click counter), accent Button (tooltipped),
 	// ToggleButton.
 	counterLabel := controls.NewTextBlock(body, fmt.Sprintf("Clicked %d times", *counter)).
-		SetColor(th.Color.TextSecondary)
+		SetColor(th.Color.WindowText)
 	demoButton := controls.NewButton(body, "Click me").OnClick(func() {
 		*counter++
 		counterLabel.SetText(fmt.Sprintf("Clicked %d times", *counter))
@@ -287,7 +287,7 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 	// names, not yet bound).
 	textBox := controls.NewTextBox(body).SetPlaceholder("Type here…").SetTimers(tq)
 	textBox.SetWidth(200)
-	mirror := controls.NewTextBlock(body, "").SetColor(th.Color.TextSecondary)
+	mirror := controls.NewTextBlock(body, "").SetColor(th.Color.WindowText)
 	comboBox := controls.NewComboBox(body).SetItems(swatchColorNames)
 
 	*cancels = append(*cancels,
@@ -323,7 +323,7 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 	// theme-toggle rebuild (itemList itself is never recreated).
 	listPanel := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingS)
 	*cancels = append(*cancels, bind.Items(itemList, listPanel, func(item string, _ int) core.Widget {
-		return controls.NewTextBlock(body, item).SetColor(th.Color.TextSecondary)
+		return controls.NewTextBlock(body, item).SetColor(th.Color.WindowText)
 	}))
 
 	addButton := controls.NewButton(body, "Add").OnClick(func() {
@@ -358,7 +358,7 @@ func buildControlsPage(th *theme.Theme, body *text.Face, counter *int, tq *timer
 	content := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingM).
 		Add(controlsSection, swatches)
 	for i := 1; i <= 20; i++ {
-		content.Add(controls.NewTextBlock(body, fmt.Sprintf("Row %02d", i)).SetColor(th.Color.TextSecondary))
+		content.Add(controls.NewTextBlock(body, fmt.Sprintf("Row %02d", i)).SetColor(th.Color.WindowText))
 	}
 
 	return controls.NewScrollViewer().SetChild(content)
@@ -430,7 +430,7 @@ func buildAdvancedPage(th *theme.Theme, body *text.Face, host *controls.OverlayH
 	listView.SetWidth(160)
 	listView.SetHeight(200)
 	selectedText := controls.NewTextBlock(body, fmt.Sprintf("Selected: %d", selectedProp.Get())).
-		SetColor(th.Color.TextSecondary)
+		SetColor(th.Color.WindowText)
 
 	*cancels = append(*cancels,
 		bind.ListSelected(selectedProp, listView),
@@ -448,7 +448,7 @@ func buildAdvancedPage(th *theme.Theme, body *text.Face, host *controls.OverlayH
 	// ListView.Dispose's doc comment: ListView is fluo's ONE disposable
 	// control in v0).
 	detailText := controls.NewTextBlock(body, "Select a node to see its details.").
-		SetColor(th.Color.TextSecondary)
+		SetColor(th.Color.WindowText)
 	expander := controls.NewExpander(body, "Details").SetContent(detailText)
 	expander.SetExpanded(true) // so Details is visible without a click, for the screenshot
 
@@ -481,7 +481,7 @@ func buildAdvancedPage(th *theme.Theme, body *text.Face, host *controls.OverlayH
 	grid.SetRowCount(50)
 	*cancels = append(*cancels, grid.Dispose)
 
-	resultText := controls.NewTextBlock(body, dialogResultProp.Get()).SetColor(th.Color.TextSecondary)
+	resultText := controls.NewTextBlock(body, dialogResultProp.Get()).SetColor(th.Color.WindowText)
 	*cancels = append(*cancels, bind.OneWay(dialogResultProp, func(s string) { resultText.SetText(s) }))
 
 	showDialogButton := controls.NewButton(body, "Show dialog").OnClick(func() {
