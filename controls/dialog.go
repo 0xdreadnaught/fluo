@@ -121,6 +121,7 @@ func ShowDialog(host *OverlayHost, face *text.Face, d DialogSpec) {
 	// (title-slot, body, buttonRow), matching dialogPopupButtons' white-box
 	// navigation (children[2] == the button row).
 	titleSlot := NewFixed(0, 0, render.Color{})
+	titleSlot.SetVisible(false)
 	body := NewTextBlock(bodyFace, d.Body)
 	body.SetColor(colors.WindowText)
 
