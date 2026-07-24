@@ -337,8 +337,16 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 	row5 := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingS).
 		Add(addButton, listPanel)
 
+	// Pangram rows: exercise every letter (plus digits and descenders
+	// g/j/p/q/y) at once, for eyeballing per-glyph baseline/height.
+	pangram := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingS).
+		Add(
+			controls.NewTextBlock(body, "The quick brown fox jumps over the lazy dog").SetColor(th.Color.WindowText),
+			controls.NewTextBlock(body, "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 0123456789").SetColor(th.Color.WindowText),
+		)
+
 	return controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingM).
-		Add(row1, row2, row3, row4, row5)
+		Add(pangram, row1, row2, row3, row4, row5)
 }
 
 // buildControlsPage builds page 0's content: the Phase 5/6 Controls section
