@@ -84,19 +84,20 @@ func (c *ClickBehavior) Activate() {
 }
 
 // drawFocusRing draws the focus-ring overlay shared by every focusable
-// control (Button, CheckBox, RadioButton, ToggleSwitch, TextBox, Slider,
-// ListView, tabStrip): a StrokeRoundedRect drawn just INSIDE the widget's
-// own bounds, using FocusStrokeWidth and FocusStroke from the caller's own
-// captured tokens. Callers pass their own bounds and corner radius and are
-// expected to have already checked their focused flag.
+// control except TextBox (whose sunken well plus caret already reads as
+// focused — see TextBox.RenderOverlay's doc comment) — Button, CheckBox,
+// RadioButton, ToggleSwitch, Slider, ListView, tabStrip: the classic
+// solid-line inset focus rectangle (see
+// drawFocusRect in bevel.go), using colors.Highlight. Callers pass their own
+// bounds and are expected to have already checked their focused flag.
 //
-// The ring is inset (drawn on bounds, stroked inward) rather than outset
-// (bounds inflated outward) so it always falls WITHIN the widget's own
-// rectangle. An outset ring's outer band lies outside the widget and is
-// cropped by any clipping ancestor a focusable sits flush against — e.g. the
-// leftmost tab or a list flush against a ScrollViewer's clip edge would lose
-// the ring's left side. Keeping the ring inside the bounds makes it immune to
-// ancestor clipping without needing a separate adorner layer.
-func drawFocusRing(r render.Renderer, bounds render.Rect, radius float32, colors theme.ColorTokens, metrics theme.MetricTokens) {
-	r.StrokeRoundedRect(bounds, radius, metrics.FocusStrokeWidth, colors.FocusStroke)
+// The rect is inset (drawn just inside bounds) rather than outset (bounds
+// inflated outward) so it always falls WITHIN the widget's own rectangle. An
+// outset ring's outer band lies outside the widget and is cropped by any
+// clipping ancestor a focusable sits flush against — e.g. the leftmost tab
+// or a list flush against a ScrollViewer's clip edge would lose the ring's
+// left side. Keeping the ring inside the bounds makes it immune to ancestor
+// clipping without needing a separate adorner layer.
+func drawFocusRing(r render.Renderer, bounds render.Rect, colors theme.ColorTokens) {
+	drawFocusRect(r, bounds, colors)
 }

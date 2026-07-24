@@ -25,6 +25,10 @@ type Renderer interface {
 	// FillRoundedRect fills a rectangle with rounded corners with a solid color.
 	FillRoundedRect(r Rect, radius float32, c Color)
 
+	// DrawGradientRect fills r with a linear gradient from `from` to `to`:
+	// horizontal (left->right) when horizontal is true, else vertical (top->bottom).
+	DrawGradientRect(r Rect, from, to Color, horizontal bool)
+
 	// StrokeRoundedRect draws the stroke of a rectangle with rounded corners (stroke inside edge).
 	StrokeRoundedRect(r Rect, radius, width float32, c Color)
 

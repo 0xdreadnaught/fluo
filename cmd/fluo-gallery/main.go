@@ -2,7 +2,7 @@
 // phases land. Phase 3: interactive swatches (pointer/focus/cursor) plus a
 // ScrollViewer over a taller-than-viewport content stack. Phase 4: the whole
 // tree is built from theme.Active()'s tokens (buildUI), plus a live T-key
-// toggle between Fluent Light and Dark. Phase 5: a Controls section at the
+// toggle between classic Light and Dark. Phase 5: a Controls section at the
 // top of the scroll content exercises every core control built this phase
 // (Button/ToggleButton/CheckBox/RadioButton+Group/ToggleSwitch/TextBox/
 // Slider/ProgressBar/ComboBox/ToolTipArea), and the root becomes an
@@ -33,11 +33,9 @@
 // comment on window.go's Run). Because every rebuild (theme toggle, page
 // change) replaces the whole tree, buildUI now returns the fresh TitleBar
 // alongside the OverlayHost root so main's build() can keep a live
-// reference for that per-frame check. The content pane's plain
-// WindowBackground Border is replaced by a controls.AcrylicSurface, so the
-// translucent backdrop-blur (or its tinted-fallback degrade — see
-// AcrylicSurface's own doc comment) shows behind the page content instead of
-// a flat fill. The Controls page's four Button-family widgets (Click me,
+// reference for that per-frame check. The content pane is a plain classic
+// Border filled with th.Color.ButtonFace behind the page content. The
+// Controls page's four Button-family widgets (Click me,
 // Accent, Toggle, Add) opt into SetAnimated(true) + SetTimers(tq) so their
 // fill cross-fades instead of snapping between rest/hover/pressed — the
 // other Controls-page widgets (CheckBox/RadioButton/ToggleSwitch) have no
@@ -563,8 +561,9 @@ func buildAdvancedPage(th *theme.Theme, body *text.Face, host *controls.OverlayH
 // fresh *controls.TitleBar alongside the host so main can keep a live
 // reference for its per-frame DragRegion press-edge check (dragging itself
 // is not this function's concern; see the package doc comment). The content
-// pane is now a controls.AcrylicSurface rather than a flat WindowBackground
-// Border, so the translucent backdrop shows through behind pageContent.
+// pane is a plain classic controls.Border filled with th.Color.ButtonFace
+// (v0.2 dropped the AcrylicSurface backdrop-blur look from the gallery —
+// the control itself still lives in package controls, just unused here).
 func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq *timers.Queue, textProp *core.Property[string], sliderProp *core.Property[float32], itemList *bind.List[string], pageProp *core.Property[int], advSelectedProp *core.Property[int], advDialogResultProp *core.Property[string], onMinimize, onMaximize, onClose func(), cancels *[]func()) (*controls.OverlayHost, *controls.TitleBar) {
 	title := text.NewFace(font, th.Type.SubtitleSize)
 	body := text.NewFace(font, th.Type.BodySize)
@@ -614,7 +613,8 @@ func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq
 			return b
 		}(),
 			controls.DockLeft).
-		Add(controls.NewAcrylicSurface().
+		Add(controls.NewBorder().
+			SetBackground(th.Color.ButtonFace).
 			SetRadius(th.Metric.CornerRadius).
 			SetPadding(render.Uniform(th.Metric.PaddingL)).
 			SetChild(pageContent),
@@ -633,9 +633,9 @@ func main() {
 	// FLUO_THEME is a dev convenience for manual light/dark verification
 	// (e.g. `FLUO_THEME=light go run ./cmd/fluo-gallery`), not a supported
 	// runtime API — the real toggle is the T key.
-	initial := theme.FluentDark()
+	initial := theme.Dark()
 	if os.Getenv("FLUO_THEME") == "light" {
-		initial = theme.FluentLight()
+		initial = theme.Light()
 	}
 	theme.SetActive(initial)
 
@@ -721,9 +721,9 @@ func main() {
 		}
 		if togglePending {
 			togglePending = false
-			next := theme.FluentLight()
-			if theme.Active().Name == "fluent-light" {
-				next = theme.FluentDark()
+			next := theme.Light()
+			if theme.Active().Name == "classic-light" {
+				next = theme.Dark()
 			}
 			theme.SetActive(next)
 			// Cancel every binding on the OLD tree (about to be discarded)

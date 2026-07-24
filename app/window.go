@@ -22,7 +22,7 @@ type Config struct {
 
 	// Undecorated, when true, creates the window with no OS-drawn title bar
 	// or border (glfw.WindowHint(glfw.Decorated, glfw.False)) — pair with a
-	// controls.TitleBar drawn inside the frame callback for custom Fluent
+	// controls.TitleBar drawn inside the frame callback for custom
 	// window chrome. Wire the TitleBar's OnMinimize/OnMaximize/OnClose to
 	// Ctx.Minimize/Ctx.ToggleMaximize/Ctx.Close, and call Ctx.BeginDrag from
 	// the frame callback whenever a press lands inside the TitleBar's own

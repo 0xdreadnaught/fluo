@@ -33,11 +33,14 @@ type Column struct {
 }
 
 // DataGrid is a virtualized, multi-column grid: a FIXED header row (drawn
-// directly — LayerBackground fill, TextSecondary titles, a 1px ControlStroke
-// bottom border) sitting above a VIRTUALIZED body that reuses the same
+// directly — each column its own raised bevel, drawRaised, ButtonFace, with a
+// WindowText title) sitting above a VIRTUALIZED body that reuses the same
 // uniform-row virtualizer ListView is built on (see virtualizer.go) for its
 // viewport/scroll/thumb math. Only the body scrolls; the header's own rect
-// depends solely on the grid's arranged bounds, never on scroll offset.
+// depends solely on the grid's arranged bounds, never on scroll offset. The
+// outer frame is a sunken WindowWell (drawSunken), with the header's raised
+// cells and every body row inset inside it by BevelWidth (see
+// ArrangeContent).
 //
 // Column widths are resolved against the body viewport's width exactly like
 // Grid's own column tracks (see resolveTracks in grid.go, reused directly
@@ -55,10 +58,11 @@ type Column struct {
 // contract as ListView (SetSelectedIndex silent+clamped; SetSelectedIndex/
 // row click/Up+Down keyboard all route through selectUser or
 // scrollIntoView). A hovered row (row hit under the pointer, tracked
-// separately from selection) fills ControlFillHover; the selected row fills
-// SelectionBackground with SelectionForeground cell text.
+// separately from selection) is tracked but NOT painted — classic lists have
+// no hover fill; the selected row paints a Highlight band with
+// HighlightText cell text.
 //
-// v0 grid lines: horizontal only — a 1px ControlStroke line beneath every
+// v0 grid lines: horizontal only — a 1px ButtonShadow line beneath every
 // realized row. There are no vertical column separators in v0; a later
 // phase may add them as an opt-in.
 type DataGrid struct {
@@ -94,9 +98,10 @@ type DataGrid struct {
 	// (-1 == none). It is an ABSOLUTE row index, not a screen position, so
 	// any offset change that happens without a fresh Move to re-hit-test
 	// against (Wheel, thumb dragTo) would otherwise leave it naming a row
-	// that has since scrolled to a different on-screen position —
-	// OnPointer clears it to -1 in both of those cases rather than let the
-	// hover band paint on the wrong row.
+	// that has since scrolled to a different on-screen position — OnPointer
+	// clears it to -1 in both of those cases so it never names a stale row.
+	// Render does not paint hoverRow at all (the classic look has no hover
+	// fill); it is tracked purely for other consumers.
 	hoverRow int
 	focused  bool
 
@@ -288,19 +293,31 @@ func (g *DataGrid) MeasureContent(available render.Size) render.Size {
 // ArrangeContent is the single source of truth for the header's fixed rect,
 // column-width resolution, virtualizer offset clamping (via
 // virtualizer.layout against the BODY viewport only — header space is
-// carved off bounds first), and body cell realization: it resizes the
-// TextBlock pool to exactly visibleRows*numCols (see shrinkPool and the
-// grow/reuse branches below, mirroring ListView.ArrangeContent's own
-// convention of re-texting existing entries in place rather than
-// reallocating), arranges each pool entry at its (row,col) cell rect, and
-// recolors it: SelectionForeground for the selected row's cells, TextPrimary
-// otherwise (set unconditionally on every pass, like ListView, so a
-// selection change alone still repaints the right cells next pass).
+// carved off bounds first), and body cell realization. bounds is first
+// inset by the 2px sunken bevel (see theme.MetricTokens.BevelWidth): the
+// header's raised cell buttons and every body row render inside the outer
+// well's frame, never over it, mirroring ListView.ArrangeContent's own
+// bevel inset. It resizes the TextBlock pool to exactly visibleRows*numCols
+// (see shrinkPool and the grow/reuse branches below, mirroring
+// ListView.ArrangeContent's own convention of re-texting existing entries in
+// place rather than reallocating), arranges each pool entry at its (row,col)
+// cell rect, and recolors it: HighlightText for the selected row's cells,
+// WindowText otherwise (set unconditionally on every pass, like ListView, so
+// a selection change alone still repaints the right cells next pass).
 func (g *DataGrid) ArrangeContent(bounds render.Rect) {
-	headerH := g.headerHeight()
-	g.header = render.Rect{X: bounds.X, Y: bounds.Y, W: bounds.W, H: headerH}
+	bw := g.metrics.BevelWidth
+	inset := bounds.Inset(render.Thickness{Top: bw, Bottom: bw, Left: bw, Right: bw})
+	if inset.W < 0 {
+		inset.W = 0
+	}
+	if inset.H < 0 {
+		inset.H = 0
+	}
 
-	body := bounds.Inset(render.Thickness{Top: headerH})
+	headerH := g.headerHeight()
+	g.header = render.Rect{X: inset.X, Y: inset.Y, W: inset.W, H: headerH}
+
+	body := inset.Inset(render.Thickness{Top: headerH})
 	viewport := body.Inset(render.Thickness{Right: g.gutter})
 	if viewport.W < 0 {
 		viewport.W = 0
@@ -365,9 +382,9 @@ func (g *DataGrid) ArrangeContent(bounds render.Rect) {
 				g.pool = append(g.pool, tb)
 			}
 
-			color := g.colors.TextPrimary
+			color := g.colors.WindowText
 			if rowIdx == g.selected {
-				color = g.colors.SelectionForeground
+				color = g.colors.HighlightText
 			}
 			tb.SetColor(color)
 
@@ -400,18 +417,29 @@ func (g *DataGrid) shrinkPool(n int) {
 	}
 }
 
-// Render draws the header (LayerBackground fill, TextSecondary titles, 1px
-// ControlStroke bottom border — all independent of scroll offset, per the
-// type doc comment) followed by the body's per-row backgrounds: the
-// selected row's SelectionBackground band, the hovered row's
-// ControlFillHover band (skipped for the selected row itself, so selection
-// always wins visually), and every visible row's own 1px ControlStroke
-// bottom grid line (v0: horizontal only, no vertical column separators —
-// see the type doc comment). All of this runs before RenderWidget draws
-// this DataGrid's children (the cell TextBlock pool), so cell text always
-// paints on top of these bands/lines.
+// Render draws the outer sunken WindowWell frame across g's full bounds
+// first (the classic grid well — the header's raised cell buttons and every
+// body row sit inside it, per ArrangeContent's bevel inset), then the
+// header: each column gets its own raised ButtonFace cell (drawRaised) with
+// a WindowText title, rather than one flat strip — followed by the body's
+// per-row backgrounds: the selected row's Highlight band (a hovered row
+// paints no fill at all in the classic look — hoverRow is still tracked, by
+// OnPointer, purely for other consumers; only the selected band paints
+// here), and every visible row's own 1px ButtonShadow bottom grid line (v0:
+// horizontal only, no vertical column separators — see the type doc
+// comment). All of this runs before RenderWidget draws this DataGrid's
+// children (the cell TextBlock pool), so cell text always paints on top of
+// these bands/lines.
 func (g *DataGrid) Render(r render.Renderer) {
-	r.FillRect(g.header, g.colors.LayerBackground)
+	drawSunken(r, g.Bounds(), g.colors.WindowWell, g.colors)
+
+	for i := range g.columns {
+		if i >= len(g.colOffsets) {
+			break
+		}
+		cellRect := render.Rect{X: g.colOffsets[i], Y: g.header.Y, W: g.colWidths[i], H: g.header.H}
+		drawRaised(r, cellRect, g.colors.ButtonFace, g.colors)
+	}
 
 	if g.face != nil {
 		for i, col := range g.columns {
@@ -423,51 +451,56 @@ func (g *DataGrid) Render(r render.Renderer) {
 				X: g.colOffsets[i] + g.metrics.PaddingS,
 				Y: g.header.Y + (g.header.H-ts.H)/2,
 			}
-			g.face.Draw(r, tp, col.Title, g.colors.TextSecondary)
+			g.face.Draw(r, tp, col.Title, g.colors.WindowText)
 		}
 	}
 
 	sw := g.metrics.StrokeWidth
-	headerBorder := render.Rect{X: g.header.X, Y: g.header.Bottom() - sw, W: g.header.W, H: sw}
-	r.FillRect(headerBorder, g.colors.ControlStroke)
-
 	for row := 0; row < g.visibleCount; row++ {
 		rowIdx := g.visibleFirst + row
 		rowY := g.viewport.Y + float32(rowIdx)*g.rowH - g.offset
 		rowRect := render.Rect{X: g.viewport.X, Y: rowY, W: g.viewport.W, H: g.rowH}
 
-		switch {
-		case rowIdx == g.selected:
-			r.FillRect(rowRect, g.colors.SelectionBackground)
-		case rowIdx == g.hoverRow:
-			r.FillRect(rowRect, g.colors.ControlFillHover)
+		if rowIdx == g.selected {
+			r.FillRect(rowRect, g.colors.Highlight)
 		}
 
 		gridLine := render.Rect{X: g.viewport.X, Y: rowRect.Bottom() - sw, W: g.viewport.W, H: sw}
-		r.FillRect(gridLine, g.colors.ControlStroke)
+		r.FillRect(gridLine, g.colors.ButtonShadow)
 	}
 }
 
 // ClipRect implements core.ClipProvider, clipping realized cells to the
-// grid's own bounds minus the header strip — so a partially-scrolled row at
-// the top edge of the body never bleeds its text up into the header (the
+// grid's bevel-inset content bounds minus the header strip — so a
+// partially-scrolled row never bleeds its text up into the header (the
 // header itself is drawn in Render, BEFORE this clip is even pushed, so it
-// is never affected either way). Matches ListView.ClipRect in every other
+// is never affected either way) NOR onto the outer sunken bevel (see
+// ArrangeContent's matching inset). Matches ListView.ClipRect in every other
 // respect (gutter included, so the thumb — drawn in RenderOverlay, after
 // this clip is popped — is never cropped).
 func (g *DataGrid) ClipRect() (render.Rect, bool) {
-	return g.Bounds().Inset(render.Thickness{Top: g.headerHeight()}), true
+	bw := g.metrics.BevelWidth
+	inset := g.Bounds().Inset(render.Thickness{Top: bw, Bottom: bw, Left: bw, Right: bw})
+	if inset.W < 0 {
+		inset.W = 0
+	}
+	if inset.H < 0 {
+		inset.H = 0
+	}
+	return inset.Inset(render.Thickness{Top: g.headerHeight()}), true
 }
 
-// RenderOverlay implements core.OverlayRenderer, drawing the thumb above the
-// clipped body rows when there is content to scroll to, then the focus ring
-// while focused — matching ListView.RenderOverlay exactly.
+// RenderOverlay implements core.OverlayRenderer, drawing the classic
+// track+thumb (drawScrollThumb) above the clipped body rows when there is
+// content to scroll to, then the focus ring while focused — matching
+// ListView.RenderOverlay exactly.
 func (g *DataGrid) RenderOverlay(r render.Renderer) {
-	if rect, ok := g.thumbRect(); ok {
-		r.FillRoundedRect(rect, g.thumbRadius, g.thumbColor)
+	if track, _, ok := g.thumbGeometry(); ok {
+		thumb, _ := g.thumbRect()
+		drawScrollThumb(r, track, thumb, g.colors)
 	}
 	if g.focused {
-		drawFocusRing(r, g.Bounds(), g.metrics.ControlCornerRadius, g.colors, g.metrics)
+		drawFocusRing(r, g.Bounds(), g.colors)
 	}
 }
 
@@ -490,8 +523,9 @@ func (g *DataGrid) OnFocusChanged(focused bool) {
 // Press landing on a real body row (rowAt) selects it as a user-driven
 // change (selectUser) and is handled, while a Press over the header, the
 // gutter, or empty space below a short grid (rowAt reports ok == false) is
-// left unhandled. Move updates hoverRow (for the ControlFillHover band) when
-// not mid-drag; Leave clears it.
+// left unhandled. Move updates hoverRow when not mid-drag; Leave clears it —
+// hoverRow is tracked purely for other consumers, since Render paints no
+// hover fill in the classic look.
 func (g *DataGrid) OnPointer(e *input.PointerEvent) {
 	switch e.Action {
 	case input.Wheel:
@@ -499,8 +533,8 @@ func (g *DataGrid) OnPointer(e *input.PointerEvent) {
 		// The offset just moved but this isn't a Move (no fresh pointer
 		// position to re-hit-test against), so whatever row hoverRow named
 		// no longer necessarily sits under the pointer on screen — clear it
-		// rather than paint ControlFillHover on the wrong row (see the row
-		// hover doc comment on hoverRow's field).
+		// rather than leave it naming the wrong row (see the row hover doc
+		// comment on hoverRow's field).
 		g.hoverRow = -1
 		g.InvalidateArrange()
 		e.Handled = true

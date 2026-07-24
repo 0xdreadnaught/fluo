@@ -1,10 +1,11 @@
 # fluo
 
-fluo is a retained-mode, Fluent/WinUI-styled GUI toolkit for OpenGL apps in
-Go. It gives a Go program a themed widget tree — layout, input routing,
-data binding, and a full Fluent control set — over a thin OpenGL 3.3
-renderer, without pulling in a browser engine or a native OS toolkit
-binding.
+fluo is a retained-mode, classic Windows-2000-styled GUI toolkit for OpenGL
+apps in Go. It gives a Go program a themed widget tree — layout, input
+routing, data binding, and a full classic-chrome control set (four-tone
+raised/sunken bevels, square corners, gradient title bars) — over a thin
+OpenGL 3.3 renderer, without pulling in a browser engine or a native OS
+toolkit binding.
 
 fluo is built bottom-up as a stack of small, independently testable
 packages (see [Architecture](#architecture) below) rather than one large
@@ -14,21 +15,26 @@ change, not a rewrite.
 
 ## Features
 
-- A full Fluent-styled control set: `Border`, `TextBlock`, `StackPanel`,
+- A full classic-styled control set: `Border`, `TextBlock`, `StackPanel`,
   `Grid`, `DockPanel`, `WrapPanel`, `Canvas`, `ScrollViewer`, `Button`,
   `ToggleButton`, `CheckBox`, `RadioButton`/`RadioGroup`, `ToggleSwitch`,
   `TextBox`, `Slider`, `ProgressBar`, `ComboBox`, `ToolTipArea`,
   `ListView`, `TreeView`, `TabControl`, `Expander`, `MenuBar`, modal
-  `Dialog`, `DataGrid`, and a custom `TitleBar` for undecorated windows.
-- Fluent Light/Dark theming: every control styles itself from
-  `theme.Active()`'s color/metric/typography tokens; re-theming means
-  swapping the active theme and rebuilding the tree.
+  `Dialog`, `DataGrid`, and a custom `TitleBar` for undecorated windows —
+  every raised/sunken surface drawn as an authentic Windows-2000 four-tone
+  bevel (`ButtonHighlight`/`ButtonLight`/`ButtonShadow`/`ButtonDarkShadow`
+  around a flat `ButtonFace`), square corners, no drop shadows or blur.
+- Light/Dark theming: every control styles itself from `theme.Active()`'s
+  color/metric/typography tokens; re-theming means swapping the active
+  theme and rebuilding the tree. `theme.Light()` and `theme.Dark()` are the
+  two bundled variants — see [Theming](#theming) below for building your own.
 - Two-way and one-way data binding (package `bind`) between
   `core.Property[T]` values and controls, under a uniform silent-setter/
   `OnChanged` contract, plus observable-list collection binding.
 - Virtualized `ListView`/`DataGrid` for large item sets.
-- An acrylic/mica backdrop-blur surface (`controls.AcrylicSurface`) for
-  translucent Fluent-style chrome.
+- A translucent backdrop-blur surface (`controls.AcrylicSurface`) is still
+  available as a control for apps that want it, though it's not part of the
+  classic look and the gallery no longer uses it (see Theming below).
 
 ## Requirements
 
@@ -86,8 +92,8 @@ fluo is layered bottom to top; each layer only depends on the ones below it:
    and the reactive `Property[T]`.
 4. **`input`** — hit-testing, event bubbling, capture, and focus over a
    `core.Widget` tree.
-5. **`theme`** — the color/metric/typography token model (`FluentLight`/
-   `FluentDark`).
+5. **`theme`** — the color/metric/typography token model (`theme.Light()`/
+   `theme.Dark()`).
 6. **`controls`** — the built-in widget set, styled from `theme` and wired
    to `input`.
 7. **`bind`** — one-way/two-way binding between `core.Property[T]`/
@@ -121,29 +127,31 @@ Run any of them with `go run`, e.g. `go run ./examples/todo` or
 
 ## Status
 
-**v0.1 — ready to publish.** The full layer stack above is implemented,
-tested (headless layout/binding tests plus GL golden-image tests, auto-skipped
-without a GPU), and live-verified: `fluo-gallery` now opens as an undecorated
-window with a custom `TitleBar` (drag-to-move, min/max/close), an
-`AcrylicSurface` content pane, and animated demo buttons, exercising every
-control in the toolkit together. `go vet`, `gofmt`, `go build`, and
-`go test` (including the golden suite) are all clean. Publishing the tagged
-release itself (creating the GitHub repo, pushing, tagging `v0.1.0`) is an
-operator action — see
+**v0.2 — classic-depth restyle complete.** The full layer stack above is
+implemented, tested (headless layout/binding tests plus GL golden-image
+tests, auto-skipped without a GPU), and live-verified: `fluo-gallery` opens
+as an undecorated window with a custom `TitleBar` (drag-to-move, min/max/
+close, gradient caption), a classic `ButtonFace` content pane, and animated
+demo buttons, exercising every control in the toolkit together in the
+Windows-2000 four-tone bevel look. `go vet`, `gofmt`, `go build`, and
+`go test` (including the golden suite) are all clean. Publishing a tagged
+release itself (creating the GitHub repo, pushing, tagging) is an operator
+action — see
 [`docs/superpowers/RELEASE-CHECKLIST.md`](docs/superpowers/RELEASE-CHECKLIST.md).
 Known, deliberately deferred gaps:
 
 - Shape (rounded-rect/stroke/shadow) anti-aliasing softens at display
   scale > 1 and can alias at scale < 1 — text stays crisp at any scale
-  (it uses `fwidth`); shapes don't yet.
-- The custom Fluent titlebar targets Windows/Linux (glfw-undecorated);
-  there is no native macOS traffic-lights integration.
+  (it uses `fwidth`); shapes don't yet (moot for the classic themes' square,
+  zero-radius corners, but still relevant to stroke edges).
+- The custom titlebar targets Windows/Linux (glfw-undecorated); there is no
+  native macOS traffic-lights integration.
 - IME input and accessibility (screen-reader/automation) hooks are not
   implemented.
 
-See [CHANGELOG.md](CHANGELOG.md) for the full v0.1.0 deliverable list and
-[ROADMAP.md](ROADMAP.md) for the phase-by-phase history and design spec
-pointer.
+See [CHANGELOG.md](CHANGELOG.md) for the full v0.1.0 and v0.2.0 deliverable
+lists and [ROADMAP.md](ROADMAP.md) for the phase-by-phase history and design
+spec pointer.
 
 ## License
 
@@ -219,16 +227,28 @@ outlive views, bindings don't.
 
 ### Theming
 
-Every control is styled from `theme.Active()` — a `*theme.Theme` bundling
-color, metric (radius/padding/stroke), and typography tokens — rather than
-hard-coded values. `theme.FluentLight()` and `theme.FluentDark()` are the two
-built-in variants (`theme.SetActive` picks one; `Active()` defaults to
-Dark). Widgets capture the tokens they need at *construction* time (e.g.
-`NewTextBlock`, `NewScrollViewer`), so there is no live re-skinning of an
-existing tree: re-theming means calling `theme.SetActive` and then rebuilding
-the widget tree from scratch (`fluo-gallery`'s `buildUI` is the reference
-example — it is a pure function of `theme.Active()`, called again and swapped
-in via `ctx.Input.SetRoot` on every toggle).
+Every color a control draws comes from `theme.Active().Color`, a
+`theme.ColorTokens` struct — there are no hard-coded colors anywhere in
+`controls`. The classic four-tone bevel fields are `ButtonFace`,
+`ButtonHighlight`, `ButtonLight`, `ButtonShadow`, `ButtonDarkShadow`
+(raised/sunken 3D chrome), `WindowWell`/`WindowText`/`GrayText` (recessed
+content areas like text boxes and lists), `Highlight`/`HighlightText`
+(selection), and `CaptionFrom`/`CaptionTo`/`CaptionText`/`InactiveCaption`
+(the title bar's left-to-right gradient and its unfocused-window fallback).
+Metric tokens (`theme.MetricTokens`: corner radii, bevel width, padding
+scale, ...) and type tokens (`theme.TypeTokens`: caption/body/subtitle/title
+sizes) round out a `*theme.Theme`.
+
+fluo ships two bundled themes, `theme.Light()` (the default — an authentic
+Windows-2000 "Standard" gray) and `theme.Dark()` (the same bevel structure,
+dark-beveled); `theme.SetActive` picks the active one and `theme.Active()`
+reads it back (defaulting to `Light()` if nothing has been set). Widgets
+capture the tokens they need at *construction* time (e.g. `NewTextBlock`,
+`NewScrollViewer`), so there is no live re-skinning of an existing tree:
+re-theming means calling `theme.SetActive` and then rebuilding the widget
+tree from scratch (`fluo-gallery`'s `buildUI` is the reference example — it
+is a pure function of `theme.Active()`, called again and swapped in via
+`ctx.Input.SetRoot` on every toggle).
 
 In the gallery, press **T** to toggle Light/Dark live (`SetRoot` intentionally
 resets hover/capture/focus, since the widget tree itself is fresh). For quick
@@ -239,6 +259,46 @@ API:
 ```sh
 FLUO_THEME=light go run ./cmd/fluo-gallery
 ```
+
+#### Building a custom theme
+
+A custom theme is just a `*theme.Theme` built by copying one of the bundled
+themes and overriding whichever tokens you want — there's no separate
+"theme builder" API, because `Theme`/`ColorTokens`/`MetricTokens`/
+`TypeTokens` are all plain structs:
+
+```go
+package main
+
+import (
+	"github.com/0xdreadnaught/fluo/render"
+	"github.com/0xdreadnaught/fluo/theme"
+)
+
+// oceanTheme starts from the bundled Light theme and swaps in a blue-tinted
+// highlight/caption palette, keeping every other classic token (bevels,
+// well, text) untouched.
+func oceanTheme() *theme.Theme {
+	t := *theme.Light() // copy: Light() already returns a fresh *Theme per call
+	t.Name = "ocean"
+	t.Color.Highlight = render.RGB(0, 90, 158)
+	t.Color.HighlightText = render.RGB(255, 255, 255)
+	t.Color.CaptionFrom = render.RGB(0, 60, 110)
+	t.Color.CaptionTo = render.RGB(90, 160, 210)
+	t.Color.CaptionText = render.RGB(255, 255, 255)
+	return &t
+}
+
+func main() {
+	theme.SetActive(oceanTheme())
+	// ... build the widget tree as usual; every control reads
+	// theme.Active().Color.Highlight / .CaptionFrom / etc. at construction.
+}
+```
+
+Because `Light()`/`Dark()` return a fresh `*Theme` value each call (not a
+shared pointer), copying with `t := *theme.Light()` is safe — mutating `t`
+never affects the bundled theme or any other copy of it.
 
 ### Golden-image tests
 

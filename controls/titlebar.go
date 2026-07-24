@@ -8,10 +8,10 @@ import (
 	"github.com/0xdreadnaught/fluo/theme"
 )
 
-// titleBarHeight is TitleBar's normative fixed height (Fluent custom
-// titlebars run ~32px). captionButtonWidth is each of the three caption
-// buttons' fixed width — noticeably wider than tall, matching Fluent's own
-// caption button proportions — at the bar's full height.
+// titleBarHeight is TitleBar's normative fixed height (custom titlebars
+// conventionally run ~32px). captionButtonWidth is each of the three
+// caption buttons' fixed width — noticeably wider than tall, matching
+// conventional caption button proportions — at the bar's full height.
 const (
 	titleBarHeight     float32 = 32
 	captionButtonWidth float32 = 46
@@ -22,9 +22,8 @@ const (
 const captionGlyphSize float32 = 10
 
 // captionKind identifies which of the three caption buttons a captionButton
-// is, driving both its hover fill (close gets the distinct CloseButtonHover
-// red; minimize/maximize get the ordinary ControlFillHover/Pressed) and
-// which glyph shape Render draws.
+// is, driving only which glyph shape Render draws — all three share the
+// same classic raised/sunken bevel look (see Render's doc comment).
 type captionKind uint8
 
 const (
@@ -35,13 +34,12 @@ const (
 
 // captionButton is TitleBar's caption-cell widget: a fixed-size
 // (captionButtonWidth x titleBarHeight), always-enabled, ClickBehavior-
-// driven cell. It draws no text label — Render paints a hover/pressed fill
-// (fully transparent at rest, so the TitleBar's own LayerBackground fill
-// shows through) and a small drawn shape glyph (a line, a square outline, or
-// an X) rather than a text/font glyph: drawn shapes render identically
-// regardless of what glyphs a font happens to carry, unlike e.g. CheckBox's
-// U+2713 fallback dance (see hasCheckmarkGlyph) — simpler and more reliable
-// for chrome this small.
+// driven cell. It draws no text label — Render paints a classic raised
+// (sunken while pressed) bevel and a small drawn shape glyph (a line, a
+// square outline, or an X) rather than a text/font glyph: drawn shapes
+// render identically regardless of what glyphs a font happens to carry,
+// unlike e.g. CheckBox's U+2713 fallback dance (see hasCheckmarkGlyph) —
+// simpler and more reliable for chrome this small.
 type captionButton struct {
 	core.Element
 
@@ -66,41 +64,22 @@ func (b *captionButton) MeasureContent(available render.Size) render.Size {
 	return render.Size{W: captionButtonWidth, H: titleBarHeight}
 }
 
-// fill resolves the cell's background: fully transparent at rest, else
-// ControlFillHover/ControlFillPressed for minimize/maximize, or the
-// distinct CloseButtonHover red for close — for BOTH its hover and pressed
-// states, matching Fluent's own close button (which uses one red for both,
-// relying on the OS compositor's press-flash for pressed feedback, not a
-// second red shade — fluo does not attempt to reproduce that flash here).
-func (b *captionButton) fill() render.Color {
-	hot := b.click.Hover() || b.click.Pressed()
-	if !hot {
-		return render.Color{}
-	}
-	if b.kind == captionClose {
-		return b.colors.CloseButtonHover
-	}
-	if b.click.Pressed() {
-		return b.colors.ControlFillPressed
-	}
-	return b.colors.ControlFillHover
-}
-
-// glyphColor is TextPrimary normally, or AccentText (white, in both bundled
-// Fluent themes) while the close button's red fill is showing, for contrast.
-func (b *captionButton) glyphColor() render.Color {
-	if b.kind == captionClose && (b.click.Hover() || b.click.Pressed()) {
-		return b.colors.AccentText
-	}
-	return b.colors.TextPrimary
-}
-
-// Render paints the hover/pressed fill (if any, per fill) then the button's
-// glyph shape, both centered within the cell's own bounds.
+// Render paints the button's classic bevel — raised at rest and while
+// hovered, sunken while pressed (drawRaised/drawSunken, the same two states
+// any other push button in this package uses) — then the button's glyph
+// shape in WindowText, both centered within the cell's own bounds. The OLD
+// look drew a fully transparent rest/hover fill with a distinct
+// CloseButtonHover red reserved for the close button (relying on the
+// TitleBar's own LayerBackground showing through at rest); the classic
+// restyle drops that entirely — a Win2000 close button is a plain gray
+// raised square, not red on hover — so all three caption buttons share one
+// look and only differ by glyph.
 func (b *captionButton) Render(r render.Renderer) {
 	bounds := b.Bounds()
-	if fill := b.fill(); fill.A > 0 {
-		r.FillRect(bounds, fill)
+	if b.click.Pressed() {
+		drawSunken(r, bounds, b.colors.ButtonFace, b.colors)
+	} else {
+		drawRaised(r, bounds, b.colors.ButtonFace, b.colors)
 	}
 
 	g := render.Rect{
@@ -108,7 +87,7 @@ func (b *captionButton) Render(r render.Renderer) {
 		Y: bounds.Y + (bounds.H-captionGlyphSize)/2,
 		W: captionGlyphSize, H: captionGlyphSize,
 	}
-	color := b.glyphColor()
+	color := b.colors.WindowText
 	switch b.kind {
 	case captionMinimize:
 		// A single horizontal line ("–") centered in the glyph box.
@@ -157,10 +136,13 @@ func dab(r render.Renderer, cx, cy, thickness float32, c render.Color) {
 }
 
 // TitleBar is a full-width, fixed-height (titleBarHeight) window-chrome
-// widget: a title label at the left (BodySize face, TextPrimary — the
+// widget: a title label at the left (BodySize face, CaptionText — the
 // caller supplies a BodySize face, matching every other control in this
 // package) and three caption buttons (minimize/maximize/close) right-
-// aligned (close rightmost), filled with LayerBackground.
+// aligned (close rightmost), over a CaptionFrom→CaptionTo horizontal
+// gradient (the classic active-caption look; TitleBar does not track
+// window active/inactive state, so it always draws the active gradient —
+// InactiveCaption is unused here).
 //
 // TitleBar knows nothing about the actual OS window: minimize/maximize/
 // close are just callbacks (OnMinimize/OnMaximize/OnClose), and dragging is
@@ -192,7 +174,7 @@ func NewTitleBar(face *text.Face, title string) *TitleBar {
 	t.colors = th.Color
 	t.metrics = th.Metric
 
-	t.title = NewTextBlock(face, title)
+	t.title = NewTextBlock(face, title).SetColor(t.colors.CaptionText)
 	core.SetParent(t.title, t)
 
 	t.min = newCaptionButton(captionMinimize)
@@ -273,8 +255,8 @@ func (t *TitleBar) MeasureContent(available render.Size) render.Size {
 
 // ArrangeContent arranges the three caption buttons right-aligned at the
 // bar's full height (close rightmost, then maximize, then minimize, each
-// captionButtonWidth wide and abutting the next with no gap, matching
-// Fluent's own flush caption-button row) and the title at the bar's left
+// captionButtonWidth wide and abutting the next with no gap, matching a
+// conventional flush caption-button row) and the title at the bar's left
 // edge, inset by PaddingL and vertically centered, occupying whatever width
 // remains before the caption buttons begin.
 func (t *TitleBar) ArrangeContent(bounds render.Rect) {
@@ -296,10 +278,11 @@ func (t *TitleBar) ArrangeContent(bounds render.Rect) {
 	core.ArrangeWidget(t.title, render.Rect{X: tx, Y: ty, W: tw, H: titleD.H})
 }
 
-// Render fills the bar's own bounds with LayerBackground; the title and
-// caption buttons render separately as children (see Children).
+// Render paints the bar's own bounds with the classic active-caption
+// horizontal gradient (CaptionFrom -> CaptionTo); the title and caption
+// buttons render separately as children (see Children).
 func (t *TitleBar) Render(r render.Renderer) {
-	r.FillRect(t.Bounds(), t.colors.LayerBackground)
+	r.DrawGradientRect(t.Bounds(), t.colors.CaptionFrom, t.colors.CaptionTo, true)
 }
 
 // Children returns the title label and the three caption buttons, in that

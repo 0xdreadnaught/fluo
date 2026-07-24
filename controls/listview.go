@@ -334,29 +334,59 @@ func (l *ListView) MeasureContent(available render.Size) render.Size {
 	return render.Size{W: w, H: h}
 }
 
+// contentBounds returns l's own bounds inset by the 2px sunken bevel (see
+// theme.MetricTokens.BevelWidth) — the area the well's raised/sunken frame
+// encloses, which ArrangeContent further insets by the thumb gutter to reach
+// the actual viewport. Rows (and the selection band) render entirely inside
+// this rect, never over the bevel itself.
+func (l *ListView) contentBounds() render.Rect {
+	bw := l.metrics.BevelWidth
+	inner := l.Bounds().Inset(render.Thickness{Top: bw, Bottom: bw, Left: bw, Right: bw})
+	if inner.W < 0 {
+		inner.W = 0
+	}
+	if inner.H < 0 {
+		inner.H = 0
+	}
+	return inner
+}
+
 // ArrangeContent is the single source of truth for offset clamping (via
-// virtualizer.layout) and for row realization: it computes the viewport
-// (bounds minus the thumb gutter on the right), clamps the scroll offset,
+// virtualizer.layout) and for row realization: it insets bounds by the 2px
+// sunken bevel first (see contentBounds' doc comment — rows must sit inside
+// the well's frame, not over it), computes the viewport within that inset
+// rect (minus the thumb gutter on the right), clamps the scroll offset,
 // determines the visible row range (recorded in visibleFirst for Render's
 // selection-band lookup), resizes the TextBlock pool to exactly that many
 // rows (see shrinkPool and the grow/reuse branches below — existing pool
 // entries are re-texted in place, never reallocated), arranges each pool
 // entry at its row's position offset by the current scroll, and recolors
-// it: SelectionForeground for the selected row's text, TextPrimary for
-// every other (set unconditionally on every pass, unlike the conditional
-// re-text below, since a selection change alone — no text change — must
-// still repaint the right rows the next time this runs).
+// it: HighlightText for the selected row's text, WindowText for every
+// other (set unconditionally on every pass, unlike the conditional re-text
+// below, since a selection change alone — no text change — must still
+// repaint the right rows the next time this runs).
 func (l *ListView) ArrangeContent(bounds render.Rect) {
+	inset := bounds.Inset(render.Thickness{
+		Top: l.metrics.BevelWidth, Bottom: l.metrics.BevelWidth,
+		Left: l.metrics.BevelWidth, Right: l.metrics.BevelWidth,
+	})
+	if inset.W < 0 {
+		inset.W = 0
+	}
+	if inset.H < 0 {
+		inset.H = 0
+	}
+
 	// Reserve the thumb gutter only when the content actually scrolls. When
-	// it fits (no thumb), the viewport is the full bounds so rows and the
-	// selection band reach the right edge; when it scrolls, the gutter keeps
+	// it fits (no thumb), the viewport is the full inset rect so rows and the
+	// selection band reach its right edge; when it scrolls, the gutter keeps
 	// the band clear of the (translucent) thumb so the highlight sits fully
 	// beside the scrollbar rather than bleeding through it.
 	gutter := float32(0)
-	if l.totalHeight() > bounds.H {
+	if l.totalHeight() > inset.H {
 		gutter = l.gutter
 	}
-	viewport := bounds.Inset(render.Thickness{Right: gutter})
+	viewport := inset.Inset(render.Thickness{Right: gutter})
 	if viewport.W < 0 {
 		viewport.W = 0
 	}
@@ -407,9 +437,9 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 			l.pool = append(l.pool, tb)
 		}
 
-		rowColor := l.colors.TextPrimary
+		rowColor := l.colors.WindowText
 		if idx == l.selected {
-			rowColor = l.colors.SelectionForeground
+			rowColor = l.colors.HighlightText
 		}
 		tb.SetColor(rowColor) // purely visual (TextBlock.SetColor), no invalidation
 
@@ -434,15 +464,19 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 	}
 }
 
-// Render fills the selected row's band with SelectionBackground before its
-// TextBlock renders on top (see RenderWidget's documented order: a widget's
-// own Render runs before its children's) — a no-op when nothing is
-// selected, or the selected index isn't currently realized (scrolled out of
-// the visible range). Drawn unclipped like every other Render method in
-// this package, but always safely within l's own bounds regardless: the
-// row rect computed here is the exact geometry ArrangeContent already
-// arranged that pool slot's TextBlock at.
+// Render draws the sunken WindowWell frame across l's full bounds first
+// (the classic list-box well — see contentBounds' doc comment for how rows
+// are kept inside it), then fills the selected row's band with Highlight
+// before its TextBlock renders on top (see RenderWidget's documented order:
+// a widget's own Render runs before its children's) — a no-op for the band
+// when nothing is selected, or the selected index isn't currently realized
+// (scrolled out of the visible range). The band is drawn unclipped like
+// every other Render method in this package, but always safely within l's
+// own bounds regardless: the row rect computed here is the exact geometry
+// ArrangeContent already arranged that pool slot's TextBlock at.
 func (l *ListView) Render(r render.Renderer) {
+	drawSunken(r, l.Bounds(), l.colors.WindowWell, l.colors)
+
 	if l.selected < 0 {
 		return
 	}
@@ -451,16 +485,17 @@ func (l *ListView) Render(r render.Renderer) {
 		return
 	}
 	// The band spans the viewport width. When the list doesn't scroll the
-	// viewport is the full bounds (ArrangeContent reserves no gutter), so the
-	// band is edge-to-edge; when it scrolls, the band stops at the gutter so
-	// it stays clear of the translucent thumb rather than showing through it.
+	// viewport is the full inset content rect (ArrangeContent reserves no
+	// gutter), so the band reaches its right edge; when it scrolls, the band
+	// stops at the gutter so it stays clear of the translucent thumb rather
+	// than showing through it.
 	rowRect := render.Rect{
 		X: l.viewport.X,
 		Y: l.viewport.Y + float32(l.selected)*l.rowH - l.offset,
 		W: l.viewport.W,
 		H: l.rowH,
 	}
-	r.FillRect(rowRect, l.colors.SelectionBackground)
+	r.FillRect(rowRect, l.colors.Highlight)
 }
 
 // shrinkPool detaches (core.SetParent(tb, nil)) and drops any pool entries
@@ -477,25 +512,30 @@ func (l *ListView) shrinkPool(n int) {
 	}
 }
 
-// ClipRect implements core.ClipProvider, clipping realized rows to
-// ListView's own full bounds (thumb gutter included, so the thumb itself —
-// drawn in RenderOverlay, which runs after the clip is popped — is never
-// cropped), matching ScrollViewer.ClipRect.
+// ClipRect implements core.ClipProvider, clipping realized rows to l's
+// bevel-inset content bounds (see contentBounds' doc comment) rather than
+// l's raw outer bounds — so a partially-scrolled row at the top/bottom edge
+// of the viewport is cropped at the well's inner frame, never bleeding onto
+// the sunken bevel itself. The thumb gutter is included (within
+// contentBounds), so the thumb itself — drawn in RenderOverlay, which runs
+// after the clip is popped — is never cropped either way.
 func (l *ListView) ClipRect() (render.Rect, bool) {
-	return l.Bounds(), true
+	return l.contentBounds(), true
 }
 
-// RenderOverlay implements core.OverlayRenderer, drawing the thumb above the
-// clipped rows when there is content to scroll to (matching
-// ScrollViewer.RenderOverlay), then the focus ring while focused — per the
-// global focus constraint shared by every focusable control in this
-// package (Slider, ComboBox, ...) — drawn last so it sits above the thumb.
+// RenderOverlay implements core.OverlayRenderer, drawing the classic
+// track+thumb (drawScrollThumb, matching ScrollViewer.RenderOverlay) above
+// the clipped rows when there is content to scroll to, then the focus ring
+// while focused — per the global focus constraint shared by every
+// focusable control in this package (Slider, ComboBox, ...) — drawn last so
+// it sits above the thumb.
 func (l *ListView) RenderOverlay(r render.Renderer) {
-	if rect, ok := l.thumbRect(); ok {
-		r.FillRoundedRect(rect, l.thumbRadius, l.thumbColor)
+	if track, _, ok := l.thumbGeometry(); ok {
+		thumb, _ := l.thumbRect()
+		drawScrollThumb(r, track, thumb, l.colors)
 	}
 	if l.focused {
-		drawFocusRing(r, l.Bounds(), l.metrics.ControlCornerRadius, l.colors, l.metrics)
+		drawFocusRing(r, l.Bounds(), l.colors)
 	}
 }
 

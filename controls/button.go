@@ -26,6 +26,22 @@ type Button struct {
 	enabled bool
 	focused bool
 
+	// isToggle marks this Button as the embedded chrome of a ToggleButton
+	// (set once, by NewToggleButton). ToggleButton reuses the accent field/
+	// SetAccent machinery to mirror Checked() (see ToggleButton's type doc
+	// comment) — that wiring is untouched by the v0.2 classic restyle — but
+	// Render now needs to tell apart the two accent=true cases it produces:
+	// a plain Button's SetAccent(true) ("default button", drawn raised with
+	// an extra outer border) vs. a checked ToggleButton (drawn sunken, like
+	// a held-down press). isToggle is a Render-only disambiguator; it has no
+	// effect on click/measure/arrange/focus behavior.
+	isToggle bool
+
+	// labelRect is the label's base (unnudged) arranged rect, cached by
+	// ArrangeContent so Render can re-arrange the label a further +1,+1 for
+	// the classic sunken/pressed nudge without needing a layout pass.
+	labelRect render.Rect
+
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
 
@@ -74,9 +90,11 @@ func (b *Button) OnClick(fn func()) *Button {
 	return b
 }
 
-// SetAccent switches between the default (ControlFill-family) chrome and the
-// accent (Accent-family, no stroke) chrome. Purely visual: no invalidation
-// needed since the host redraws every frame.
+// SetAccent marks (or unmarks) this button as the DEFAULT button: the same
+// raised/sunken ButtonFace bevel as any other button, plus an extra outer
+// 1px ButtonDarkShadow border drawn just outside the bevel (see Render/
+// drawOuterBorder). Purely visual: no invalidation needed since the host
+// redraws every frame.
 func (b *Button) SetAccent(a bool) *Button {
 	b.accent = a
 	return b
@@ -185,7 +203,7 @@ func (b *Button) MeasureContent(available render.Size) render.Size {
 // ArrangeContent arranges the label centered (both axes) within bounds inset
 // by padding. Centering (rather than filling) matters whenever the button
 // ends up wider/taller than its own desired size, e.g. stretched by a parent
-// panel.
+// panel. The computed rect is cached in labelRect for Render's press-nudge.
 func (b *Button) ArrangeContent(bounds render.Rect) {
 	pad := b.padding()
 	inner := bounds.Inset(pad)
@@ -199,7 +217,8 @@ func (b *Button) ArrangeContent(bounds render.Rect) {
 	d := core.DesiredSizeOf(b.label)
 	x := inner.X + (inner.W-d.W)/2
 	y := inner.Y + (inner.H-d.H)/2
-	core.ArrangeWidget(b.label, render.Rect{X: x, Y: y, W: d.W, H: d.H})
+	b.labelRect = render.Rect{X: x, Y: y, W: d.W, H: d.H}
+	core.ArrangeWidget(b.label, b.labelRect)
 }
 
 // stateColors resolves the fill, stroke (zero-alpha means "no stroke"), and
@@ -242,32 +261,83 @@ func (b *Button) stateColors() (fill, stroke, label render.Color) {
 	return fill, c.ControlStroke, c.TextPrimary
 }
 
-// Render paints the button's fill and (if visible) stroke, and recolors the
-// label for the current state; children (the label) render separately via
-// core.RenderWidget. The fill is resolved through animatedFill, which is a
-// no-op pass-through unless SetAnimated(true) and a non-nil SetTimers queue
-// are both set (see animatedFill).
-func (b *Button) Render(r render.Renderer) {
-	fill, stroke, labelColor := b.stateColors()
-	fill = b.animatedFill(fill)
-	bounds := b.Bounds()
-	radius := b.metrics.ControlCornerRadius
-
-	r.FillRoundedRect(bounds, radius, fill)
-	if stroke.A > 0 {
-		r.StrokeRoundedRect(bounds, radius, b.metrics.StrokeWidth, stroke)
-	}
-	b.label.SetColor(labelColor)
+// drawOuterBorder paints a 1px single-tone rectangle border around rect's
+// perimeter — the classic "default button" marker: an extra ButtonDarkShadow
+// ring drawn just outside a button's raised bevel.
+func drawOuterBorder(r render.Renderer, rect render.Rect, c render.Color) {
+	r.FillRect(render.Rect{X: rect.X, Y: rect.Y, W: rect.W, H: 1}, c)
+	r.FillRect(render.Rect{X: rect.X, Y: rect.Bottom() - 1, W: rect.W, H: 1}, c)
+	r.FillRect(render.Rect{X: rect.X, Y: rect.Y, W: 1, H: rect.H}, c)
+	r.FillRect(render.Rect{X: rect.Right() - 1, Y: rect.Y, W: 1, H: rect.H}, c)
 }
 
-// RenderOverlay draws the focus ring while focused, per the global focus
-// constraint: StrokeRoundedRect on the button's bounds inflated by 2, radius
-// = control radius + 2, FocusStroke color and FocusStrokeWidth.
+// Render paints the button's classic chiseled chrome (raised at rest/hover,
+// sunken while pressed or — for a checked ToggleButton — while toggled on)
+// via the shared bevel helpers, plus the label's color/position for the
+// current state; children (the label) render separately via
+// core.RenderWidget, immediately after this method returns (see
+// core.RenderWidget's documented parent-then-children order), so any extra
+// glyphs painted here (the disabled engrave highlight) land BENEATH the
+// label's own subsequent draw.
+//
+// Chrome: normal = drawRaised(ButtonFace); hover (not pressed/sunken) =
+// drawRaised(ButtonLight); pressed, or a checked ToggleButton (see isToggle),
+// = drawSunken(ButtonFace) plus a +1,+1 label nudge (the classic press
+// squish). A plain Button with SetAccent(true) ("default button", never true
+// for a ToggleButton's isToggle chrome) additionally gets a 1px
+// ButtonDarkShadow border just outside its raised bevel.
+//
+// Label: WindowText normally; disabled draws a classic engrave — the same
+// glyphs once in ButtonHighlight offset +1,+1 (painted here, first) then
+// again in GrayText at the nominal (possibly press-nudged) position (painted
+// by the label's own Render, which runs next).
+func (b *Button) Render(r render.Renderer) {
+	c := b.colors
+	bounds := b.Bounds()
+
+	sunken := b.click.Pressed() || (b.isToggle && b.accent)
+
+	switch {
+	case sunken:
+		drawSunken(r, bounds, c.ButtonFace, c)
+	case b.click.Hover():
+		drawRaised(r, bounds, c.ButtonLight, c)
+	default:
+		drawRaised(r, bounds, c.ButtonFace, c)
+	}
+
+	if b.accent && !b.isToggle {
+		drawOuterBorder(r, bounds.Inflate(1), c.ButtonDarkShadow)
+	}
+
+	nudge := float32(0)
+	if sunken {
+		nudge = 1
+	}
+	lr := b.labelRect
+	lr.X += nudge
+	lr.Y += nudge
+	core.ArrangeWidget(b.label, lr)
+
+	if b.enabled {
+		b.label.SetColor(c.WindowText)
+		return
+	}
+
+	b.label.SetColor(c.GrayText)
+	if s := b.label.Text(); s != "" && b.label.face != nil {
+		b.label.face.Draw(r, render.Point{X: lr.X + 1, Y: lr.Y + 1}, s, c.ButtonHighlight)
+	}
+}
+
+// RenderOverlay draws the classic focus rectangle while focused, inset a few
+// px from the button's bounds so it sits within the raised/sunken bevel
+// rather than overlapping it.
 func (b *Button) RenderOverlay(r render.Renderer) {
 	if !b.focused {
 		return
 	}
-	drawFocusRing(r, b.Bounds(), b.metrics.ControlCornerRadius, b.colors, b.metrics)
+	drawFocusRing(r, b.Bounds().Inset(render.Uniform(3)), b.colors)
 }
 
 // Children returns the label as the button's sole child.
@@ -365,6 +435,7 @@ type ToggleButton struct {
 func NewToggleButton(face *text.Face, label string) *ToggleButton {
 	t := &ToggleButton{}
 	initButton(&t.Button, face, label)
+	t.Button.isToggle = true
 
 	t.click.OnClick = func() {
 		t.checked = !t.checked

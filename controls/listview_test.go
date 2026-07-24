@@ -72,14 +72,14 @@ func layoutListView(l *ListView, x, y, w, h float32) {
 // --- RowHeight ---
 
 func TestListViewDefaultRowHeight(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 
 	face := testFace(t)
 	items := newFakeListItems("a", "b")
 	l := NewListView(face, items)
 
-	want := face.LineHeight() + 2*theme.FluentLight().Metric.PaddingS
+	want := face.LineHeight() + 2*theme.Light().Metric.PaddingS
 	if got := l.RowHeight(); got != want {
 		t.Fatalf("RowHeight() = %v, want %v", got, want)
 	}
@@ -101,12 +101,13 @@ func TestListViewVisibleRangeAtOffsetZero(t *testing.T) {
 	items := newFakeListItems("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
 	l := NewListView(nil, items).SetRowHeight(48)
 
-	// viewport H = 100 (no gutter contribution matters here beyond width);
-	// rows 0..2 fully fit (144 > 100), row 2 partially visible -> 3 rows.
+	// viewport H = 96 (100 - 2*BevelWidth: ArrangeContent insets bounds into
+	// the sunken well before computing the viewport — see contentBounds);
+	// rows 0,1 fully fit exactly (96/48 == 2), no partial row -> 2 rows.
 	layoutListView(l, 0, 0, 100, 100)
 
-	if got := len(l.pool); got != 3 {
-		t.Fatalf("pool size = %d, want 3 (rows 0,1,2 with row 2 partial)", got)
+	if got := len(l.pool); got != 2 {
+		t.Fatalf("pool size = %d, want 2 (rows 0,1; viewport 96 lands exactly on the rowH=48 boundary)", got)
 	}
 	for i, tb := range l.pool {
 		if got, want := tb.Text(), items.items[i]; got != want {
@@ -162,20 +163,22 @@ func TestListViewPartialRowAtTopEdgeIncluded(t *testing.T) {
 func TestListViewPoolReusesTextBlocksAcrossScroll(t *testing.T) {
 	items := newFakeListItems("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
 	l := NewListView(nil, items).SetRowHeight(48)
-	layoutListView(l, 0, 0, 100, 100) // 3 visible rows: 0,1,2
+	// 2 visible rows: 0,1 (viewport H = 96 = 100 - 2*BevelWidth, landing
+	// exactly on the rowH=48 boundary — see contentBounds).
+	layoutListView(l, 0, 0, 100, 100)
 
-	if len(l.pool) != 3 {
-		t.Fatalf("pool size = %d, want 3", len(l.pool))
+	if len(l.pool) != 2 {
+		t.Fatalf("pool size = %d, want 2", len(l.pool))
 	}
 	before := make([]*TextBlock, len(l.pool))
 	copy(before, l.pool)
 
-	// Scroll by exactly 2 rows: visible count stays 3 (rows 2,3,4).
+	// Scroll by exactly 2 rows: visible count stays 2 (rows 2,3).
 	l.rawOffset = 2 * 48
 	layoutListView(l, 0, 0, 100, 100)
 
-	if len(l.pool) != 3 {
-		t.Fatalf("pool size after scroll = %d, want 3 (unchanged visible count)", len(l.pool))
+	if len(l.pool) != 2 {
+		t.Fatalf("pool size after scroll = %d, want 2 (unchanged visible count)", len(l.pool))
 	}
 	for i := range before {
 		if l.pool[i] != before[i] {
@@ -185,8 +188,8 @@ func TestListViewPoolReusesTextBlocksAcrossScroll(t *testing.T) {
 	if got, want := l.pool[0].Text(), "2"; got != want {
 		t.Fatalf("pool[0].Text() after scroll = %q, want %q (re-texted in place)", got, want)
 	}
-	if got, want := l.pool[2].Text(), "4"; got != want {
-		t.Fatalf("pool[2].Text() after scroll = %q, want %q (re-texted in place)", got, want)
+	if got, want := l.pool[1].Text(), "3"; got != want {
+		t.Fatalf("pool[1].Text() after scroll = %q, want %q (re-texted in place)", got, want)
 	}
 }
 
@@ -217,10 +220,12 @@ func TestListViewThumbGeometryMatchesScrollViewerConventions(t *testing.T) {
 	if track.W != l.gutter {
 		t.Fatalf("track.W = %v, want gutter %v", track.W, l.gutter)
 	}
-	if track.H != 100 {
-		t.Fatalf("track.H = %v, want 100 (viewport height)", track.H)
+	// track.H is the viewport height: 96, not the raw arranged 100 — the 2px
+	// bevel inset (ArrangeContent, see contentBounds) shrinks it on top+bottom.
+	if track.H != 96 {
+		t.Fatalf("track.H = %v, want 96 (viewport height, 100 - 2*BevelWidth)", track.H)
 	}
-	// thumbH = track.H^2/total = 100*100/960 ~= 10.4, clamped up to the
+	// thumbH = track.H^2/total = 96*96/960 ~= 9.6, clamped up to the
 	// shared 24px minimum (scrollThumbMinH), matching ScrollViewer.
 	if thumbH != scrollThumbMinH {
 		t.Fatalf("thumbH = %v, want %v (scrollThumbMinH floor)", thumbH, scrollThumbMinH)
@@ -460,7 +465,8 @@ func TestListViewKeyboardUpDownHomeEndWhenFocused(t *testing.T) {
 func TestListViewSelectLastRowAutoScrollsIntoView(t *testing.T) {
 	items := newFakeListItems(make([]string, 20)...) // 20 rows: 20*48=960 content
 	l := NewListView(nil, items).SetRowHeight(48)
-	layoutListView(l, 0, 0, 100, 100) // viewport 100: rows 0..2 visible, offset 0
+	// viewport 96 (100 - 2*BevelWidth, see contentBounds): rows 0,1 visible, offset 0.
+	layoutListView(l, 0, 0, 100, 100)
 
 	if got := l.offset; got != 0 {
 		t.Fatalf("initial offset = %v, want 0", got)
@@ -475,7 +481,7 @@ func TestListViewSelectLastRowAutoScrollsIntoView(t *testing.T) {
 	if got := l.SelectedIndex(); got != 19 {
 		t.Fatalf("SelectedIndex() = %d, want 19", got)
 	}
-	wantOffset := float32(20)*48 - 100 // last row's bottom edge minus viewport H
+	wantOffset := float32(20)*48 - 96 // last row's bottom edge minus viewport H (96)
 	if got := l.offset; got != wantOffset {
 		t.Fatalf("offset after auto-scroll = %v, want %v (last row fully visible)", got, wantOffset)
 	}
@@ -484,7 +490,7 @@ func TestListViewSelectLastRowAutoScrollsIntoView(t *testing.T) {
 // --- Selection: pool re-color ---
 
 func TestListViewPoolRecolorsSelectedRow(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -511,7 +517,7 @@ func TestListViewPoolRecolorsAfterSelectionChangesWithoutRetext(t *testing.T) {
 	// Guards ArrangeContent's unconditional-recolor requirement: a selection
 	// change alone (no text change) must still repaint the right rows on the
 	// NEXT arrange pass, even though re-texting itself stays conditional.
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 

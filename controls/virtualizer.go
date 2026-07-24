@@ -45,11 +45,12 @@ type virtualizer struct {
 	// thumb's top edge at drag start, exactly like ScrollViewer.dragGrabY.
 	dragGrabY float32
 
-	// gutter, thumbColor, and thumbRadius are captured from theme.Active()
-	// at construction, matching ScrollViewer's own capture convention.
-	gutter      float32
-	thumbColor  render.Color
-	thumbRadius float32
+	// gutter is captured from theme.Active() at construction, matching
+	// ScrollViewer's own capture convention. Thumb/track colors are NOT
+	// captured here: the owning control (ListView, DataGrid) already holds
+	// its own `colors theme.ColorTokens` field and passes it directly to
+	// drawScrollThumb from its own RenderOverlay.
+	gutter float32
 }
 
 // totalHeight returns rowH * count(), the full (unvirtualized) content
@@ -202,15 +203,13 @@ func (v *virtualizer) dragTo(posY float32) {
 // initVirtualizer captures the theme-derived fields every virtualizer-owning
 // control sets identically at construction (ListView, DataGrid — both
 // embed a virtualizer by value and call this from their own New* func):
-// the thumb gutter/color/radius (ScrollViewer's own conventions, per the
-// type doc comment above) and the default row height
-// (defaultRowHeight(face, t), in listview.go). v.count is deliberately left
-// for the caller to set afterward — that closure differs per owner (it
-// reads items.Len() for ListView, g.rowCount for DataGrid) and has no
-// theme-derived default to share.
+// the thumb gutter (ScrollViewer's own convention, per the type doc comment
+// above) and the default row height (defaultRowHeight(face, t), in
+// listview.go). v.count is deliberately left for the caller to set
+// afterward — that closure differs per owner (it reads items.Len() for
+// ListView, g.rowCount for DataGrid) and has no theme-derived default to
+// share.
 func initVirtualizer(v *virtualizer, face *text.Face, t *theme.Theme) {
 	v.gutter = t.Metric.ScrollGutter
-	v.thumbColor = t.Color.ScrollThumb
-	v.thumbRadius = t.Metric.ControlCornerRadius
 	v.rowH = defaultRowHeight(face, t)
 }

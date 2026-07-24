@@ -29,6 +29,7 @@ func (m *mockRenderer) Begin(fbWidth, fbHeight int, scale float32) {
 func (m *mockRenderer) End()                                                                        { m.ends++ }
 func (m *mockRenderer) FillRect(r render.Rect, c render.Color)                                      { m.fillRects++ }
 func (m *mockRenderer) FillRoundedRect(r render.Rect, radius float32, c render.Color)               {}
+func (m *mockRenderer) DrawGradientRect(r render.Rect, from, to render.Color, horizontal bool)      {}
 func (m *mockRenderer) StrokeRoundedRect(r render.Rect, radius, width float32, c render.Color)      {}
 func (m *mockRenderer) DrawShadow(r render.Rect, radius, blur float32, c render.Color)              {}
 func (m *mockRenderer) DrawBackdropBlur(r render.Rect, radius float32, tint render.Color)           {}

@@ -180,18 +180,85 @@ func (ta *ToolTipArea) OnPointer(e *input.PointerEvent) {
 }
 
 // newTipPopup builds the tip's popup content: a small, non-interactive
-// CardBackground Border (radius CornerRadius, PaddingS padding) around a
-// plain TextBlock. Non-interactive means literally that — Border implements
-// no PointerHandler/KeyHandler, so a forwarded event inside it (per
+// classic raised ButtonFace box (via tipCard) around a plain TextBlock.
+// Non-interactive means literally that — tipCard implements no
+// PointerHandler/KeyHandler, so a forwarded event inside it (per
 // OverlayHost's capture-forwarding while open) simply finds no handler on
 // its hit path and goes nowhere.
 func newTipPopup(face *text.Face, tip string, colors theme.ColorTokens, metrics theme.MetricTokens) core.Widget {
 	label := NewTextBlock(face, tip)
-	label.SetColor(colors.TextPrimary)
+	label.SetColor(colors.WindowText)
 
-	return NewBorder().
-		SetBackground(colors.CardBackground).
-		SetRadius(metrics.CornerRadius).
-		SetPadding(render.Uniform(metrics.PaddingS)).
-		SetChild(label)
+	return newTipCard(label, colors, metrics)
+}
+
+// tipCard is ToolTipArea's popup chrome: a raised ButtonFace bevel (drawRaised)
+// framing a single child (the tip's TextBlock), inset by the bevel width plus
+// PaddingS breathing room on every side — square corners, replacing the
+// pre-restyle rounded CardBackground Border. Mirrors comboPopupCard/
+// menuPopupCard's "dedicated bevel-framed card" pattern.
+type tipCard struct {
+	core.Element
+
+	child core.Widget
+
+	colors  theme.ColorTokens
+	metrics theme.MetricTokens
+}
+
+// newTipCard returns a tipCard wrapping child (re-parented to it).
+func newTipCard(child core.Widget, colors theme.ColorTokens, metrics theme.MetricTokens) *tipCard {
+	card := &tipCard{child: child, colors: colors, metrics: metrics}
+	core.SetParent(child, card)
+	return card
+}
+
+// chrome returns the inset on every side: the bevel width (the 2px raised
+// frame drawRaised paints along the rect's own edges) plus PaddingS breathing
+// room around the child, so the label text never overlaps the bevel.
+func (card *tipCard) chrome() render.Thickness {
+	inset := card.metrics.BevelWidth + card.metrics.PaddingS
+	return render.Uniform(inset)
+}
+
+// MeasureContent measures child within the available space reduced by
+// chrome, then adds chrome back to its desired size.
+func (card *tipCard) MeasureContent(available render.Size) render.Size {
+	c := card.chrome()
+
+	availW := available.W - c.Left - c.Right
+	if availW < 0 {
+		availW = 0
+	}
+	availH := available.H - c.Top - c.Bottom
+	if availH < 0 {
+		availH = 0
+	}
+
+	core.MeasureWidget(card.child, render.Size{W: availW, H: availH})
+	d := core.DesiredSizeOf(card.child)
+	return render.Size{W: d.W + c.Left + c.Right, H: d.H + c.Top + c.Bottom}
+}
+
+// ArrangeContent arranges child within bounds inset by chrome.
+func (card *tipCard) ArrangeContent(bounds render.Rect) {
+	inner := bounds.Inset(card.chrome())
+	if inner.W < 0 {
+		inner.W = 0
+	}
+	if inner.H < 0 {
+		inner.H = 0
+	}
+	core.ArrangeWidget(card.child, inner)
+}
+
+// Children returns the single child.
+func (card *tipCard) Children() []core.Widget {
+	return []core.Widget{card.child}
+}
+
+// Render draws the classic raised ButtonFace bevel (drawRaised) framing the
+// tip, replacing the pre-restyle rounded CardBackground fill.
+func (card *tipCard) Render(r render.Renderer) {
+	drawRaised(r, card.Bounds(), card.colors.ButtonFace, card.colors)
 }

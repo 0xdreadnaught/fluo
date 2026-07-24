@@ -172,7 +172,7 @@ func findAncestors(roots []*TreeNode, target *TreeNode) []*TreeNode {
 // TreeView is a clickable, focusable, token-styled tree of TreeNodes: rows
 // are the depth-first flatten of every currently-expanded node (see
 // flattenTree), each drawn as an optional 'v'/'>' chevron (only when the
-// node has children — text glyphs, TextSecondary, never rotated: '>' means
+// node has children — text glyphs, WindowText, never rotated: '>' means
 // collapsed, 'v' means expanded) followed by its label, indented 16px per
 // depth level.
 //
@@ -385,11 +385,29 @@ func (t *TreeView) MeasureContent(available render.Size) render.Size {
 	return render.Size{W: maxW, H: t.rowH * float32(len(t.rows))}
 }
 
+// contentBounds returns t's own bounds inset by the 2px sunken bevel (see
+// theme.MetricTokens.BevelWidth) — the area rows render within so labels/
+// chevrons never sit over the well's frame. Both Render and rowAt/OnPointer
+// use this SAME rect, so the drawn chevron zones and their hit-test geometry
+// always agree.
+func (t *TreeView) contentBounds() render.Rect {
+	bw := t.metrics.BevelWidth
+	inner := t.Bounds().Inset(render.Thickness{Top: bw, Bottom: bw, Left: bw, Right: bw})
+	if inner.W < 0 {
+		inner.W = 0
+	}
+	if inner.H < 0 {
+		inner.H = 0
+	}
+	return inner
+}
+
 // rowAt maps an absolute pointer position to the row index it falls over,
-// using t.rows/t.rowH/t.Bounds() as of the last layout pass. ok is false for
-// a position outside t's own bounds, or (defensively) past the last row.
+// using t.rows/t.rowH/t.contentBounds() (the bevel-inset content area, not
+// t's raw outer bounds) as of the last layout pass. ok is false for a
+// position outside the content area, or (defensively) past the last row.
 func (t *TreeView) rowAt(pos render.Point) (idx int, ok bool) {
-	bounds := t.Bounds()
+	bounds := t.contentBounds()
 	if t.rowH <= 0 || !bounds.Contains(pos) {
 		return 0, false
 	}
@@ -400,18 +418,22 @@ func (t *TreeView) rowAt(pos render.Point) (idx int, ok bool) {
 	return idx, true
 }
 
-// Render draws every row: the selection band (SelectionBackground, full row
+// Render draws the sunken WindowWell frame across t's full bounds first
+// (the classic tree well), then every row inside the bevel-inset content
+// area (see contentBounds): the selection band (Highlight, full content
 // width) first if the row's node is selected, then the chevron glyph (only
 // for a row whose node has children — '>' collapsed, 'v' expanded,
-// TextSecondary) at [indent, indent+treeChevronW), then the label (
-// SelectionForeground when selected, else TextPrimary) starting at
-// indent+treeChevronW+PaddingS. Skipped entirely with a nil face, matching
-// TextBlock's own nil-face-renders-nothing convention.
+// WindowText) at [indent, indent+treeChevronW), then the label
+// (HighlightText when selected, else WindowText) starting at
+// indent+treeChevronW+PaddingS. Rows are skipped (well still drawn) with a
+// nil face, matching TextBlock's own nil-face-renders-nothing convention.
 func (t *TreeView) Render(r render.Renderer) {
+	drawSunken(r, t.Bounds(), t.colors.WindowWell, t.colors)
+
 	if t.face == nil {
 		return
 	}
-	bounds := t.Bounds()
+	bounds := t.contentBounds()
 	gap := t.metrics.PaddingS
 
 	for i, row := range t.rows {
@@ -419,7 +441,7 @@ func (t *TreeView) Render(r render.Renderer) {
 		indent := float32(row.depth) * treeIndentStep
 
 		if row.node == t.selected {
-			r.FillRect(render.Rect{X: bounds.X, Y: rowY, W: bounds.W, H: t.rowH}, t.colors.SelectionBackground)
+			r.FillRect(render.Rect{X: bounds.X, Y: rowY, W: bounds.W, H: t.rowH}, t.colors.Highlight)
 		}
 
 		if len(row.node.Children) > 0 {
@@ -429,12 +451,12 @@ func (t *TreeView) Render(r render.Renderer) {
 			}
 			gs := t.face.Measure(glyph)
 			gy := rowY + (t.rowH-gs.H)/2
-			t.face.Draw(r, render.Point{X: bounds.X + indent, Y: gy}, glyph, t.colors.TextSecondary)
+			t.face.Draw(r, render.Point{X: bounds.X + indent, Y: gy}, glyph, t.colors.WindowText)
 		}
 
-		labelColor := t.colors.TextPrimary
+		labelColor := t.colors.WindowText
 		if row.node == t.selected {
-			labelColor = t.colors.SelectionForeground
+			labelColor = t.colors.HighlightText
 		}
 		ls := t.face.Measure(row.node.Label)
 		ly := rowY + (t.rowH-ls.H)/2
@@ -449,7 +471,7 @@ func (t *TreeView) RenderOverlay(r render.Renderer) {
 	if !t.focused {
 		return
 	}
-	drawFocusRing(r, t.Bounds(), t.metrics.ControlCornerRadius, t.colors, t.metrics)
+	drawFocusRing(r, t.Bounds(), t.colors)
 }
 
 // AcceptsFocus implements input.Focusable: a TreeView always accepts focus
@@ -481,7 +503,7 @@ func (t *TreeView) OnPointer(e *input.PointerEvent) {
 		return
 	}
 	row := t.rows[idx]
-	bounds := t.Bounds()
+	bounds := t.contentBounds()
 	indent := float32(row.depth) * treeIndentStep
 	chevX0 := bounds.X + indent
 	chevX1 := chevX0 + treeChevronW

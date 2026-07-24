@@ -18,11 +18,6 @@ const glyphBoxSize float32 = 18
 // on the 18x18 box).
 const checkGlyphInset float32 = 5
 
-// checkGlyphFallbackRadius is the corner radius of the fallback inner
-// square, scaled down from the box's own ControlCornerRadius (4) to suit
-// the much smaller 8x8 square.
-const checkGlyphFallbackRadius float32 = 2
-
 // radioInnerSize and radioInnerRadius describe the checked radio button's
 // inner dot: a 9x9 filled rounded-rect of radius 4.5 (a circle, since
 // radius == half the side), centered within the 18x18 outer circle —
@@ -99,11 +94,11 @@ func hasCheckmarkGlyph(face *text.Face) bool {
 // programmatic setter, OnChanged fires only for user-driven changes (click
 // or Space/Enter while focused).
 //
-// Visuals (normative): unchecked = ControlFill fill + ControlStroke stroke,
-// radius 4; checked = Accent fill, no stroke, plus a checkmark drawn either
-// as the U+2713 glyph (if the face's font has it, per hasCheckmarkGlyph) or
-// a fallback AccentText-colored inner rounded square inset 5 from the box's
-// edges.
+// Visuals (normative): the 18x18 box is always drawn as a classic sunken
+// well (WindowWell fill, unaffected by checked/hover/pressed state — see
+// Render); checked additionally draws a WindowText checkmark, either the
+// U+2713 glyph (if the face's font has it, per hasCheckmarkGlyph) or a
+// fallback WindowText-colored inner square inset 5 from the box's edges.
 type CheckBox struct {
 	core.Element
 
@@ -242,29 +237,26 @@ func (c *CheckBox) stateColors() (fill, stroke render.Color) {
 	return fill, th.ControlStroke
 }
 
-// Render paints the 18x18 box (fill + optional stroke, radius 4) and, when
+// Render paints the 18x18 box as a classic sunken well (WindowWell fill —
+// unaffected by hover/pressed, per the classic-checkbox spec) and, when
 // checked, the checkmark (glyph or fallback square, per c.checkGlyph).
 func (c *CheckBox) Render(r render.Renderer) {
-	fill, stroke := c.stateColors()
-	radius := c.metrics.ControlCornerRadius
-
-	r.FillRoundedRect(c.box, radius, fill)
-	if stroke.A > 0 {
-		r.StrokeRoundedRect(c.box, radius, c.metrics.StrokeWidth, stroke)
-	}
+	drawSunken(r, c.box, c.colors.WindowWell, c.colors)
 	if c.checked {
 		c.drawCheckmark(r)
+	}
+
+	if c.enabled {
+		c.label.SetColor(c.colors.WindowText)
+	} else {
+		c.label.SetColor(c.colors.GrayText)
 	}
 }
 
 // drawCheckmark draws the U+2713 glyph centered in the box (if c.checkGlyph)
-// or the fallback inner rounded square otherwise. Both paths use AccentText
-// (white in both bundled Fluent themes) as the checkmark color.
+// or the fallback inner square otherwise, in WindowText (classic black).
 func (c *CheckBox) drawCheckmark(r render.Renderer) {
-	glyphColor := c.colors.AccentText
-	if !c.enabled {
-		glyphColor = c.colors.TextDisabled
-	}
+	glyphColor := c.colors.WindowText
 
 	if c.checkGlyph {
 		const mark = "✓"
@@ -278,17 +270,16 @@ func (c *CheckBox) drawCheckmark(r render.Renderer) {
 	}
 
 	inner := c.box.Inset(render.Uniform(checkGlyphInset))
-	r.FillRoundedRect(inner, checkGlyphFallbackRadius, glyphColor)
+	r.FillRect(inner, glyphColor)
 }
 
-// RenderOverlay draws the focus ring around the glyph box while focused,
-// per the global focus constraint: StrokeRoundedRect inflated by 2, radius
-// = box radius + 2, FocusStroke color and FocusStrokeWidth.
+// RenderOverlay draws the classic focus rectangle around the glyph box
+// while focused.
 func (c *CheckBox) RenderOverlay(r render.Renderer) {
 	if !c.focused {
 		return
 	}
-	drawFocusRing(r, c.box, c.metrics.ControlCornerRadius, c.colors, c.metrics)
+	drawFocusRing(r, c.box, c.colors)
 }
 
 // AcceptsFocus implements input.Focusable: a disabled checkbox never
@@ -335,10 +326,11 @@ func (c *CheckBox) OnKey(e *input.KeyEvent) {
 // sibling-deselection behavior; a RadioButton with no group behaves like a
 // one-way checkbox (click sets it checked, never unchecked, by itself).
 //
-// Visuals (normative): unchecked = ControlFill fill + ControlStroke stroke,
-// radius 9 (a full circle, since 9 == half of 18); checked = ControlFill
-// fill + an Accent ring (stroke width 2) + an inner Accent-filled circle
-// (9x9, radius 4.5) centered within the outer circle.
+// Visuals (normative): the 18x18 circle (radius 9, since 9 == half of 18) is
+// always drawn as a classic sunken-looking well — WindowWell fill plus a 1px
+// ButtonShadow ring, the one square-corner exception in this family (see
+// Render) — regardless of checked state; checked additionally draws an
+// inner WindowText dot (9x9, radius 4.5) centered within the outer circle.
 type RadioButton struct {
 	core.Element
 
@@ -506,30 +498,32 @@ func (rb *RadioButton) stateColors() (fill, ring render.Color, ringWidth float32
 	return fill, th.ControlStroke, rb.metrics.StrokeWidth, render.Color{}
 }
 
-// Render paints the 18x18 circle (fill + ring stroke) and, when checked,
-// the centered 9x9 inner dot.
+// Render paints the 18x18 circle as a classic sunken-looking well — fill
+// WindowWell, a 1px ButtonShadow ring — the spec's approved approximation of
+// a full bevel on a round glyph (RadioButton is the one exception to the
+// family's square corners). When checked, an inner WindowText dot (9x9,
+// centered) marks the selection.
 func (rb *RadioButton) Render(r render.Renderer) {
-	fill, ring, ringWidth, dot := rb.stateColors()
+	c := rb.colors
 	radius := rb.box.W / 2
 
-	r.FillRoundedRect(rb.box, radius, fill)
-	if ring.A > 0 {
-		r.StrokeRoundedRect(rb.box, radius, ringWidth, ring)
-	}
-	if dot.A > 0 {
+	r.FillRoundedRect(rb.box, radius, c.WindowWell)
+	r.StrokeRoundedRect(rb.box, radius, rb.metrics.StrokeWidth, c.ButtonShadow)
+
+	if rb.checked {
 		inset := (glyphBoxSize - radioInnerSize) / 2
 		inner := rb.box.Inset(render.Uniform(inset))
-		r.FillRoundedRect(inner, radioInnerRadius, dot)
+		r.FillRoundedRect(inner, radioInnerRadius, c.WindowText)
 	}
 }
 
-// RenderOverlay draws the focus ring around the glyph circle while
-// focused.
+// RenderOverlay draws the classic focus rectangle around the glyph circle
+// while focused.
 func (rb *RadioButton) RenderOverlay(r render.Renderer) {
 	if !rb.focused {
 		return
 	}
-	drawFocusRing(r, rb.box, rb.box.W/2, rb.colors, rb.metrics)
+	drawFocusRing(r, rb.box, rb.colors)
 }
 
 // AcceptsFocus implements input.Focusable: a disabled radio button never

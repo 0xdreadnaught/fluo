@@ -487,7 +487,10 @@ func TestBindListSelectedBothDirectionsAndModelPushAutoScrolls(t *testing.T) {
 	}
 
 	layout(lv, render.Rect{X: 0, Y: 0, W: 100, H: 100}) // apply the pending auto-scroll
-	wantOffset := float32(5)*48 - 100                   // row 4's bottom edge minus viewport H
+	// row 4's bottom edge minus viewport H (96 = 100 - 2*BevelWidth: ListView
+	// insets its content viewport into the sunken well — see
+	// controls.ListView.contentBounds).
+	wantOffset := float32(5)*48 - 96
 	if got := lv.OffsetY(); got != wantOffset {
 		t.Fatalf("ListView offset after model push = %v, want %v (auto-scrolled into view)", got, wantOffset)
 	}

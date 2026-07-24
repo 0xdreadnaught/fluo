@@ -7,23 +7,21 @@ import (
 	"github.com/0xdreadnaught/fluo/theme"
 )
 
-// Fixed pill/thumb metrics for ToggleSwitch, per the Phase 5 Task 4 visuals
-// spec: a 40x20 pill (radius 10, i.e. half the height — a stadium shape)
-// with a 12px-diameter thumb circle inset 4px from whichever side it sits
-// on.
+// Fixed track/knob metrics for ToggleSwitch, per the Phase 5 Task 4 visuals
+// spec, restyled square for v0.2 classic: a 40x20 track with a 12px square
+// knob inset 4px from whichever side it sits on.
 const (
 	switchWidth  float32 = 40
 	switchHeight float32 = 20
-	switchRadius float32 = switchHeight / 2
 
 	thumbSize  float32 = 12
 	thumbInset float32 = 4
 )
 
-// ToggleSwitch is a clickable, focusable, token-styled 40x20 pill toggle
-// (no label — unlike CheckBox/RadioButton, NewToggleSwitch takes no face or
-// label argument). Like CheckBox and ToggleButton, it is ClickBehavior-
-// driven and follows the Checked/SetChecked/OnChanged/SetEnabled
+// ToggleSwitch is a clickable, focusable, token-styled 40x20 track-and-knob
+// toggle (no label — unlike CheckBox/RadioButton, NewToggleSwitch takes no
+// face or label argument). Like CheckBox and ToggleButton, it is
+// ClickBehavior-driven and follows the Checked/SetChecked/OnChanged/SetEnabled
 // convention: SetChecked is a silent programmatic setter, OnChanged fires
 // only for user-driven changes (click or Space/Enter while focused).
 //
@@ -143,34 +141,35 @@ func (s *ToggleSwitch) stateColors() (fill, stroke, thumb render.Color) {
 	return fill, th.ControlStroke, th.TextSecondary
 }
 
-// Render paints the 40x20 pill (fill + optional stroke, radius 10) and the
-// thumb circle at the left (off) or right (on) inset position.
+// Render paints the 40x20 track as a classic sunken well (ButtonFace fill,
+// or Highlight when on) and the knob as a small raised square sliding to the
+// left (off) or right (on) inset position — reusing the existing knob-
+// position math, only the draw calls changed.
 func (s *ToggleSwitch) Render(r render.Renderer) {
 	bounds := s.Bounds()
-	fill, stroke, thumb := s.stateColors()
+	c := s.colors
 
-	r.FillRoundedRect(bounds, switchRadius, fill)
-	if stroke.A > 0 {
-		r.StrokeRoundedRect(bounds, switchRadius, s.metrics.StrokeWidth, stroke)
+	trackFill := c.ButtonFace
+	if s.checked {
+		trackFill = c.Highlight
 	}
+	drawSunken(r, bounds, trackFill, c)
 
 	thumbX := bounds.X + thumbInset
 	if s.checked {
 		thumbX = bounds.Right() - thumbInset - thumbSize
 	}
 	thumbY := bounds.Y + (bounds.H-thumbSize)/2
-	r.FillRoundedRect(
-		render.Rect{X: thumbX, Y: thumbY, W: thumbSize, H: thumbSize},
-		thumbSize/2, thumb,
-	)
+	drawRaised(r, render.Rect{X: thumbX, Y: thumbY, W: thumbSize, H: thumbSize}, c.ButtonFace, c)
 }
 
-// RenderOverlay draws the focus ring around the pill while focused.
+// RenderOverlay draws the classic focus rectangle around the track while
+// focused.
 func (s *ToggleSwitch) RenderOverlay(r render.Renderer) {
 	if !s.focused {
 		return
 	}
-	drawFocusRing(r, s.Bounds(), switchRadius, s.colors, s.metrics)
+	drawFocusRing(r, s.Bounds(), s.colors)
 }
 
 // AcceptsFocus implements input.Focusable: a disabled switch never accepts

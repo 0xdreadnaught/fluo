@@ -244,7 +244,7 @@ func TestExpanderHeaderStretchesToFullWidth(t *testing.T) {
 // --- Theming: real face, real theme sanity ---
 
 func TestExpanderWithRealFaceAndTheme(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 
 	face := testFace(t)

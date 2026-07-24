@@ -40,6 +40,13 @@ func TestFillRect(t *testing.T) {
 	})
 }
 
+func TestGradientRect(t *testing.T) {
+	testFrame(t, "gradient", 120, 80, func(r *glr.Renderer) {
+		r.DrawGradientRect(render.Rect{X: 8, Y: 8, W: 104, H: 28}, render.RGB(10, 36, 106), render.RGB(166, 202, 240), true) // horizontal
+		r.DrawGradientRect(render.Rect{X: 8, Y: 44, W: 104, H: 28}, render.RGB(0, 0, 0), render.RGB(255, 255, 255), false)   // vertical
+	})
+}
+
 func TestClip(t *testing.T) {
 	testFrame(t, "clip", 128, 96, func(r *glr.Renderer) {
 		r.PushClip(render.Rect{X: 20, Y: 20, W: 50, H: 30})
@@ -187,12 +194,12 @@ func TestScrollClipRender(t *testing.T) {
 	})
 }
 
-// TestFluentButton is the Phase 4 milestone golden: a themed, laid-out
-// Fluent button in a real GL context, composed ONLY from theme.FluentLight
-// tokens (no literal colors/metrics) — a card-colored Border filling the
-// frame (inset 8px) with an accent button composite centered inside it.
-func TestFluentButton(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+// TestClassicButton is the Phase 4 milestone golden: a themed, laid-out
+// button in a real GL context, composed ONLY from theme.Light tokens (no
+// literal colors/metrics) — a card-colored Border filling the frame (inset
+// 8px) with an accent button composite centered inside it.
+func TestClassicButton(t *testing.T) {
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -231,7 +238,7 @@ func TestFluentButton(t *testing.T) {
 // side by side in a StackPanel — default, accent, and disabled — proving
 // their token-driven fills/strokes/label colors render correctly together.
 func TestButtons(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -270,7 +277,7 @@ func TestButtons(t *testing.T) {
 // label gap never triggers, per glyphMeasure/glyphArrange's "no gap for an
 // empty label" rule.
 func TestToggles(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -312,7 +319,7 @@ func TestToggles(t *testing.T) {
 // no timers.Queue is wired, so the caret renders solid (never blinked off)
 // per TextBox.caretShown's documented behavior.
 func TestTextBox(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -341,7 +348,7 @@ func TestTextBox(t *testing.T) {
 // default [0,1] range) stacked above a ProgressBar at 0.3, in a vertical
 // StackPanel gapped by PaddingM, filling a 200x60 frame.
 func TestSliderProgress(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -374,7 +381,7 @@ func TestSliderProgress(t *testing.T) {
 // unexported openPopup directly, so the golden also exercises the whole
 // input-to-popup path end to end, not just the popup's own visuals.
 func TestComboOpen(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -430,7 +437,7 @@ func TestComboOpen(t *testing.T) {
 // golden: explicit SetWidth/SetHeight on the control, placed via Canvas at
 // a fixed (10,10) offset rather than measured-and-centered.
 func TestListView(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -471,7 +478,7 @@ func TestListView(t *testing.T) {
 // 'v' expanded one) — beside an expanded Expander (right) titled "Details"
 // containing a TextBlock reading "Hello", inside a 260x180 frame.
 func TestTreeExpander(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -516,7 +523,7 @@ func TestTreeExpander(t *testing.T) {
 // remain in the tree" rule) but is invisible, contributing nothing to this
 // frame.
 func TestTabs(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -567,7 +574,7 @@ func TestTabs(t *testing.T) {
 //     none of them do anything on hover beyond their own (invisible at this
 //     resolution) fill state.
 func TestMenuOpen(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -653,7 +660,7 @@ func TestMenuOpen(t *testing.T) {
 // TestListView's own ScrollTo(0)-pinned golden: explicit SetWidth/SetHeight,
 // placed via Canvas at a fixed (10,10) offset.
 func TestDataGrid(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -692,13 +699,16 @@ func TestDataGrid(t *testing.T) {
 	})
 }
 
-// TestTitleBar is the Phase 8 Task 4 golden: a TitleBar reading "fluo" with
-// its close caption button hovered — showing the distinct CloseButtonHover
-// red fill behind the white X glyph — inside a 300x40 frame. The bar itself
-// is exactly titleBarHeight (32) tall, vertically centered in the taller
-// frame (4px of WindowBackground showing above and below it).
+// TestTitleBar is the Phase 8 Task 4 golden (v0.2 classic restyle): a
+// TitleBar reading "fluo" with a horizontal gradient caption
+// (CaptionFrom->CaptionTo) and its close caption button hovered — in the
+// classic look this is a plain gray raised caption button (the old
+// CloseButtonHover red was dropped), with a WindowText X glyph. Inside a
+// 300x40 frame; the bar itself is exactly titleBarHeight (32) tall,
+// vertically centered in the taller frame (4px of window background showing
+// above and below it).
 func TestTitleBar(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
@@ -742,7 +752,7 @@ func TestTitleBar(t *testing.T) {
 // render/gl/blur.go for which path shipped (real snapshot+blur, not a tint
 // degrade).
 func TestAcrylic(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 
 	testFrame(t, "acrylic", 200, 120, func(r *glr.Renderer) {
@@ -773,7 +783,7 @@ func TestAcrylic(t *testing.T) {
 }
 
 func TestDialog(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	th := theme.Active()
 

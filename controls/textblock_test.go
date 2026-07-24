@@ -12,16 +12,16 @@ import (
 )
 
 func TestTextBlockThemeDefault(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 	light := NewTextBlock(nil, "x")
-	if got, want := light.Color(), theme.FluentLight().Color.TextPrimary; got != want {
+	if got, want := light.Color(), theme.Light().Color.TextPrimary; got != want {
 		t.Fatalf("light default color=%v, want %v", got, want)
 	}
 
-	theme.SetActive(theme.FluentDark())
+	theme.SetActive(theme.Dark())
 	dark := NewTextBlock(nil, "x")
-	if got, want := dark.Color(), theme.FluentDark().Color.TextPrimary; got != want {
+	if got, want := dark.Color(), theme.Dark().Color.TextPrimary; got != want {
 		t.Fatalf("dark default color=%v, want %v", got, want)
 	}
 }

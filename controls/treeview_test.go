@@ -216,15 +216,17 @@ func TestTreeViewChevronZoneExactBoundary(t *testing.T) {
 	layoutTreeView(tv, 0, 0, 200, 100)
 
 	r := input.NewRouter()
-	// x = 16 is the first pixel OUTSIDE the chevron zone [0,16) -> label.
-	e := &input.PointerEvent{Action: input.Press, Pos: render.Point{X: 16, Y: 5}, Router: r}
+	// The depth-0 chevron zone is [contentBounds().X, +16) — contentBounds
+	// insets t.Bounds() by BevelWidth (2px), so with bounds.X=0 the zone is
+	// [2,18), not [0,16). x=18 is the first pixel OUTSIDE it -> label.
+	e := &input.PointerEvent{Action: input.Press, Pos: render.Point{X: 18, Y: 5}, Router: r}
 	tv.OnPointer(e)
 
 	if root.Expanded() {
-		t.Fatal("x=16 (boundary, exclusive) toggled root, want a label-zone select instead")
+		t.Fatal("x=18 (boundary, exclusive) toggled root, want a label-zone select instead")
 	}
 	if tv.Selected() != root {
-		t.Fatalf("Selected() = %v at x=16, want root (label zone)", tv.Selected())
+		t.Fatalf("Selected() = %v at x=18, want root (label zone)", tv.Selected())
 	}
 }
 
@@ -605,7 +607,7 @@ func TestTreeViewMeasureContentReflectsCurrentExpandState(t *testing.T) {
 // --- Theming: real face, real colors (sanity that nothing panics) ---
 
 func TestTreeViewWithRealFaceAndTheme(t *testing.T) {
-	theme.SetActive(theme.FluentLight())
+	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
 
 	face := testFace(t)

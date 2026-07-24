@@ -153,6 +153,16 @@ tested, and live-verified (`fluo-gallery`); publish itself (create the GitHub
 repo, push, tag `v0.1.0`) is an operator action — see
 [`docs/superpowers/RELEASE-CHECKLIST.md`](docs/superpowers/RELEASE-CHECKLIST.md).
 
+## Phase 9 · v0.2 classic-depth restyle
+- [x] **v0.2 complete** — every control restyled from Fluent flat chrome to
+      the classic Windows-2000 four-tone bevel look (`theme.Light()`/
+      `theme.Dark()` replace `FluentLight`/`FluentDark`; `DrawGradientRect`
+      for the caption bar; zero literal colors in `controls`); `fluo-gallery`
+      updated to match (classic `ButtonFace` content pane in place of
+      `AcrylicSurface`, T-key toggle confirmed against the new theme names);
+      see [`docs/superpowers/specs/2026-07-23-v0.2-classic-depth-design.md`](docs/superpowers/specs/2026-07-23-v0.2-classic-depth-design.md)
+      and [CHANGELOG.md](CHANGELOG.md)'s `[0.2.0]` entry for the full list.
+
 ## Out of scope for this repo
 Adoption in any specific existing app (e.g. replacing cimgui elsewhere) is the
 consumer's project, not ours — the gallery + integration guide are our deliverables.
