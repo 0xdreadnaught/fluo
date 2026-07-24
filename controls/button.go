@@ -90,9 +90,11 @@ func (b *Button) OnClick(fn func()) *Button {
 	return b
 }
 
-// SetAccent switches between the default (ControlFill-family) chrome and the
-// accent (Accent-family, no stroke) chrome. Purely visual: no invalidation
-// needed since the host redraws every frame.
+// SetAccent marks (or unmarks) this button as the DEFAULT button: the same
+// raised/sunken ButtonFace bevel as any other button, plus an extra outer
+// 1px ButtonDarkShadow border drawn just outside the bevel (see Render/
+// drawOuterBorder). Purely visual: no invalidation needed since the host
+// redraws every frame.
 func (b *Button) SetAccent(a bool) *Button {
 	b.accent = a
 	return b

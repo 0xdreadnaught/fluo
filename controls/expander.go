@@ -9,16 +9,16 @@ import (
 )
 
 // expanderHeader is Expander's header row: a 'v'/'>' chevron plus a title,
-// filled with the standard ControlFill/Hover/Pressed chrome (via its own
-// embedded ClickBehavior) exactly like Button — but STRETCHED to whatever
-// width its parent (Expander) arranges it at, rather than sized to its own
-// content, since Element's zero-value alignment is already Stretch (see
-// core.Element's doc comment) and expanderHeader never overrides it: this is
-// what makes the header "full-width" per the brief, with no special-case
-// width logic of its own. Clicking anywhere on the header (not just the
-// chevron glyph or the title text — the WHOLE row, via its own Render
-// painting the fill across its full arranged bounds) toggles the owning
-// Expander, wired via click.OnClick in newExpanderHeader.
+// drawn with the classic raised/sunken ButtonFace bevel chrome (via its own
+// embedded ClickBehavior, mirroring Button's Render) exactly like Button —
+// but STRETCHED to whatever width its parent (Expander) arranges it at,
+// rather than sized to its own content, since Element's zero-value alignment
+// is already Stretch (see core.Element's doc comment) and expanderHeader
+// never overrides it: this is what makes the header "full-width" per the
+// brief, with no special-case width logic of its own. Clicking anywhere on
+// the header (not just the chevron glyph or the title text — the WHOLE row,
+// via its own Render painting the bevel across its full arranged bounds)
+// toggles the owning Expander, wired via click.OnClick in newExpanderHeader.
 type expanderHeader struct {
 	core.Element
 
@@ -40,9 +40,10 @@ type expanderHeader struct {
 func newExpanderHeader(face *text.Face, title string, colors theme.ColorTokens, metrics theme.MetricTokens) *expanderHeader {
 	h := &expanderHeader{colors: colors, metrics: metrics}
 	h.chevron = NewTextBlock(face, ">")
-	h.chevron.SetColor(colors.TextSecondary)
+	h.chevron.SetColor(colors.WindowText)
 	core.SetParent(h.chevron, h)
 	h.title = NewTextBlock(face, title)
+	h.title.SetColor(colors.WindowText)
 	core.SetParent(h.title, h)
 	return h
 }
@@ -138,26 +139,25 @@ func (h *expanderHeader) Children() []core.Widget {
 	return []core.Widget{h.chevron, h.title}
 }
 
-// stateColors resolves the header's fill for the current hover/pressed
-// state, mirroring Button.stateColors' default (non-accent) chrome walk —
-// but with no stroke: the brief's header chrome is "ControlFill fills",
-// fill only.
-func (h *expanderHeader) stateColors() render.Color {
-	fill := h.colors.ControlFill
+// Render paints the header's classic chiseled chrome across its full
+// arranged bounds (which, per the type doc comment, stretch to the
+// Expander's own width) via the shared bevel helpers, mirroring Button's own
+// Render: normal = drawRaised(ButtonFace); hover (not pressed) =
+// drawRaised(ButtonLight); pressed = drawSunken(ButtonFace). The header has
+// no disabled concept (see AcceptsFocus), so there is no engrave/GrayText
+// path to mirror.
+func (h *expanderHeader) Render(r render.Renderer) {
+	c := h.colors
+	bounds := h.Bounds()
+
 	switch {
 	case h.click.Pressed():
-		fill = h.colors.ControlFillPressed
+		drawSunken(r, bounds, c.ButtonFace, c)
 	case h.click.Hover():
-		fill = h.colors.ControlFillHover
+		drawRaised(r, bounds, c.ButtonLight, c)
+	default:
+		drawRaised(r, bounds, c.ButtonFace, c)
 	}
-	return fill
-}
-
-// Render paints the header's fill across its full arranged bounds (which,
-// per the type doc comment, stretch to the Expander's own width) — no
-// stroke.
-func (h *expanderHeader) Render(r render.Renderer) {
-	r.FillRoundedRect(h.Bounds(), h.metrics.ControlCornerRadius, h.stateColors())
 }
 
 // RenderOverlay draws the focus ring while focused, per the global focus

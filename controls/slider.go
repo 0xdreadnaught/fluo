@@ -7,11 +7,10 @@ import (
 	"github.com/0xdreadnaught/fluo/theme"
 )
 
-// Fixed geometry for Slider, per the Phase 5 Task 7 visuals spec: a 4px-tall
-// sunken groove track with a 16x16 circular thumb (radius 8, i.e. half its
-// own diameter — the same "square rect + radius == half side" trick
-// ToggleSwitch's thumb and RadioButton's outer circle use to draw a circle
-// via FillRoundedRect).
+// Fixed geometry for Slider, per the Phase 5 Task 7 visuals spec (superseded
+// by the v0.2 classic restyle's square-corner thumb): a 4px-tall sunken
+// groove track with a 16x16 raised RECTANGULAR thumb (drawRaised — see
+// Render), square corners like the rest of this family.
 // sliderDesiredWidth/Height are the fixed MeasureContent size {160, 24}: an
 // explicit SetWidth/SetHeight (inherited from core.Element) overrides this
 // through core.MeasureWidget's normal explicit-size precedence, exactly as

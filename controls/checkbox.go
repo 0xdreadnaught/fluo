@@ -94,11 +94,11 @@ func hasCheckmarkGlyph(face *text.Face) bool {
 // programmatic setter, OnChanged fires only for user-driven changes (click
 // or Space/Enter while focused).
 //
-// Visuals (normative): unchecked = ControlFill fill + ControlStroke stroke,
-// radius 4; checked = Accent fill, no stroke, plus a checkmark drawn either
-// as the U+2713 glyph (if the face's font has it, per hasCheckmarkGlyph) or
-// a fallback AccentText-colored inner rounded square inset 5 from the box's
-// edges.
+// Visuals (normative): the 18x18 box is always drawn as a classic sunken
+// well (WindowWell fill, unaffected by checked/hover/pressed state — see
+// Render); checked additionally draws a WindowText checkmark, either the
+// U+2713 glyph (if the face's font has it, per hasCheckmarkGlyph) or a
+// fallback WindowText-colored inner square inset 5 from the box's edges.
 type CheckBox struct {
 	core.Element
 
@@ -326,10 +326,11 @@ func (c *CheckBox) OnKey(e *input.KeyEvent) {
 // sibling-deselection behavior; a RadioButton with no group behaves like a
 // one-way checkbox (click sets it checked, never unchecked, by itself).
 //
-// Visuals (normative): unchecked = ControlFill fill + ControlStroke stroke,
-// radius 9 (a full circle, since 9 == half of 18); checked = ControlFill
-// fill + an Accent ring (stroke width 2) + an inner Accent-filled circle
-// (9x9, radius 4.5) centered within the outer circle.
+// Visuals (normative): the 18x18 circle (radius 9, since 9 == half of 18) is
+// always drawn as a classic sunken-looking well — WindowWell fill plus a 1px
+// ButtonShadow ring, the one square-corner exception in this family (see
+// Render) — regardless of checked state; checked additionally draws an
+// inner WindowText dot (9x9, radius 4.5) centered within the outer circle.
 type RadioButton struct {
 	core.Element
 
