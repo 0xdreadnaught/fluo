@@ -38,6 +38,8 @@ func (m *mockRenderer) UpdateTexture(id render.TextureID, x, y, w, h int, rgba [
 func (m *mockRenderer) DeleteTexture(id render.TextureID)                                           {}
 func (m *mockRenderer) DrawQuad(dst, src render.Rect, tex render.TextureID, tint render.Color)      {}
 func (m *mockRenderer) DrawSDFQuads(quads []render.GlyphQuad, tex render.TextureID, c render.Color) {}
+func (m *mockRenderer) DrawGlyphs(quads []render.GlyphQuad, tex render.TextureID, c render.Color)   {}
+func (m *mockRenderer) Scale() float32                                                              { return 1 }
 func (m *mockRenderer) PushClip(r render.Rect)                                                      {}
 func (m *mockRenderer) PopClip()                                                                    {}
 

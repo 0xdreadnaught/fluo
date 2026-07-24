@@ -70,6 +70,9 @@ func (r *recordRenderer) DrawQuad(dst, src render.Rect, tex render.TextureID, ti
 }
 func (r *recordRenderer) DrawSDFQuads(quads []render.GlyphQuad, tex render.TextureID, c render.Color) {
 }
+func (r *recordRenderer) DrawGlyphs(quads []render.GlyphQuad, tex render.TextureID, c render.Color) {
+}
+func (r *recordRenderer) Scale() float32            { return 1 }
 func (r *recordRenderer) PushClip(rect render.Rect) {}
 func (r *recordRenderer) PopClip()                  {}
 

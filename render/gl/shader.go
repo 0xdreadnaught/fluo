@@ -41,6 +41,10 @@ void main(){
         float s = texture(uTex, vUV).r;
         float w = fwidth(s);
         c.a *= smoothstep(0.5 - w, 0.5 + w, s);
+    } else if (vMode == 7) {
+        // Direct grayscale-AA text: the coverage mask already IS the
+        // antialiasing (no smoothstep/fwidth needed, unlike mode 2's SDF).
+        c.a *= texture(uTex, vUV).r;
     } else if (vMode >= 3) {
         float d = sdRoundBox(vPos - vRect.xy, vRect.zw, vExtra.x);
         // TODO(hidpi): AA transition band is a fixed logical-unit width

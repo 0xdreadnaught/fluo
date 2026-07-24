@@ -246,6 +246,21 @@ func (rd *Renderer) DrawSDFQuads(quads []render.GlyphQuad, tex render.TextureID,
 	}
 }
 
+// DrawGlyphs draws grayscale-coverage glyph quads (shader mode 7 — alpha
+// taken directly from the texture's red channel, no smoothstep) from a
+// coverage atlas with the given tint color.
+func (rd *Renderer) DrawGlyphs(quads []render.GlyphQuad, tex render.TextureID, c render.Color) {
+	for _, q := range quads {
+		rd.quad(7, q.Dst, q.Src, c, [4]float32{}, [2]float32{}, uint32(tex))
+	}
+}
+
+// Scale returns the current frame's device-pixels-per-logical-pixel
+// factor, as last passed to Begin.
+func (rd *Renderer) Scale() float32 {
+	return rd.scale
+}
+
 // PushClip pushes a new clip rectangle that intersects with the current clip.
 func (rd *Renderer) PushClip(r render.Rect) {
 	rd.flush()
