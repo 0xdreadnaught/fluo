@@ -167,6 +167,24 @@ func (g *DataGrid) RowCount() int {
 	return g.rowCount
 }
 
+// OffsetX returns the current horizontal scroll offset, clamped to
+// [0, max(0, contentWidth-viewport.W)] as of the last arrange pass —
+// mirroring ScrollViewer.OffsetX exactly (contentWidth is sum(colWidths),
+// see ArrangeContent's doc comment).
+func (g *DataGrid) OffsetX() float32 {
+	return g.offsetX
+}
+
+// ScrollToX requests a new horizontal offset, clamped on the next layout
+// pass like SetSelectedIndex's auto-scroll, mirroring ScrollViewer.ScrollToX
+// exactly. Both the header and body scroll in sync (see ArrangeContent's
+// doc comment), so this moves both together.
+func (g *DataGrid) ScrollToX(x float32) *DataGrid {
+	g.rawOffsetX = x
+	g.InvalidateArrange()
+	return g
+}
+
 // resolveColumnWidths resolves the current columns' Width tracks against
 // avail (the body viewport's width), reusing Grid's own resolveTracks
 // exactly like a Grid column axis. Since SetColumns already rejects
@@ -291,7 +309,7 @@ func (g *DataGrid) MeasureContent(available render.Size) render.Size {
 }
 
 // ArrangeContent is the single source of truth for the header's fixed rect,
-// column-width resolution, virtualizer offset clamping (via
+// column-width resolution, virtualizer offset clamping on BOTH axes (via
 // virtualizer.layout against the BODY viewport only — header space is
 // carved off bounds first), and body cell realization. bounds is first
 // inset by the 2px sunken bevel (see theme.MetricTokens.BevelWidth): the
@@ -301,9 +319,31 @@ func (g *DataGrid) MeasureContent(available render.Size) render.Size {
 // (see shrinkPool and the grow/reuse branches below, mirroring
 // ListView.ArrangeContent's own convention of re-texting existing entries in
 // place rather than reallocating), arranges each pool entry at its (row,col)
-// cell rect, and recolors it: HighlightText for the selected row's cells,
-// WindowText otherwise (set unconditionally on every pass, like ListView, so
-// a selection change alone still repaints the right cells next pass).
+// cell rect offset by the current scroll on both axes, and recolors it:
+// HighlightText for the selected row's cells, WindowText otherwise (set
+// unconditionally on every pass, like ListView, so a selection change alone
+// still repaints the right cells next pass).
+//
+// Horizontal scrolling (control-variants Task 4): contentWidth is
+// sum(colWidths) — resolved, as before, against viewport.W AFTER the
+// vertical thumb's gutter is subtracted (g.gutter is reserved
+// UNCONDITIONALLY here, exactly as before Task 4 — see the type doc
+// comment's own note on this being the pre-existing, unlike-ListView
+// convention this method must not disturb). The horizontal thumb's gutter
+// is then reserved on the BOTTOM only when contentWidth exceeds that same
+// viewport.W: with any Star column, sum(colWidths) resolves to exactly
+// viewport.W (Star fills the remainder), so contentWidth can only exceed it
+// when columns are Px-only and their total exceeds the available width —
+// the deliberate horizontal-overflow scenario this feature targets. Because
+// colWidths are resolved against, and contentWidth is compared against, the
+// SAME viewport.W value, this can never spuriously disagree with the
+// pre-existing column resolution (no golden regression risk: the existing
+// datagrid.png fixture's Star column makes contentWidth==viewport.W
+// exactly, never >). g.colOffsets are the LOGICAL (unscrolled) column
+// positions; Render and the cell rects below apply -g.offsetX to them at
+// paint/arrange time (mirroring ListView's row-rect treatment), so the
+// header (drawn separately in Render, see its own clip/offset doc comment)
+// and the body cells here always read the same g.offsetX and stay in sync.
 func (g *DataGrid) ArrangeContent(bounds render.Rect) {
 	bw := g.metrics.BevelWidth
 	inset := bounds.Inset(render.Thickness{Top: bw, Bottom: bw, Left: bw, Right: bw})
@@ -326,18 +366,29 @@ func (g *DataGrid) ArrangeContent(bounds render.Rect) {
 		viewport.H = 0
 	}
 
-	g.layout(viewport)
-
 	numCols := len(g.columns)
 	colWidths := g.resolveColumnWidths(viewport.W)
 	colOffsets := make([]float32, numCols)
 	x := viewport.X
+	var contentW float32
 	for i, w := range colWidths {
 		colOffsets[i] = x
 		x += w
+		contentW += w
 	}
 	g.colWidths = colWidths
 	g.colOffsets = colOffsets
+
+	hGutter := float32(0)
+	if contentW > viewport.W {
+		hGutter = g.gutter
+	}
+	viewport = viewport.Inset(render.Thickness{Bottom: hGutter})
+	if viewport.H < 0 {
+		viewport.H = 0
+	}
+
+	g.layout(viewport, contentW)
 
 	first, last := g.visibleRange()
 	n := last - first
@@ -398,7 +449,7 @@ func (g *DataGrid) ArrangeContent(bounds render.Rect) {
 			if cellW < 0 {
 				cellW = 0
 			}
-			cellRect := render.Rect{X: colOffsets[c] + pad, Y: rowY, W: cellW, H: g.rowH}
+			cellRect := render.Rect{X: colOffsets[c] + pad - g.offsetX, Y: rowY, W: cellW, H: g.rowH}
 			core.MeasureWidget(tb, render.Size{W: cellW, H: g.rowH})
 			core.ArrangeWidget(tb, cellRect)
 		}
@@ -430,14 +481,44 @@ func (g *DataGrid) shrinkPool(n int) {
 // comment). All of this runs before RenderWidget draws this DataGrid's
 // children (the cell TextBlock pool), so cell text always paints on top of
 // these bands/lines.
+//
+// Header cells/titles are painted at g.colOffsets[i]-g.offsetX — the SAME
+// g.offsetX the body cells were arranged with (see ArrangeContent) — so the
+// header scrolls horizontally in lockstep with the body while staying
+// vertically fixed (g.header.Y never depends on scroll). Unlike the body
+// cells (children, automatically cropped by ClipRect when scrolled), the
+// header is painted directly here, BEFORE RenderWidget ever pushes that
+// clip (see ClipRect's own doc comment: it excludes the header strip
+// precisely because the header paints outside its scope) — so once
+// contentWidth can exceed the viewport, scrolled header cells could bleed
+// past the grid's own left/right edges with no clip to crop them. A
+// dedicated PushClip/PopClip pair around the header loops crops that here;
+// for any DataGrid whose columns fit the viewport (every existing golden
+// and behavior test), the header never actually reaches this clip's edges,
+// so painted pixels are unchanged.
 func (g *DataGrid) Render(r render.Renderer) {
 	drawSunken(r, g.Bounds(), g.colors.WindowWell, g.colors)
+
+	// Clip horizontally only (X/W) — vertically spans the full outer bounds
+	// (Y/H) rather than the header's own, possibly sub-pixel, H: the header
+	// never draws outside its own row vertically regardless, so there is
+	// nothing to crop on that axis, and clipping tightly to a fractional H
+	// risks truncating a boundary row of the header's own bevel edges under
+	// GL scissor rounding (float->int32 truncation in applyClip). Only X
+	// needs a real crop, to keep scrolled header cells from bleeding past
+	// the grid's own left/right edges (see the doc comment above).
+	bw := g.metrics.BevelWidth
+	headerClip := render.Rect{X: g.Bounds().X + bw, Y: g.Bounds().Y, W: g.Bounds().W - 2*bw, H: g.Bounds().H}
+	if headerClip.W < 0 {
+		headerClip.W = 0
+	}
+	r.PushClip(headerClip)
 
 	for i := range g.columns {
 		if i >= len(g.colOffsets) {
 			break
 		}
-		cellRect := render.Rect{X: g.colOffsets[i], Y: g.header.Y, W: g.colWidths[i], H: g.header.H}
+		cellRect := render.Rect{X: g.colOffsets[i] - g.offsetX, Y: g.header.Y, W: g.colWidths[i], H: g.header.H}
 		drawRaised(r, cellRect, g.colors.ButtonFace, g.colors)
 	}
 
@@ -448,12 +529,14 @@ func (g *DataGrid) Render(r render.Renderer) {
 			}
 			ts := g.face.Measure(col.Title)
 			tp := render.Point{
-				X: g.colOffsets[i] + g.metrics.PaddingS,
+				X: g.colOffsets[i] - g.offsetX + g.metrics.PaddingS,
 				Y: g.header.Y + (g.header.H-ts.H)/2,
 			}
 			g.face.Draw(r, tp, col.Title, g.colors.WindowText)
 		}
 	}
+
+	r.PopClip()
 
 	sw := g.metrics.StrokeWidth
 	for row := 0; row < g.visibleCount; row++ {
@@ -491,12 +574,17 @@ func (g *DataGrid) ClipRect() (render.Rect, bool) {
 }
 
 // RenderOverlay implements core.OverlayRenderer, drawing the classic
-// track+thumb (drawScrollThumb) above the clipped body rows when there is
-// content to scroll to, then the focus ring while focused — matching
-// ListView.RenderOverlay exactly.
+// track+thumb (drawScrollThumb) for each axis that has content to scroll to
+// — vertical along the right edge, horizontal (control-variants Task 4)
+// along the bottom — above the clipped body rows, then the focus ring while
+// focused — matching ListView.RenderOverlay exactly.
 func (g *DataGrid) RenderOverlay(r render.Renderer) {
 	if track, _, ok := g.thumbGeometry(); ok {
 		thumb, _ := g.thumbRect()
+		drawScrollThumb(r, track, thumb, g.colors)
+	}
+	if track, _, ok := g.thumbGeometryX(); ok {
+		thumb, _ := g.thumbRectX()
 		drawScrollThumb(r, track, thumb, g.colors)
 	}
 	if g.focused {
@@ -517,19 +605,37 @@ func (g *DataGrid) OnFocusChanged(focused bool) {
 }
 
 // OnPointer implements input.PointerHandler, extending ListView's own
-// wheel/thumb-drag/row-click handling with row hover tracking: Wheel scrolls
-// by scrollWheelStep logical px per notch and is always handled; a Press
-// inside the current thumb rect starts a drag and is handled; otherwise a
+// wheel/thumb-drag/row-click handling with row hover tracking:
+//
+// Wheel scrolls vertically (row scroll) by scrollWheelStep logical px per
+// notch by default, and horizontally instead when Shift is held — mirroring
+// ListView.OnPointer's own Wheel handling exactly, including never falling
+// back to X on a plain wheel. Always handled.
+//
+// A Press inside the current vertical thumb rect starts a vertical drag
+// (checked first, matching the original priority); otherwise a Press inside
+// the current horizontal thumb rect starts a horizontal drag; otherwise a
 // Press landing on a real body row (rowAt) selects it as a user-driven
-// change (selectUser) and is handled, while a Press over the header, the
+// change (selectUser) and is handled, while a Press over the header, a
 // gutter, or empty space below a short grid (rowAt reports ok == false) is
-// left unhandled. Move updates hoverRow when not mid-drag; Leave clears it —
-// hoverRow is tracked purely for other consumers, since Render paints no
-// hover fill in the classic look.
+// left unhandled. Either drag records which axis it's tracking (g.drag), so
+// a subsequent Move/Release — only acted on while this DataGrid holds the
+// capture — knows which offset to update.
+//
+// Move updates hoverRow when not mid-drag; Leave clears it — hoverRow is
+// tracked purely for other consumers, since Render paints no hover fill in
+// the classic look. A horizontal drag clears hoverRow for the same reason a
+// vertical one already does (see the field doc comment): the offset moved
+// without a fresh Y hit-test to re-derive it from.
 func (g *DataGrid) OnPointer(e *input.PointerEvent) {
 	switch e.Action {
 	case input.Wheel:
-		g.scrollBy(-e.Delta.Y * scrollWheelStep)
+		delta := -e.Delta.Y * scrollWheelStep
+		if e.Mods&input.ModShift != 0 {
+			g.scrollByX(delta)
+		} else {
+			g.scrollBy(delta)
+		}
 		// The offset just moved but this isn't a Move (no fresh pointer
 		// position to re-hit-test against), so whatever row hoverRow named
 		// no longer necessarily sits under the pointer on screen — clear it
@@ -541,6 +647,12 @@ func (g *DataGrid) OnPointer(e *input.PointerEvent) {
 	case input.Press:
 		if rect, ok := g.thumbRect(); ok && rect.Contains(e.Pos) {
 			g.dragGrabY = e.Pos.Y - rect.Y
+			g.drag = scrollDragVertical
+			e.Router.Capture(g)
+			e.Handled = true
+		} else if rect, ok := g.thumbRectX(); ok && rect.Contains(e.Pos) {
+			g.dragGrabX = e.Pos.X - rect.X
+			g.drag = scrollDragHorizontal
 			e.Router.Capture(g)
 			e.Handled = true
 		} else if idx, ok := g.rowAt(e.Pos); ok {
@@ -549,7 +661,11 @@ func (g *DataGrid) OnPointer(e *input.PointerEvent) {
 		}
 	case input.Move:
 		if e.Router.Captured() == g {
-			g.dragTo(e.Pos.Y)
+			if g.drag == scrollDragHorizontal {
+				g.dragToX(e.Pos.X)
+			} else {
+				g.dragTo(e.Pos.Y)
+			}
 			// Same reasoning as Wheel above: a thumb drag also moves the
 			// offset independent of any row hit test, so any previously
 			// tracked hover row is now stale.
@@ -566,6 +682,7 @@ func (g *DataGrid) OnPointer(e *input.PointerEvent) {
 	case input.Release:
 		if e.Router.Captured() == g {
 			e.Router.Release()
+			g.drag = scrollDragNone
 			e.Handled = true
 		}
 	}

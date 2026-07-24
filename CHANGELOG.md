@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project intends to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches 1.0.
 
+## [Unreleased]
+
+### Added
+
+- **HD text rendering** — UI glyphs are now rasterized directly at the exact
+  device-pixel size with grayscale antialiasing and pixel-snapped baselines,
+  replacing the soft fixed-48px SDF-scaled path. `render.Renderer` gains
+  `Scale()` and `DrawGlyphs()`; the SDF path is retained for future
+  scaled/animated text.
+- **Horizontal scrolling** — `ScrollViewer` scrolls both axes (horizontal
+  thumb, Shift+wheel), and the shared row virtualizer brings the same to
+  `ListView` and `DataGrid` (the DataGrid header scrolls in sync with the
+  body so columns stay aligned).
+- **Pill and circular buttons** — `Button.SetShape` / `ToggleButton.SetShape`
+  with `ShapeRect` (default), `ShapePill` (stadium) and `ShapeCircle`
+  (square-aspect), drawn with a raised-rounded bevel that keeps the classic
+  3D depth on curved shapes.
+- **Vertical sliders and progress bars** — `Slider.SetOrientation` and
+  `ProgressBar.SetOrientation` accept `controls.Vertical`; vertical sliders
+  put Max at the top, vertical progress fills bottom-to-top.
+- **Solid progress bars** — `ProgressBar.SetSolid(true)` renders a single
+  continuous fill instead of the classic chunked blocks (still the default).
+
+### Fixed
+
+- Glyph baselines no longer jitter by a pixel between different letters —
+  glyph rasterization is baseline-integer-aligned so every glyph shares the
+  same snapped baseline.
+
 ## [0.2.0] - 2026-07-23
 
 The classic-depth restyle: fluo drops its Fluent/WinUI look for an authentic

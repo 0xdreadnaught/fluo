@@ -9,46 +9,86 @@ import (
 	"github.com/0xdreadnaught/fluo/theme"
 )
 
-// scrollThumbMinH is the minimum height a drawn thumb is ever shrunk to,
-// regardless of how large the content-to-viewport ratio is. Structural, not
-// themed.
+// scrollThumbMinH is the minimum height/width a drawn thumb is ever shrunk
+// to, regardless of how large the content-to-viewport ratio is on either
+// axis. Structural, not themed.
 const scrollThumbMinH float32 = 24
 
 // scrollWheelStep is the number of logical px scrolled per wheel notch.
 const scrollWheelStep float32 = 48
 
-// ScrollViewer scrolls a single child vertically (v0: no horizontal bar; a
-// horizontal scrollbar/axis is a later phase). It clips its child to its own
-// bounds, draws an overlay thumb on the right when the child is taller than
-// the viewport, and responds to mouse wheel and thumb-drag input.
+// scrollDragAxis records which axis a thumb-drag capture is currently
+// tracking, so a captured Move/Release (which carries no information about
+// which thumb was originally pressed) knows whether to update the
+// vertical or horizontal offset. Set on Press when a drag begins, reset to
+// scrollDragNone on Release.
+type scrollDragAxis uint8
+
+const (
+	scrollDragNone scrollDragAxis = iota
+	scrollDragVertical
+	scrollDragHorizontal
+)
+
+// ScrollViewer scrolls a single child on both axes: vertically (the
+// original v0 behavior) and horizontally (added alongside it — see the
+// field/method doc comments below for the X-axis counterparts of every
+// Y-axis member). It clips its child to its own bounds, draws overlay
+// thumbs — vertical on the right, horizontal along the bottom — when the
+// child overflows the corresponding axis, and responds to mouse wheel and
+// thumb-drag input on either axis.
+//
+// The two axes are NOT symmetric, by design, to keep a ScrollViewer whose
+// content only overflows vertically byte-identical to the original
+// single-axis implementation:
+//   - The vertical thumb's gutter (on the right) is reserved
+//     UNCONDITIONALLY — regardless of whether the content is actually
+//     taller than the viewport — exactly as before horizontal scrolling
+//     existed (see MeasureContent/ArrangeContent). This is existing,
+//     load-bearing behavior: TestScrollViewerThemeMetrics asserts the
+//     child is always measured with width reduced by the gutter, even for
+//     non-overflowing content.
+//   - The horizontal thumb's gutter (on the bottom) is reserved only when
+//     the content's natural width actually exceeds the ScrollViewer's own
+//     OUTER bounds width (not the vertical-gutter-reduced inner viewport
+//     width) — see ArrangeContent's doc comment for why the comparison
+//     deliberately uses the unreduced bounds width.
 type ScrollViewer struct {
 	core.Element
 
 	child core.Widget
 
-	// rawOffset is the last value requested via ScrollTo/ScrollBy, before
-	// clamping. offset is the clamped value as of the last ArrangeContent
-	// call — ArrangeContent is the single source of truth for clamping (see
-	// its doc comment).
-	rawOffset float32
-	offset    float32
+	// rawOffset/rawOffsetX are the last values requested via
+	// ScrollTo/ScrollBy (vertical) and ScrollToX/ScrollByX (horizontal),
+	// before clamping. offset/offsetX are the clamped values as of the
+	// last ArrangeContent call — ArrangeContent is the single source of
+	// truth for clamping on both axes (see its doc comment).
+	rawOffset, offset   float32
+	rawOffsetX, offsetX float32
 
-	// viewport and childH are the viewport rect and the child's desired
-	// content height as of the last ArrangeContent call. Both are needed to
-	// compute the thumb geometry and to drive drag math from OnPointer.
+	// viewport is the viewport rect as of the last ArrangeContent call —
+	// bounds inset by the always-on vertical gutter (right) and the
+	// conditional horizontal gutter (bottom), covering both axes' thumb
+	// geometry and drag math. childW/childH are the child's desired
+	// content size as of that same call.
 	viewport render.Rect
+	childW   float32
 	childH   float32
 
-	// dragGrabY is the y-offset (in logical px) between the pointer position
-	// and the thumb's top edge at the moment a thumb drag began, so the thumb
-	// tracks the pointer at a fixed grab point rather than snapping its top
-	// edge to the cursor.
+	// dragGrabY/dragGrabX are the offset (in logical px) between the
+	// pointer position and the relevant thumb's near edge at the moment a
+	// drag began, so the thumb tracks the pointer at a fixed grab point
+	// rather than snapping its edge to the cursor. drag records which
+	// axis dragGrabY/dragGrabX applies to for the duration of a capture.
 	dragGrabY float32
+	dragGrabX float32
+	drag      scrollDragAxis
 
 	// gutter is captured from theme.Active() at construction (see
-	// NewScrollViewer); structural constants (thumb min height, wheel step)
-	// are not themed. colors is the full classic token set, needed by
-	// RenderOverlay's drawScrollThumb call (raised thumb bevel + track).
+	// NewScrollViewer); structural constants (thumb min height, wheel
+	// step) are not themed. colors is the full classic token set, needed
+	// by RenderOverlay's drawScrollThumb calls (raised thumb bevel +
+	// track) on both axes.
 	gutter float32
 	colors theme.ColorTokens
 }
@@ -84,6 +124,12 @@ func (s *ScrollViewer) OffsetY() float32 {
 	return s.offset
 }
 
+// OffsetX returns the current horizontal scroll offset, clamped to
+// [0, max(0, childW-viewportW)] as of the last arrange pass.
+func (s *ScrollViewer) OffsetX() float32 {
+	return s.offsetX
+}
+
 // ScrollTo requests a new vertical offset. The value is stored raw and
 // clamped on the next arrange pass (ArrangeContent is the single source of
 // truth for clamping), so OffsetY may not reflect y until layout runs again.
@@ -100,6 +146,21 @@ func (s *ScrollViewer) ScrollBy(dy float32) {
 	s.InvalidateArrange()
 }
 
+// ScrollToX requests a new horizontal offset, clamped on the next arrange
+// pass like ScrollTo.
+func (s *ScrollViewer) ScrollToX(x float32) *ScrollViewer {
+	s.rawOffsetX = x
+	s.InvalidateArrange()
+	return s
+}
+
+// ScrollByX requests a relative change to the horizontal offset, clamped on
+// the next arrange pass like ScrollBy.
+func (s *ScrollViewer) ScrollByX(dx float32) {
+	s.rawOffsetX += dx
+	s.InvalidateArrange()
+}
+
 // Children returns the single scrolled child in a slice, or nil if there is
 // none. Returns a copy; mutating it does not affect the viewer.
 func (s *ScrollViewer) Children() []core.Widget {
@@ -110,11 +171,24 @@ func (s *ScrollViewer) Children() []core.Widget {
 }
 
 // MeasureContent measures the child (if any) with the available width
-// reduced by the thumb gutter and unbounded height (so the child reports its
-// full natural content height), then reports the min of (child size + gutter
-// on the width axis) and the available size per axis — a ScrollViewer never
-// asks its parent for more room than it was offered, even if its content is
-// taller/wider.
+// reduced by the (always-on) vertical thumb gutter and unbounded height (so
+// the child reports its full natural content height), then reports the min
+// of (child size + gutter on the width axis) and the available size per
+// axis — a ScrollViewer never asks its parent for more room than it was
+// offered, even if its content is taller/wider.
+//
+// Unchanged from the pre-horizontal-scroll implementation: the width
+// offered to the child stays bounded (not unbounded like height), so
+// content that adapts its own reported size to the available budget (e.g.
+// wrapping text) still wraps to that budget rather than reporting some
+// larger "natural" width. Only content whose own MeasureContent ignores
+// available width (Fixed, or a StackPanel whose children do) can report a
+// desired width exceeding the viewport — enabling horizontal scroll for it
+// via ArrangeContent's full-width arrange (see its doc comment). This
+// mirrors height's own pre-existing asymmetry (childAvailH was already
+// unconditionally infinite) and keeps TestScrollViewerThemeMetrics — which
+// asserts this exact bounded width is what the child is measured with — and
+// every other consumer of the existing measure contract byte-identical.
 func (s *ScrollViewer) MeasureContent(available render.Size) render.Size {
 	childAvailW := available.W - s.gutter
 	if childAvailW < 0 {
@@ -140,61 +214,166 @@ func (s *ScrollViewer) MeasureContent(available render.Size) render.Size {
 	return render.Size{W: desiredW, H: desiredH}
 }
 
-// ArrangeContent is the single source of truth for offset clamping: it
-// computes the viewport (bounds minus the thumb gutter on the right),
-// clamps rawOffset into [0, max(0, childH-viewportH)], stores the clamped
-// result (read back via OffsetY), and arranges the child at
-// {viewport.X, viewport.Y-offset, viewport.W, childDesiredH} so the clip
-// (see ClipRect) crops whatever scrolls above/below the viewport.
+// ArrangeContent is the single source of truth for offset clamping on both
+// axes. It:
+//  1. Reserves the vertical thumb's gutter on the right, UNCONDITIONALLY —
+//     exactly as before horizontal scrolling existed (see the type doc
+//     comment's asymmetry note).
+//  2. Decides whether to reserve the horizontal thumb's gutter on the
+//     bottom by comparing the child's natural width against bounds.W — the
+//     ScrollViewer's own OUTER width, NOT the vertical-gutter-reduced inner
+//     viewport width computed in step 1. This mirrors how the vertical
+//     overflow decision has always effectively compared against bounds.H
+//     (which nothing else ever reduces). Comparing against the reduced
+//     inner viewport instead would make ANY existing vertical-only
+//     ScrollViewer whose content's natural width happens to equal
+//     bounds.W — as the pre-existing scroll.png golden's fixture does,
+//     Fixed(120,...) children inside a 120-wide viewer — newly grow a
+//     horizontal thumb, breaking a golden that predates this feature and
+//     was never meant to scroll horizontally. The tradeoff: content whose
+//     natural width sits strictly between (bounds.W - vgutter) and
+//     bounds.W is arranged slightly wider than the inner viewport with no
+//     thumb ever shown for that sliver — a narrow, harmless edge case (see
+//     ArrangeWidget below).
+//  3. Clamps rawOffset/rawOffsetX into [0, max(0, childH/W-viewportH/W)],
+//     stores the clamped results (read back via OffsetY/OffsetX).
+//  4. Arranges the child at {viewport.X-offsetX, viewport.Y-offset,
+//     arrangeW, childH} — arrangeW is at least viewport.W (preserving the
+//     original Stretch-to-fill behavior for non-overflowing content) but
+//     extends to the child's full desired width when that exceeds
+//     viewport.W, letting it overflow horizontally exactly as childH
+//     already lets it overflow vertically. The clip (see ClipRect) crops
+//     whatever scrolls past the viewport on either axis.
 func (s *ScrollViewer) ArrangeContent(bounds render.Rect) {
+	var childW, childH float32
+	if s.child != nil {
+		d := core.DesiredSizeOf(s.child)
+		childW, childH = d.W, d.H
+	}
+
 	viewport := bounds.Inset(render.Thickness{Right: s.gutter})
 	if viewport.W < 0 {
 		viewport.W = 0
 	}
 
-	var childH float32
-	if s.child != nil {
-		childH = core.DesiredSizeOf(s.child).H
+	hGutter := float32(0)
+	if childW > bounds.W {
+		hGutter = s.gutter
+	}
+	viewport = viewport.Inset(render.Thickness{Bottom: hGutter})
+	if viewport.H < 0 {
+		viewport.H = 0
 	}
 
-	maxOffset := childH - viewport.H
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	offset := s.rawOffset
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > maxOffset {
-		offset = maxOffset
-	}
+	offset := clampScrollOffset(s.rawOffset, childH, viewport.H)
+	offsetX := clampScrollOffset(s.rawOffsetX, childW, viewport.W)
 
 	s.viewport = viewport
+	s.childW = childW
 	s.childH = childH
 	s.offset = offset
+	s.offsetX = offsetX
 
 	if s.child != nil {
+		arrangeW := viewport.W
+		if childW > arrangeW {
+			arrangeW = childW
+		}
 		core.ArrangeWidget(s.child, render.Rect{
-			X: viewport.X,
+			X: viewport.X - offsetX,
 			Y: viewport.Y - offset,
-			W: viewport.W,
+			W: arrangeW,
 			H: childH,
 		})
 	}
 }
 
+// clampScrollOffset clamps a raw (pre-clamp) scroll offset into
+// [0, max(0, contentLen-viewportLen)] — the single clamping rule both axes'
+// offset/offsetX share (see ArrangeContent).
+func clampScrollOffset(raw, contentLen, viewportLen float32) float32 {
+	maxOffset := contentLen - viewportLen
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if raw < 0 {
+		return 0
+	}
+	if raw > maxOffset {
+		return maxOffset
+	}
+	return raw
+}
+
+// scrollThumbLength returns the drawn thumb's length along the scroll axis
+// — trackLen*trackLen/contentLen, the standard track-proportional thumb
+// sizing — clamped to [scrollThumbMinH, trackLen]. Shared by the vertical
+// and horizontal thumb geometry (thumbGeometry/thumbGeometryX).
+func scrollThumbLength(trackLen, contentLen float32) float32 {
+	length := trackLen * trackLen / contentLen
+	if length < scrollThumbMinH {
+		length = scrollThumbMinH
+	}
+	if length > trackLen {
+		length = trackLen
+	}
+	return length
+}
+
+// scrollThumbPos returns the thumb's current on-track position (the
+// coordinate of its near edge, in the same space as trackStart) given the
+// current offset proportional to maxOffset, or trackStart unchanged when
+// there is no room to scroll (maxOffset <= 0). Shared by
+// thumbRect/thumbRectX.
+func scrollThumbPos(trackStart, trackLen, thumbLen, offset, maxOffset float32) float32 {
+	if maxOffset <= 0 {
+		return trackStart
+	}
+	return trackStart + (offset/maxOffset)*(trackLen-thumbLen)
+}
+
+// scrollDragOffset converts a drag's current pointer position
+// (posAlongAxis) into a new raw offset, keeping the pointer at the same
+// relative grab point within the thumb (posAlongAxis-grabOffset) that it
+// was at when the drag began, clamped so the thumb's near edge stays within
+// [trackStart, trackStart+trackLen-thumbLen]. Shared by dragTo/dragToX.
+// Returns 0 when there is no room to scroll (maxOffset <= 0); callers must
+// guard that case themselves if they want to skip the call entirely (both
+// dragTo and dragToX do, matching the pre-existing dragTo behavior of
+// leaving rawOffset untouched rather than resetting it to 0).
+func scrollDragOffset(trackStart, trackLen, thumbLen, posAlongAxis, grabOffset, maxOffset float32) float32 {
+	if maxOffset <= 0 {
+		return 0
+	}
+	span := trackLen - thumbLen
+	thumbPos := posAlongAxis - grabOffset
+	if thumbPos < trackStart {
+		thumbPos = trackStart
+	}
+	if thumbPos > trackStart+span {
+		thumbPos = trackStart + span
+	}
+	var frac float32
+	if span > 0 {
+		frac = (thumbPos - trackStart) / span
+	}
+	return frac * maxOffset
+}
+
 // ClipRect implements core.ClipProvider, clipping the child to the
-// ScrollViewer's own full bounds (thumb gutter included, so the thumb itself
-// — drawn in RenderOverlay, which runs after the clip is popped — is never
-// cropped).
+// ScrollViewer's own full bounds (both thumb gutters included, so the
+// thumbs themselves — drawn in RenderOverlay, which runs after the clip is
+// popped — are never cropped). Covers both axes unchanged: the full bounds
+// were always the clip rect, on both X and Y, even before horizontal
+// scrolling existed.
 func (s *ScrollViewer) ClipRect() (render.Rect, bool) {
 	return s.Bounds(), true
 }
 
-// thumbGeometry returns the thumb's track (the right gutter strip) and its
-// height, independent of the current scroll offset, or ok==false when there
-// is no child or the child fits entirely within the viewport (nothing to
-// scroll, so no thumb is drawn/hit-testable).
+// thumbGeometry returns the vertical thumb's track (the right gutter
+// strip) and its height, independent of the current scroll offset, or
+// ok==false when there is no child or the child fits entirely within the
+// viewport (nothing to scroll, so no thumb is drawn/hit-testable).
 func (s *ScrollViewer) thumbGeometry() (track render.Rect, thumbH float32, ok bool) {
 	if s.viewport.H <= 0 || s.childH <= s.viewport.H {
 		return render.Rect{}, 0, false
@@ -205,18 +384,33 @@ func (s *ScrollViewer) thumbGeometry() (track render.Rect, thumbH float32, ok bo
 		W: s.gutter,
 		H: s.viewport.H,
 	}
-	thumbH = track.H * track.H / s.childH
-	if thumbH < scrollThumbMinH {
-		thumbH = scrollThumbMinH
-	}
-	if thumbH > track.H {
-		thumbH = track.H
-	}
-	return track, thumbH, true
+	return track, scrollThumbLength(track.H, s.childH), true
 }
 
-// thumbRect returns the thumb's current on-screen rect (track position plus
-// the vertical offset proportional to the current scroll offset), or
+// thumbGeometryX returns the horizontal thumb's track (the bottom gutter
+// strip) and its width, independent of the current scroll offset, or
+// ok==false when there is no child or the child's natural width doesn't
+// exceed the ScrollViewer's own bounds width (see ArrangeContent's doc
+// comment for why this compares against bounds.W rather than the reduced
+// viewport.W — the same comparison ArrangeContent uses to decide whether to
+// reserve the bottom gutter at all, so the thumb only ever appears exactly
+// when that gutter exists to draw it in).
+func (s *ScrollViewer) thumbGeometryX() (track render.Rect, thumbW float32, ok bool) {
+	bounds := s.Bounds()
+	if s.viewport.W <= 0 || s.childW <= bounds.W {
+		return render.Rect{}, 0, false
+	}
+	track = render.Rect{
+		X: s.viewport.X,
+		Y: s.viewport.Bottom(),
+		W: s.viewport.W,
+		H: s.gutter,
+	}
+	return track, scrollThumbLength(track.W, s.childW), true
+}
+
+// thumbRect returns the vertical thumb's current on-screen rect (track
+// position plus the offset proportional to the current scroll offset), or
 // ok==false when there is nothing to scroll (see thumbGeometry).
 func (s *ScrollViewer) thumbRect() (render.Rect, bool) {
 	track, thumbH, ok := s.thumbGeometry()
@@ -224,30 +418,47 @@ func (s *ScrollViewer) thumbRect() (render.Rect, bool) {
 		return render.Rect{}, false
 	}
 	maxOffset := s.childH - s.viewport.H
-	thumbY := track.Y
-	if maxOffset > 0 {
-		thumbY = track.Y + (s.offset/maxOffset)*(track.H-thumbH)
-	}
+	thumbY := scrollThumbPos(track.Y, track.H, thumbH, s.offset, maxOffset)
 	return render.Rect{X: track.X, Y: thumbY, W: track.W, H: thumbH}, true
+}
+
+// thumbRectX returns the horizontal thumb's current on-screen rect (track
+// position plus the offset proportional to the current scroll offset), or
+// ok==false when there is nothing to scroll (see thumbGeometryX).
+func (s *ScrollViewer) thumbRectX() (render.Rect, bool) {
+	track, thumbW, ok := s.thumbGeometryX()
+	if !ok {
+		return render.Rect{}, false
+	}
+	maxOffset := s.childW - s.viewport.W
+	thumbX := scrollThumbPos(track.X, track.W, thumbW, s.offsetX, maxOffset)
+	return render.Rect{X: thumbX, Y: track.Y, W: thumbW, H: track.H}, true
 }
 
 // RenderOverlay implements core.OverlayRenderer, drawing the classic
 // scrollbar track+thumb (drawScrollThumb — a flat ButtonFace track with a
-// raised ButtonFace thumb) above the clipped child when there is content to
-// scroll to.
+// raised ButtonFace thumb) above the clipped child for each axis that has
+// content to scroll to: vertical along the right edge, horizontal along the
+// bottom edge. When both are shown, thumbGeometry/thumbGeometryX's tracks
+// (sized from s.viewport, which is inset on both the reserved right and
+// bottom gutters) naturally stop short of each other, leaving the
+// bottom-right corner square and undrawn by either track.
 func (s *ScrollViewer) RenderOverlay(r render.Renderer) {
-	track, _, ok := s.thumbGeometry()
-	if !ok {
-		return
+	if track, _, ok := s.thumbGeometry(); ok {
+		thumb, _ := s.thumbRect()
+		drawScrollThumb(r, track, thumb, s.colors)
 	}
-	thumb, _ := s.thumbRect()
-	drawScrollThumb(r, track, thumb, s.colors)
+	if track, _, ok := s.thumbGeometryX(); ok {
+		thumb, _ := s.thumbRectX()
+		drawScrollThumb(r, track, thumb, s.colors)
+	}
 }
 
-// dragTo recomputes rawOffset from a drag's current pointer y-position,
-// keeping the pointer at the same relative grab point within the thumb
-// (dragGrabY) that it was at when the drag began, and invalidates arrange so
-// the next layout pass clamps and applies it.
+// dragTo recomputes rawOffset from a vertical drag's current pointer
+// y-position, keeping the pointer at the same relative grab point within
+// the thumb (dragGrabY) that it was at when the drag began, and invalidates
+// arrange so the next layout pass clamps and applies it. A no-op when there
+// is no room to scroll vertically.
 func (s *ScrollViewer) dragTo(posY float32) {
 	track, thumbH, ok := s.thumbGeometry()
 	if !ok {
@@ -257,48 +468,89 @@ func (s *ScrollViewer) dragTo(posY float32) {
 	if maxOffset <= 0 {
 		return
 	}
-	span := track.H - thumbH
-	thumbY := posY - s.dragGrabY
-	if thumbY < track.Y {
-		thumbY = track.Y
-	}
-	if thumbY > track.Y+span {
-		thumbY = track.Y + span
-	}
-	var frac float32
-	if span > 0 {
-		frac = (thumbY - track.Y) / span
-	}
-	s.rawOffset = frac * maxOffset
+	s.rawOffset = scrollDragOffset(track.Y, track.H, thumbH, posY, s.dragGrabY, maxOffset)
 	s.InvalidateArrange()
 }
 
-// OnPointer implements input.PointerHandler: Wheel scrolls by
-// scrollWheelStep logical px per notch and is always handled; a Press inside
-// the current thumb rect starts a drag (capturing the pointer via
-// e.Router.Capture and recording the grab offset) and is handled, while a
-// Press elsewhere is left unhandled so it bubbles through to the scrolled
-// content; Move/Release are only acted on while this ScrollViewer holds the
-// capture (drag in progress).
+// dragToX recomputes rawOffsetX from a horizontal drag's current pointer
+// x-position, mirroring dragTo on the X axis (dragGrabX in place of
+// dragGrabY). A no-op when there is no room to scroll horizontally.
+func (s *ScrollViewer) dragToX(posX float32) {
+	track, thumbW, ok := s.thumbGeometryX()
+	if !ok {
+		return
+	}
+	maxOffset := s.childW - s.viewport.W
+	if maxOffset <= 0 {
+		return
+	}
+	s.rawOffsetX = scrollDragOffset(track.X, track.W, thumbW, posX, s.dragGrabX, maxOffset)
+	s.InvalidateArrange()
+}
+
+// canScrollY reports whether there is vertical content to scroll to (an
+// alias for thumbGeometry's ok result, without the track/thumb geometry),
+// used by OnPointer to route a plain wheel notch.
+func (s *ScrollViewer) canScrollY() bool {
+	_, _, ok := s.thumbGeometry()
+	return ok
+}
+
+// OnPointer implements input.PointerHandler:
+//
+// Wheel scrolls vertically by scrollWheelStep logical px per notch by
+// default (matching the pre-horizontal-scroll behavior exactly when there
+// is vertical content to scroll to), Shift+Wheel scrolls horizontally
+// instead, and a plain Wheel scrolls horizontally too when there is no
+// vertical content to scroll to but there IS horizontal content (so a
+// purely horizontally-overflowing ScrollViewer is still wheel-scrollable
+// without requiring Shift). Wheel is always handled, exactly as before.
+//
+// A Press inside the current vertical thumb rect starts a vertical drag,
+// checked first (matching the original single-axis priority); otherwise a
+// Press inside the current horizontal thumb rect starts a horizontal drag.
+// Either capture records which axis it's tracking (s.drag) so a subsequent
+// Move/Release — only acted on while this ScrollViewer holds the capture —
+// know which offset to update. A Press matching neither thumb is left
+// unhandled so it bubbles through to the scrolled content.
 func (s *ScrollViewer) OnPointer(e *input.PointerEvent) {
 	switch e.Action {
 	case input.Wheel:
-		s.ScrollBy(-e.Delta.Y * scrollWheelStep)
+		delta := -e.Delta.Y * scrollWheelStep
+		switch {
+		case e.Mods&input.ModShift != 0:
+			s.ScrollByX(delta)
+		case s.canScrollY():
+			s.ScrollBy(delta)
+		default:
+			s.ScrollByX(delta)
+		}
 		e.Handled = true
 	case input.Press:
 		if rect, ok := s.thumbRect(); ok && rect.Contains(e.Pos) {
 			s.dragGrabY = e.Pos.Y - rect.Y
+			s.drag = scrollDragVertical
+			e.Router.Capture(s)
+			e.Handled = true
+		} else if rect, ok := s.thumbRectX(); ok && rect.Contains(e.Pos) {
+			s.dragGrabX = e.Pos.X - rect.X
+			s.drag = scrollDragHorizontal
 			e.Router.Capture(s)
 			e.Handled = true
 		}
 	case input.Move:
 		if e.Router.Captured() == s {
-			s.dragTo(e.Pos.Y)
+			if s.drag == scrollDragHorizontal {
+				s.dragToX(e.Pos.X)
+			} else {
+				s.dragTo(e.Pos.Y)
+			}
 			e.Handled = true
 		}
 	case input.Release:
 		if e.Router.Captured() == s {
 			e.Router.Release()
+			s.drag = scrollDragNone
 			e.Handled = true
 		}
 	}

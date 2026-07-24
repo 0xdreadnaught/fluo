@@ -233,6 +233,40 @@ func TestScrollClipRender(t *testing.T) {
 	})
 }
 
+// TestScrollHorizontal is the control-variants Task 3 golden for
+// ScrollViewer's horizontal scrolling: a horizontal StackPanel of 6 alternating
+// -color Fixed(60,40) blocks (desired width 380, taller than the 140x60
+// ScrollViewer's viewport is wide but not tall) scrolled right via
+// ScrollToX(100), showing the horizontal thumb along the bottom edge and no
+// vertical thumb (the content fits vertically — this is a purely
+// horizontally-overflowing ScrollViewer, per the type doc comment's
+// single-axis scenario).
+func TestScrollHorizontal(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+
+	testFrame(t, "scroll_horizontal", 160, 120, func(r *glr.Renderer) {
+		stack := controls.NewStackPanel(controls.Horizontal).SetGap(4)
+		for i := 0; i < 6; i++ {
+			c := render.RGB(0, 120, 215)
+			if i%2 == 1 {
+				c = render.RGB(255, 185, 0)
+			}
+			stack.Add(controls.NewFixed(60, 40, c))
+		}
+
+		sv := controls.NewScrollViewer().SetChild(stack)
+		sv.SetWidth(140)
+		sv.SetHeight(60)
+		sv.ScrollToX(100)
+
+		root := controls.NewCanvas().Add(sv, 10, 10)
+		core.MeasureWidget(root, render.Size{W: 160, H: 120})
+		core.ArrangeWidget(root, render.Rect{X: 0, Y: 0, W: 160, H: 120})
+		core.RenderWidget(root, r)
+	})
+}
+
 // TestClassicButton is the Phase 4 milestone golden: a themed, laid-out
 // button in a real GL context, composed ONLY from theme.Light tokens (no
 // literal colors/metrics) — a card-colored Border filling the frame (inset
@@ -295,6 +329,91 @@ func TestButtons(t *testing.T) {
 		row := controls.NewStackPanel(controls.Horizontal).SetGap(12).Add(def, accent, disabled)
 
 		frame := render.Rect{X: 0, Y: 0, W: 320, H: 60}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(row, render.Size{W: frame.W, H: frame.H})
+		desired := core.DesiredSizeOf(row)
+		bounds := render.Rect{
+			X: (frame.W - desired.W) / 2, Y: (frame.H - desired.H) / 2,
+			W: desired.W, H: desired.H,
+		}
+		core.ArrangeWidget(row, bounds)
+		core.RenderWidget(row, r)
+	})
+}
+
+// TestButtonPill is the control-variants Task 2 golden for ButtonShape:
+// four pill (stadium, radius = bounds.H/2) buttons side by side — rest,
+// accent (raised + outer StrokeRoundedRect ring), checked (a ToggleButton,
+// sunken/pressed-in bevel), and focused (a rounded StrokeRoundedRect focus
+// ring instead of the square drawFocusRect) — proving drawRaisedRounded/
+// drawSunkenRounded and the rounded focus/accent chrome all render
+// correctly together. Focus is set directly via OnFocusChanged (no router
+// involved), the same shortcut TestTextBox's golden uses.
+func TestButtonPill(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "button_pill", 420, 60, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		rest := controls.NewButton(face, "Play").SetShape(controls.ShapePill)
+		accent := controls.NewButton(face, "Go").SetShape(controls.ShapePill).SetAccent(true)
+		checked := controls.NewToggleButton(face, "On").SetShape(controls.ShapePill)
+		checked.SetChecked(true)
+		focused := controls.NewButton(face, "Tab").SetShape(controls.ShapePill)
+		focused.OnFocusChanged(true)
+
+		row := controls.NewStackPanel(controls.Horizontal).SetGap(12).Add(rest, accent, checked, focused)
+
+		frame := render.Rect{X: 0, Y: 0, W: 420, H: 60}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(row, render.Size{W: frame.W, H: frame.H})
+		desired := core.DesiredSizeOf(row)
+		bounds := render.Rect{
+			X: (frame.W - desired.W) / 2, Y: (frame.H - desired.H) / 2,
+			W: desired.W, H: desired.H,
+		}
+		core.ArrangeWidget(row, bounds)
+		core.RenderWidget(row, r)
+	})
+}
+
+// TestButtonCircle is the control-variants Task 2 golden for ButtonShape:
+// four circle (radius = min(bounds.W, bounds.H)/2) buttons side by side —
+// rest, accent, checked (ToggleButton, sunken), and focused — the circle
+// counterpart of TestButtonPill. Each label is a single short glyph, typical
+// circle-button content (an icon-like badge); MeasureContent's square-aspect
+// forcing (see Button.MeasureContent) is what makes bounds.W == bounds.H
+// here despite the label itself not being square.
+func TestButtonCircle(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "button_circle", 320, 70, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		rest := controls.NewButton(face, "1").SetShape(controls.ShapeCircle)
+		accent := controls.NewButton(face, "2").SetShape(controls.ShapeCircle).SetAccent(true)
+		checked := controls.NewToggleButton(face, "3").SetShape(controls.ShapeCircle)
+		checked.SetChecked(true)
+		focused := controls.NewButton(face, "4").SetShape(controls.ShapeCircle)
+		focused.OnFocusChanged(true)
+
+		row := controls.NewStackPanel(controls.Horizontal).SetGap(12).Add(rest, accent, checked, focused)
+
+		frame := render.Rect{X: 0, Y: 0, W: 320, H: 70}
 		r.FillRect(frame, th.Color.WindowBackground)
 
 		core.MeasureWidget(row, render.Size{W: frame.W, H: frame.H})
@@ -409,6 +528,86 @@ func TestSliderProgress(t *testing.T) {
 		}
 		core.ArrangeWidget(stack, bounds)
 		core.RenderWidget(stack, r)
+	})
+}
+
+// TestSliderVertical is the control-variants golden for Slider's Vertical
+// orientation: a single vertical slider at Value 65 (over [0,100] — Max at
+// the TOP per the type doc comment) centered in a 60x200 frame. Confirms
+// the raised thumb sits above center (closer to Max/top) and the
+// Highlight fill covers the Min side (below the thumb).
+func TestSliderVertical(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "slider_vertical", 60, 200, func(r *glr.Renderer) {
+		slider := controls.NewSlider().SetOrientation(controls.Vertical).SetRange(0, 100).SetValue(65)
+
+		frame := render.Rect{X: 0, Y: 0, W: 60, H: 200}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(slider, render.Size{W: frame.W, H: frame.H})
+		desired := core.DesiredSizeOf(slider)
+		bounds := render.Rect{
+			X: (frame.W - desired.W) / 2, Y: (frame.H - desired.H) / 2,
+			W: desired.W, H: desired.H,
+		}
+		core.ArrangeWidget(slider, bounds)
+		core.RenderWidget(slider, r)
+	})
+}
+
+// TestProgressVertical is the control-variants golden for ProgressBar's
+// Vertical orientation: a single vertical chunked progress bar at Value
+// 0.6, centered in a 60x200 frame. Confirms the chunks stack bottom-to-top
+// (Value 0.6 fills roughly the bottom 60% of the well).
+func TestProgressVertical(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "progress_vertical", 60, 200, func(r *glr.Renderer) {
+		progress := controls.NewProgressBar().SetOrientation(controls.Vertical).SetValue(0.6)
+
+		frame := render.Rect{X: 0, Y: 0, W: 60, H: 200}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(progress, render.Size{W: frame.W, H: frame.H})
+		desired := core.DesiredSizeOf(progress)
+		bounds := render.Rect{
+			X: (frame.W - desired.W) / 2, Y: (frame.H - desired.H) / 2,
+			W: desired.W, H: desired.H,
+		}
+		core.ArrangeWidget(progress, bounds)
+		core.RenderWidget(progress, r)
+	})
+}
+
+// TestProgressSolid is the control-variants golden for ProgressBar's solid
+// fill variant: a single Horizontal solid progress bar at Value 0.6,
+// centered in a 200x40 frame. Confirms the fill is one continuous
+// Highlight bar (no chunk gaps), contrasting with TestSliderProgress's
+// default chunked look.
+func TestProgressSolid(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "progress_solid", 200, 40, func(r *glr.Renderer) {
+		progress := controls.NewProgressBar().SetSolid(true).SetValue(0.6)
+
+		frame := render.Rect{X: 0, Y: 0, W: 200, H: 40}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(progress, render.Size{W: frame.W, H: frame.H})
+		desired := core.DesiredSizeOf(progress)
+		bounds := render.Rect{
+			X: (frame.W - desired.W) / 2, Y: (frame.H - desired.H) / 2,
+			W: desired.W, H: desired.H,
+		}
+		core.ArrangeWidget(progress, bounds)
+		core.RenderWidget(progress, r)
 	})
 }
 
@@ -679,6 +878,61 @@ func TestMenuOpen(t *testing.T) {
 		core.ArrangeWidget(host, frame)
 
 		core.RenderWidget(host, r)
+	})
+}
+
+// TestDataGridHScroll is the control-variants Task 4 golden for the shared
+// virtualizer's horizontal scroll: a DataGrid with 3 wide Px columns ("Name"
+// 140, "Email" 160, "Age" 140 — 440 total, exceeding the grid's own 260px
+// width and thus the viewport, the deliberate Px-only overflow scenario
+// contentWidth=sum(colWidths) targets) and 10 rows, scrolled right via
+// ScrollToX(120) so "Name" is mostly/fully scrolled past the left edge,
+// "Email" sits mid-frame, and "Age" is fully visible — showing the header's
+// cells scrolled in lockstep with the body's cells (both read the same
+// offsetX, see DataGrid.ArrangeContent/Render's doc comments) so each
+// column's title still lines up exactly over its own cells, plus the
+// horizontal thumb along the bottom edge (offset right, past its own
+// left-most position) alongside the vertical thumb (10 rows taller than the
+// visible body), inside a 280x160 frame. Sized and positioned like
+// TestDataGrid's own golden: explicit SetWidth/SetHeight, Canvas at (10,10).
+func TestDataGridHScroll(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "datagrid_hscroll", 280, 160, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		dg := controls.NewDataGrid(face)
+		dg.SetColumns(
+			controls.Column{Title: "Name", Width: controls.Px(140), Value: func(row int) string {
+				return fmt.Sprintf("User %d", row)
+			}},
+			controls.Column{Title: "Email", Width: controls.Px(160), Value: func(row int) string {
+				return fmt.Sprintf("u%d@example.com", row)
+			}},
+			controls.Column{Title: "Age", Width: controls.Px(140), Value: func(row int) string {
+				return fmt.Sprintf("%d", 20+row)
+			}},
+		)
+		dg.SetRowCount(10)
+		dg.SetWidth(260)
+		dg.SetHeight(140)
+		dg.SetSelectedIndex(1)
+		dg.ScrollToX(120)
+
+		root := controls.NewCanvas().Add(dg, 10, 10)
+
+		frame := render.Rect{X: 0, Y: 0, W: 280, H: 160}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(root, frame)
+		core.RenderWidget(root, r)
 	})
 }
 

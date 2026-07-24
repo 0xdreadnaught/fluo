@@ -19,6 +19,19 @@ import (
 // own thumb-geometry/wheel-step constants (scrollThumbMinH, scrollWheelStep
 // in scrollviewer.go) so the two controls feel identical to scroll.
 //
+// Horizontal scrolling (control-variants Task 4) generalizes the SAME
+// pattern to the X axis: rawOffsetX/offsetX mirror rawOffset/offset exactly,
+// clamped by layout against a host-provided contentWidth (there is no
+// virtualizer-owned notion of "total content width" the way totalHeight()
+// derives height from rowH*count() — DataGrid's is sum(colWidths), ListView's
+// is the widest row's measured text — so the owner passes it into layout
+// explicitly every pass, the same way it already computes and owns viewport
+// itself). thumbGeometryX/thumbRectX/dragToX/scrollByX are the X-axis
+// counterparts of thumbGeometry/thumbRect/dragTo/scrollBy, sharing
+// scrollDragAxis (declared in scrollviewer.go, same package) so a captured
+// Move/Release knows which axis a drag is tracking — mirroring
+// ScrollViewer's own drag field exactly.
+//
 // It is embedded BY VALUE in its owning widget, not a core.Widget itself: it
 // has no element(), MeasureContent/ArrangeContent, or Render of its own —
 // the owner (ListView) drives it explicitly from its own ArrangeContent (via
@@ -32,18 +45,29 @@ type virtualizer struct {
 
 	// rawOffset is the last value requested via wheel/drag, before clamping.
 	// offset is the clamped value as of the last layout call — layout is the
-	// single source of truth for clamping.
-	rawOffset float32
-	offset    float32
+	// single source of truth for clamping. rawOffsetX/offsetX are the exact
+	// X-axis counterparts.
+	rawOffset, offset   float32
+	rawOffsetX, offsetX float32
 
-	// viewport is the owner's content rect (already inset by the thumb
-	// gutter) as of the last layout call; used for both visible-range math
-	// and thumb geometry.
+	// viewport is the owner's content rect (already inset by both the
+	// vertical AND horizontal thumb gutters, whichever the owner's
+	// ArrangeContent decided to reserve) as of the last layout call; used for
+	// both visible-range/thumb-geometry math on either axis. contentW is the
+	// host-provided content width from that same layout call (see the type
+	// doc comment) — stored so thumbGeometryX/dragToX, called later from
+	// RenderOverlay/OnPointer, don't need the owner to re-derive it.
 	viewport render.Rect
+	contentW float32
 
 	// dragGrabY is the y-offset (logical px) between the pointer and the
 	// thumb's top edge at drag start, exactly like ScrollViewer.dragGrabY.
+	// dragGrabX is its X-axis counterpart; drag records which axis a capture
+	// is currently tracking (scrollDragAxis, declared in scrollviewer.go),
+	// exactly like ScrollViewer.drag.
 	dragGrabY float32
+	dragGrabX float32
+	drag      scrollDragAxis
 
 	// gutter is captured from theme.Active() at construction, matching
 	// ScrollViewer's own capture convention. Thumb/track colors are NOT
@@ -66,25 +90,20 @@ func (v *virtualizer) totalHeight() float32 {
 	return float32(n) * v.rowH
 }
 
-// layout is the single source of truth for offset clamping (mirroring
-// ScrollViewer.ArrangeContent): it stores viewport, clamps rawOffset into
-// [0, max(0, totalHeight-viewport.H)], and stores the clamped result (read
-// back via offset).
-func (v *virtualizer) layout(viewport render.Rect) {
+// layout is the single source of truth for offset clamping on BOTH axes
+// (mirroring ScrollViewer.ArrangeContent): it stores viewport and
+// contentWidth (see the type doc comment for why the latter is host-provided
+// rather than virtualizer-derived), clamps rawOffset into
+// [0, max(0, totalHeight-viewport.H)] and rawOffsetX into
+// [0, max(0, contentWidth-viewport.W)] — via the same clampScrollOffset
+// ScrollViewer itself uses, so the two controls clamp identically — and
+// stores the clamped results (read back via offset/offsetX).
+func (v *virtualizer) layout(viewport render.Rect, contentWidth float32) {
 	v.viewport = viewport
+	v.contentW = contentWidth
 
-	maxOffset := v.totalHeight() - viewport.H
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	offset := v.rawOffset
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > maxOffset {
-		offset = maxOffset
-	}
-	v.offset = offset
+	v.offset = clampScrollOffset(v.rawOffset, v.totalHeight(), viewport.H)
+	v.offsetX = clampScrollOffset(v.rawOffsetX, contentWidth, viewport.W)
 }
 
 // visibleRange returns the half-open row-index range [first, last) that
@@ -172,6 +191,57 @@ func (v *virtualizer) scrollBy(dy float32) {
 	v.rawOffset += dy
 }
 
+// scrollByX requests a relative change to the horizontal offset, clamped on
+// the next layout call, mirroring scrollBy on the X axis.
+func (v *virtualizer) scrollByX(dx float32) {
+	v.rawOffsetX += dx
+}
+
+// thumbGeometryX returns the horizontal thumb's track (the bottom gutter
+// strip) and its width, or ok==false when there is no content or contentW
+// fits entirely within the viewport (nothing to scroll horizontally).
+// Identical math to ScrollViewer.thumbGeometryX, except the "does this
+// overflow" comparison is against v.viewport.W — the SAME final width value
+// the owner's ArrangeContent already decided the horizontal gutter against
+// (see ListView/DataGrid ArrangeContent's own hGutter decision, which
+// computes contentWidth vs. that identical pre-Bottom-inset viewport.W) — so
+// this can never disagree with whether that gutter was actually reserved.
+func (v *virtualizer) thumbGeometryX() (track render.Rect, thumbW float32, ok bool) {
+	if v.viewport.W <= 0 || v.contentW <= v.viewport.W {
+		return render.Rect{}, 0, false
+	}
+	track = render.Rect{
+		X: v.viewport.X,
+		Y: v.viewport.Bottom(),
+		W: v.viewport.W,
+		H: v.gutter,
+	}
+	thumbW = track.W * track.W / v.contentW
+	if thumbW < scrollThumbMinH {
+		thumbW = scrollThumbMinH
+	}
+	if thumbW > track.W {
+		thumbW = track.W
+	}
+	return track, thumbW, true
+}
+
+// thumbRectX returns the horizontal thumb's current on-screen rect, or
+// ok==false when there is nothing to scroll (see thumbGeometryX). Identical
+// math to ScrollViewer.thumbRectX.
+func (v *virtualizer) thumbRectX() (render.Rect, bool) {
+	track, thumbW, ok := v.thumbGeometryX()
+	if !ok {
+		return render.Rect{}, false
+	}
+	maxOffset := v.contentW - v.viewport.W
+	thumbX := track.X
+	if maxOffset > 0 {
+		thumbX = track.X + (v.offsetX/maxOffset)*(track.W-thumbW)
+	}
+	return render.Rect{X: thumbX, Y: track.Y, W: thumbW, H: track.H}, true
+}
+
 // dragTo recomputes rawOffset from a drag's current pointer y-position,
 // identical math to ScrollViewer.dragTo. A no-op when there is nothing to
 // scroll (thumbGeometry not ok, or content already fits the viewport).
@@ -198,6 +268,33 @@ func (v *virtualizer) dragTo(posY float32) {
 		frac = (thumbY - track.Y) / span
 	}
 	v.rawOffset = frac * maxOffset
+}
+
+// dragToX recomputes rawOffsetX from a drag's current pointer x-position,
+// mirroring dragTo on the X axis (dragGrabX in place of dragGrabY). A no-op
+// when there is nothing to scroll horizontally.
+func (v *virtualizer) dragToX(posX float32) {
+	track, thumbW, ok := v.thumbGeometryX()
+	if !ok {
+		return
+	}
+	maxOffset := v.contentW - v.viewport.W
+	if maxOffset <= 0 {
+		return
+	}
+	span := track.W - thumbW
+	thumbX := posX - v.dragGrabX
+	if thumbX < track.X {
+		thumbX = track.X
+	}
+	if thumbX > track.X+span {
+		thumbX = track.X + span
+	}
+	var frac float32
+	if span > 0 {
+		frac = (thumbX - track.X) / span
+	}
+	v.rawOffsetX = frac * maxOffset
 }
 
 // initVirtualizer captures the theme-derived fields every virtualizer-owning

@@ -519,3 +519,180 @@ func TestDataGridDisposeIsNoOp(t *testing.T) {
 		t.Fatalf("RowCount() after Dispose = %d, want 3", g.RowCount())
 	}
 }
+
+// --- Horizontal scroll (control-variants Task 4) ---
+
+func TestDataGridNoHorizontalThumbWhenColumnsFitViewport(t *testing.T) {
+	// The existing datagrid.png golden's own shape: a Star column makes
+	// sum(colWidths) resolve to exactly the viewport width, never more — see
+	// ArrangeContent's doc comment on why this can never spuriously overflow.
+	g := NewDataGrid(nil)
+	g.SetColumns(Column{Width: Px(80)}, Column{Width: Star(1)}, Column{Width: Px(60)})
+	g.SetRowCount(5)
+	layoutDataGrid(g, 0, 0, 300, 180)
+
+	if _, ok := g.thumbRectX(); ok {
+		t.Fatal("expected no horizontal thumb: a Star column always fills exactly to the viewport width")
+	}
+	if g.offsetX != 0 {
+		t.Fatalf("offsetX = %v, want 0", g.offsetX)
+	}
+}
+
+func TestDataGridHorizontalThumbShowsWhenColumnsOverflow(t *testing.T) {
+	// Px-only columns whose sum exceeds the viewport: the deliberate
+	// horizontal-overflow scenario this feature targets.
+	g := NewDataGrid(nil)
+	g.SetColumns(Column{Width: Px(150)}, Column{Width: Px(150)}, Column{Width: Px(150)})
+	g.SetRowCount(5)
+	layoutDataGrid(g, 0, 0, 200, 200)
+
+	if _, ok := g.thumbRectX(); !ok {
+		t.Fatal("expected a horizontal thumb: 3x150=450 Px columns exceed the viewport width")
+	}
+}
+
+func TestDataGridHeaderBodyOffsetXInSync(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	colors := theme.Active().Color
+	pad := theme.Active().Metric.PaddingS
+
+	g := NewDataGrid(nil) // nil face: Render's title loop is skipped, only cell/header fills recorded
+	g.SetColumns(
+		Column{Title: "A", Width: Px(80)},
+		Column{Title: "B", Width: Px(80)},
+		Column{Title: "C", Width: Px(80)},
+	)
+	g.SetRowCount(5)
+	g.rowH = 48
+
+	// 3*80=240 content width vs a 100px-wide grid: definitely overflows
+	// horizontally (see TestDataGridHorizontalThumbShowsWhenColumnsOverflow).
+	layoutDataGrid(g, 0, 0, 100, 200)
+	g.rawOffsetX = 50
+	layoutDataGrid(g, 0, 0, 100, 200)
+
+	if g.offsetX == 0 {
+		t.Fatal("expected a nonzero clamped offsetX for this test to be meaningful")
+	}
+
+	rr := &recordRenderer{}
+	g.Render(rr)
+
+	// drawRaised's very first FillRect for each header cell is the cell's
+	// own face fill, passed the exact cellRect (see bevel.go's doc comment):
+	// unlike any inner/outer edge (all 1px thick on one axis), only that
+	// face fill matches BOTH the header's own Y and its full H.
+	var headerXs []float32
+	for _, f := range rr.fills {
+		if f.color == colors.ButtonFace && f.rect.Y == g.header.Y && f.rect.H == g.header.H {
+			headerXs = append(headerXs, f.rect.X)
+		}
+	}
+	if len(headerXs) != len(g.columns) {
+		t.Fatalf("found %d header cell face fills, want %d", len(headerXs), len(g.columns))
+	}
+	for i, x := range headerXs {
+		want := g.colOffsets[i] - g.offsetX
+		if x != want {
+			t.Fatalf("header cell %d X = %v, want %v (colOffsets[%d] - offsetX)", i, x, want, i)
+		}
+	}
+
+	// Body cells (row 0) must scroll by the SAME offsetX — see
+	// ArrangeContent's cell-rect inset (colOffsets[c] + PaddingS - offsetX).
+	for c := range g.columns {
+		want := g.colOffsets[c] + pad - g.offsetX
+		if got := g.pool[c].Bounds().X; got != want {
+			t.Fatalf("pool[%d] (row0 col%d) Bounds().X = %v, want %v", c, c, got, want)
+		}
+	}
+}
+
+func TestDataGridShiftWheelScrollsXPlainWheelScrollsY(t *testing.T) {
+	g := NewDataGrid(nil)
+	g.SetColumns(Column{Width: Px(150)}, Column{Width: Px(150)})
+	g.SetRowCount(20)
+	g.rowH = 48
+	layoutDataGrid(g, 0, 0, 100, 148)
+
+	r := input.NewRouter()
+
+	plain := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -2}, Router: r}
+	g.OnPointer(plain)
+	if !plain.Handled {
+		t.Fatal("plain wheel not marked Handled")
+	}
+	layoutDataGrid(g, 0, 0, 100, 148)
+	if g.offset == 0 {
+		t.Fatal("offset (Y) = 0 after plain wheel, want nonzero")
+	}
+	if g.offsetX != 0 {
+		t.Fatalf("offsetX = %v after plain wheel, want 0 (plain wheel never scrolls X)", g.offsetX)
+	}
+	yAfterPlain := g.offset
+
+	shift := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -2}, Mods: input.ModShift, Router: r}
+	g.OnPointer(shift)
+	if !shift.Handled {
+		t.Fatal("shift+wheel not marked Handled")
+	}
+	layoutDataGrid(g, 0, 0, 100, 148)
+	if g.offset != yAfterPlain {
+		t.Fatalf("offset (Y) = %v after shift+wheel, want unchanged %v", g.offset, yAfterPlain)
+	}
+	if g.offsetX == 0 {
+		t.Fatal("offsetX = 0 after shift+wheel, want nonzero (shift+wheel scrolls X)")
+	}
+}
+
+func TestDataGridRowClickCorrectWithNonzeroOffsetX(t *testing.T) {
+	g := NewDataGrid(nil)
+	g.SetColumns(Column{Width: Px(150)}, Column{Width: Px(150)})
+	g.SetRowCount(5)
+	g.rowH = 48
+	layoutDataGrid(g, 0, 0, 100, 200)
+
+	g.rawOffsetX = 80
+	layoutDataGrid(g, 0, 0, 100, 200)
+	if g.offsetX == 0 {
+		t.Fatal("expected a nonzero offsetX for this test to be meaningful")
+	}
+
+	var got []int
+	g.OnChanged(func(v int) { got = append(got, v) })
+
+	r := input.NewRouter()
+	// Row 1's Y-band is unaffected by horizontal scroll: clicking there must
+	// still resolve to row 1 regardless of the scrolled columns.
+	pos := render.Point{X: g.viewport.X + 5, Y: g.viewport.Y + g.rowH + 10}
+	e := &input.PointerEvent{Action: input.Press, Pos: pos, Router: r}
+	g.OnPointer(e)
+
+	if !e.Handled {
+		t.Fatal("press on a real row not marked Handled")
+	}
+	if got, want := g.SelectedIndex(), 1; got != want {
+		t.Fatalf("SelectedIndex() = %d, want %d (row hit-test unaffected by horizontal scroll)", got, want)
+	}
+	if len(got) != 1 || got[0] != 1 {
+		t.Fatalf("OnChanged calls = %v, want [1]", got)
+	}
+}
+
+func TestDataGridScrollToXAndOffsetX(t *testing.T) {
+	g := NewDataGrid(nil)
+	g.SetColumns(Column{Width: Px(150)}, Column{Width: Px(150)})
+	g.SetRowCount(5)
+	layoutDataGrid(g, 0, 0, 100, 200)
+
+	g.ScrollToX(30)
+	if !g.NeedsLayout() {
+		t.Fatal("ScrollToX did not invalidate arrange")
+	}
+	layoutDataGrid(g, 0, 0, 100, 200)
+	if got := g.OffsetX(); got != 30 {
+		t.Fatalf("OffsetX() = %v, want 30", got)
+	}
+}
