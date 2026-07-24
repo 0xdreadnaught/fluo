@@ -345,8 +345,27 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 			controls.NewTextBlock(body, "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 0123456789").SetColor(th.Color.WindowText),
 		)
 
+	// Variants showcase: the control variants added in the 2026-07-24 batch —
+	// pill and circular buttons, a vertical slider, vertical and solid
+	// progress bars, and a horizontally scrollable strip.
+	pillButton := controls.NewButton(body, "Pill").SetShape(controls.ShapePill)
+	circleButton := controls.NewButton(body, "+").SetShape(controls.ShapeCircle)
+	vSlider := controls.NewSlider().SetOrientation(controls.Vertical).SetValue(0.4)
+	vProgress := controls.NewProgressBar().SetOrientation(controls.Vertical).SetValue(0.6)
+	solidProgress := controls.NewProgressBar().SetSolid(true).SetValue(0.45)
+
+	hStrip := controls.NewScrollViewer().SetChild(controls.NewFixed(600, 20, th.Color.Highlight))
+	hStrip.SetHeight(36)
+
+	variants := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingS).
+		Add(
+			controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
+				Add(pillButton, circleButton, vSlider, vProgress, solidProgress),
+			hStrip,
+		)
+
 	return controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingM).
-		Add(pangram, row1, row2, row3, row4, row5)
+		Add(pangram, variants, row1, row2, row3, row4, row5)
 }
 
 // buildControlsPage builds page 0's content: the Phase 5/6 Controls section
