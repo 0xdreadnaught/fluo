@@ -354,6 +354,14 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 	vProgress := controls.NewProgressBar().SetOrientation(controls.Vertical).SetValue(0.6)
 	solidProgress := controls.NewProgressBar().SetSolid(true).SetValue(0.45)
 
+	// The vertical slider/progress are 160px tall, so without an explicit
+	// cross-axis alignment the horizontal row would stretch the buttons and
+	// the horizontal progress bar to match (turning the circle into a
+	// stadium). Center them at their own desired size instead.
+	pillButton.SetAlign(core.Start, core.Center)
+	circleButton.SetAlign(core.Start, core.Center)
+	solidProgress.SetAlign(core.Start, core.Center)
+
 	hStrip := controls.NewScrollViewer().SetChild(controls.NewFixed(600, 20, th.Color.Highlight))
 	hStrip.SetHeight(36)
 
