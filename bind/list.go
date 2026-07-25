@@ -1,0 +1,233 @@
+package bind
+
+import (
+	"fmt"
+
+	"github.com/0xdreadnaught/fluo/controls"
+	"github.com/0xdreadnaught/fluo/core"
+)
+
+// ChangeKind enumerates types of list mutations. It is a type alias for
+// controls.ListChangeKind, not an independent definition: Phase 7 Task 2
+// needs controls.ListView to declare a ListItems interface whose OnChange
+// method names this payload type, and controls cannot import bind (bind
+// already imports controls, for Items and, from Task 3, ListSelected — the
+// reverse edge would be an import cycle). Declaring the canonical type in
+// controls and aliasing it here keeps ChangeKind's published name and
+// values exactly as they were before Task 2 (this is a real alias, not a
+// same-shaped redefinition, so ChangeKind and controls.ListChangeKind are
+// the identical type, and *List[T] satisfies controls.ListItems — see the
+// static assertion below) while breaking the cycle. See
+// controls/listview.go's ListChange doc comment for the full rationale.
+type ChangeKind = controls.ListChangeKind
+
+const (
+	ChangeAdd     = controls.ListChangeAdd
+	ChangeRemove  = controls.ListChangeRemove
+	ChangeReplace = controls.ListChangeReplace
+	ChangeReset   = controls.ListChangeReset
+)
+
+// Change represents a granular list mutation event. Like ChangeKind above,
+// this is a type alias for controls.ListChange (see ChangeKind's doc
+// comment for why).
+type Change = controls.ListChange
+
+// List is an observable slice for collection binding. Not goroutine-safe.
+type List[T any] struct {
+	items      []T
+	subs       map[int]func()
+	nextID     int
+	granSubs   map[int]func(Change)
+	granNextID int
+}
+
+// Compile-time proof that *List[string] satisfies controls.ListItems (Len,
+// At(int) string, OnChange(func(ListChange)) func()) — the whole point of
+// ChangeKind/Change being aliases above: controls.NewListView can accept a
+// *bind.List[string] directly without controls importing bind. If this
+// assertion ever fails to compile, ListView's ListItems interface and
+// List[T]'s method set have drifted apart; do not silence it, fix the
+// mismatch.
+var _ controls.ListItems = (*List[string])(nil)
+
+// NewList creates a new List with the provided initial items.
+func NewList[T any](items ...T) *List[T] {
+	l := &List[T]{
+		items: make([]T, len(items)),
+	}
+	copy(l.items, items)
+	return l
+}
+
+// Len returns the number of items in the list.
+func (l *List[T]) Len() int {
+	return len(l.items)
+}
+
+// At returns the item at index i. Panics if i is out of range (fail-fast, documented).
+func (l *List[T]) At(i int) T {
+	if i < 0 || i >= len(l.items) {
+		panic(fmt.Sprintf("bind: List.At index %d out of range [0, %d)", i, len(l.items)))
+	}
+	return l.items[i]
+}
+
+// Add appends items to the list and notifies subscribers (if len(items) > 0).
+func (l *List[T]) Add(items ...T) {
+	if len(items) == 0 {
+		return
+	}
+	startIndex := len(l.items)
+	l.items = append(l.items, items...)
+	l.notify()
+	for i := range items {
+		l.notifyGran(Change{Kind: ChangeAdd, Index: startIndex + i})
+	}
+}
+
+// Insert inserts item at index i. Panics if i is out of range.
+func (l *List[T]) Insert(i int, item T) {
+	if i < 0 || i > len(l.items) {
+		panic(fmt.Sprintf("bind: List.Insert index %d out of range [0, %d]", i, len(l.items)))
+	}
+	l.items = append(l.items[:i], append([]T{item}, l.items[i:]...)...)
+	l.notify()
+	l.notifyGran(Change{Kind: ChangeAdd, Index: i})
+}
+
+// RemoveAt removes the item at index i. Panics if i is out of range.
+func (l *List[T]) RemoveAt(i int) {
+	if i < 0 || i >= len(l.items) {
+		panic(fmt.Sprintf("bind: List.RemoveAt index %d out of range [0, %d)", i, len(l.items)))
+	}
+	l.items = append(l.items[:i], l.items[i+1:]...)
+	l.notify()
+	l.notifyGran(Change{Kind: ChangeRemove, Index: i})
+}
+
+// Set replaces the item at index i with a new value and notifies subscribers.
+// Panics if i is out of range.
+func (l *List[T]) Set(i int, item T) {
+	if i < 0 || i >= len(l.items) {
+		panic(fmt.Sprintf("bind: List.Set index %d out of range [0, %d)", i, len(l.items)))
+	}
+	l.items[i] = item
+	l.notify()
+	l.notifyGran(Change{Kind: ChangeReplace, Index: i})
+}
+
+// Replace replaces the entire list with new items and notifies subscribers (once).
+func (l *List[T]) Replace(items ...T) {
+	l.items = make([]T, len(items))
+	copy(l.items, items)
+	l.notify()
+	l.notifyGran(Change{Kind: ChangeReset, Index: -1})
+}
+
+// OnChanged registers a subscriber to be called when the list changes.
+// Returns a cancel function that removes the subscriber (idempotent).
+func (l *List[T]) OnChanged(f func()) (cancel func()) {
+	if l.subs == nil {
+		l.subs = make(map[int]func())
+	}
+	id := l.nextID
+	l.nextID++
+	l.subs[id] = f
+
+	cancel = func() {
+		delete(l.subs, id)
+	}
+	return
+}
+
+// OnChange registers a subscriber to be called with granular change details.
+// Granular events fire after the coarse OnChanged notification, and only after
+// the mutation is fully applied — a subscriber processing the first event of a
+// multi-item Add already observes the final list state.
+// Returns a cancel function that removes the subscriber (idempotent).
+func (l *List[T]) OnChange(f func(Change)) (cancel func()) {
+	if l.granSubs == nil {
+		l.granSubs = make(map[int]func(Change))
+	}
+	id := l.granNextID
+	l.granNextID++
+	l.granSubs[id] = f
+
+	cancel = func() {
+		delete(l.granSubs, id)
+	}
+	return
+}
+
+// notify calls all registered subscribers.
+func (l *List[T]) notify() {
+	for _, f := range l.subs {
+		f()
+	}
+}
+
+// notifyGran calls all registered granular subscribers with a Change event.
+func (l *List[T]) notifyGran(c Change) {
+	for _, f := range l.granSubs {
+		f(c)
+	}
+}
+
+// snapshotListItems returns a copy of all items in the list, copied
+// directly from the internal slice (not via repeated At calls), so Items
+// can iterate a rebuild pass without aliasing the live slice.
+func snapshotListItems[T any](l *List[T]) []T {
+	snapshot := make([]T, len(l.items))
+	copy(snapshot, l.items)
+	return snapshot
+}
+
+// Items binds a list to a panel: on ANY list change, panel.Clear() then
+// Add(makeItem(item)) for each item, in order. v0 = full rebuild
+// (virtualization arrives Phase 7).
+//
+// Reentrancy: if a list mutation occurs during makeItem() (while
+// rebuilding), the rebuild coalesces into one additional rebuild after the
+// outer completes, matching Property's own reentrancy semantics. Each pass
+// snapshots the current items and iterates the snapshot; mutations
+// discovered during the pass set a pending flag, and after the outer loop
+// completes, one additional rebuild pass runs if pending, ensuring
+// convergence (each pass has bounded iteration). Unsupported: a makeItem()
+// that mutates on EVERY invocation across every pass will not converge.
+func Items[T any](l *List[T], panel *controls.StackPanel, makeItem func(item T, index int) core.Widget) (cancel func()) {
+	var rebuilding bool
+	var pending bool
+	var rebuild func()
+
+	rebuild = func() {
+		if rebuilding {
+			pending = true
+			return
+		}
+		rebuilding = true
+		defer func() {
+			rebuilding = false
+			if pending {
+				pending = false
+				rebuild() // tail-recursive: one coalesced rebuild after outer completes
+			}
+		}()
+
+		// Snapshot items at start of pass to bound iteration.
+		// Any mutation during this pass will set pending=true via guard.
+		snapshot := snapshotListItems(l)
+
+		panel.Clear()
+		for i := 0; i < len(snapshot); i++ {
+			item := snapshot[i]
+			widget := makeItem(item, i)
+			panel.Add(widget)
+		}
+	}
+	rebuild()
+
+	// Subscribe to list changes
+	cancel = l.OnChanged(rebuild)
+	return
+}

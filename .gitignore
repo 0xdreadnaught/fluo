@@ -1,0 +1,6 @@
+*.exe
+*.got.png
+
+# python bytecode from tools/
+__pycache__/
+*.pyc
