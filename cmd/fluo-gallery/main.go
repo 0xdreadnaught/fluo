@@ -67,12 +67,20 @@
 // tree. DataGrid.Dispose is a no-op but is called too, for the same reason
 // its own doc comment gives: uniform Dispose-everything-virtualized in the
 // cancel path, no type switch needed.
+//
+// The Controls section's row6 showcases opt-in multi-line TextBox
+// (SetMultiline) and toast notifications (OverlayHost.ShowToast): a
+// multi-line box pre-populated with two lines sits beside a "Show toast"
+// Button that pops a short-lived toast off the host (see buildControlsSection
+// and buildUI, which now wires host.SetTimers(tq) so that toast's Timeout
+// actually auto-dismisses instead of sitting until clicked).
 package main
 
 import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/0xdreadnaught/fluo/app"
 	"github.com/0xdreadnaught/fluo/bind"
@@ -250,7 +258,10 @@ var swatchColorNames = []string{"Blue", "Yellow", "Green", "Red", "Purple", "Tea
 // threaded through every rebuild — every binder created here appends its
 // cancel func to *cancels so the caller can tear the OLD tree's bindings
 // down before the next buildUI call creates fresh ones on the new tree.
-func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *timers.Queue, textProp *core.Property[string], sliderProp *core.Property[float32], itemList *bind.List[string], cancels *[]func()) core.Widget {
+// host is threaded through so the toast demo button (row6) can call
+// host.ShowToast directly, the same reason buildAdvancedPage takes host for
+// its "Show dialog" button.
+func buildControlsSection(th *theme.Theme, body *text.Face, host *controls.OverlayHost, counter *int, tq *timers.Queue, textProp *core.Property[string], sliderProp *core.Property[float32], itemList *bind.List[string], cancels *[]func()) core.Widget {
 	// Row 1: Button (with click counter), accent Button (tooltipped),
 	// ToggleButton.
 	counterLabel := controls.NewTextBlock(body, fmt.Sprintf("Clicked %d times", *counter)).
@@ -372,8 +383,35 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 			hStrip,
 		)
 
+	// Row 6: multi-line TextBox (SetMultiline, pre-populated with a couple of
+	// lines and sized a few rows tall) beside a "Show toast" Button wired to
+	// host.ShowToast — the toast is given a short Timeout so it auto-dismisses
+	// via the gallery's timers.Queue (tq) rather than sitting until clicked.
+	// The note below is a reminder, not a demo: inline IME composition (the
+	// other new capability this batch adds) is Windows-runtime-only and needs
+	// a CJK font the gallery doesn't ship, so it isn't shown here.
+	multilineBox := controls.NewTextBox(body).SetMultiline(true).SetTimers(tq)
+	multilineBox.SetText("First line\nSecond line")
+	multilineBox.SetWidth(220)
+	multilineBox.SetHeight(72)
+
+	toastButton := controls.NewButton(body, "Show toast").OnClick(func() {
+		host.ShowToast(controls.ToastSpec{Face: body, Message: "Saved.", Timeout: 2 * time.Second})
+	})
+	toastButton.SetAnimated(true).SetTimers(tq)
+
+	imeNote := controls.NewTextBlock(body, "Windows also gets inline IME composition in any TextBox (not shown here).").
+		SetColor(th.Color.GrayText)
+
+	row6 := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingS).
+		Add(
+			controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
+				Add(multilineBox, toastButton),
+			imeNote,
+		)
+
 	return controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingM).
-		Add(pangram, variants, row1, row2, row3, row4, row5)
+		Add(pangram, variants, row1, row2, row3, row4, row5, row6)
 }
 
 // buildControlsPage builds page 0's content: the Phase 5/6 Controls section
@@ -382,13 +420,13 @@ func buildControlsSection(th *theme.Theme, body *text.Face, counter *int, tq *ti
 // tree it always built) so buildUI can choose between it and
 // buildAdvancedPage per the current page selection. See buildControlsSection
 // and buildUI's own doc comments for the params threaded through.
-func buildControlsPage(th *theme.Theme, body *text.Face, counter *int, tq *timers.Queue, textProp *core.Property[string], sliderProp *core.Property[float32], itemList *bind.List[string], cancels *[]func()) core.Widget {
+func buildControlsPage(th *theme.Theme, body *text.Face, host *controls.OverlayHost, counter *int, tq *timers.Queue, textProp *core.Property[string], sliderProp *core.Property[float32], itemList *bind.List[string], cancels *[]func()) core.Widget {
 	swatches := controls.NewWrapPanel().SetGap(th.Metric.PaddingM)
 	for _, c := range swatchPalette {
 		swatches.Add(newSwatch(72, 48, c, th.Color.Accent, th.Color.TextPrimary))
 	}
 
-	controlsSection := buildControlsSection(th, body, counter, tq, textProp, sliderProp, itemList, cancels)
+	controlsSection := buildControlsSection(th, body, host, counter, tq, textProp, sliderProp, itemList, cancels)
 
 	content := controls.NewStackPanel(controls.Vertical).SetGap(th.Metric.PaddingM).
 		Add(controlsSection, swatches)
@@ -604,6 +642,7 @@ func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq
 	body := text.NewFace(font, th.Type.BodySize)
 
 	host := controls.NewOverlayHost()
+	host.SetTimers(tq) // drives ShowToast's auto-dismiss timer (row6's "Show toast" demo)
 
 	// nav: a 2-row ListView of page names ("Controls"/"Advanced"), two-way
 	// bound to pageProp via bind.ListSelected — see the package doc
@@ -623,7 +662,7 @@ func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq
 
 	var pageContent core.Widget
 	if pageProp.Get() == 0 {
-		pageContent = buildControlsPage(th, body, counter, tq, textProp, sliderProp, itemList, cancels)
+		pageContent = buildControlsPage(th, body, host, counter, tq, textProp, sliderProp, itemList, cancels)
 	} else {
 		pageContent = buildAdvancedPage(th, body, host, advSelectedProp, advDialogResultProp, cancels)
 	}
