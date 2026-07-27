@@ -8,6 +8,8 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-27
+
 ### Added
 
 - **HD text rendering** — UI glyphs are now rasterized directly at the exact
