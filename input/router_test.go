@@ -822,3 +822,192 @@ func TestNilRootSafe(t *testing.T) {
 	// Reaching here without a panic is the assertion; nothing above has an
 	// observable effect on a rootless router beyond the cursor check.
 }
+
+// TestPointerButtonConsumed covers PointerButton's consumed return across
+// its three dispatch branches: a press that lands on a widget that marks
+// itself handled, a press over empty space (hits nothing, so nothing can
+// handle it), and a press delivered under an active capture (always
+// consumed — the pointer was already claimed exclusively by a fluo widget).
+func TestPointerButtonConsumed(t *testing.T) {
+	handling := &probe{name: "handling", handlePtr: true}
+	handling.SetWidth(50)
+	handling.SetHeight(50)
+	root := controls.NewCanvas().Add(handling, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	if consumed := r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0); !consumed {
+		t.Fatalf("PointerButton over a handling widget: consumed = false, want true")
+	}
+	if consumed := r.PointerButton(input.ButtonLeft, true, render.Point{X: 90, Y: 90}, 0); consumed {
+		t.Fatalf("PointerButton over empty space: consumed = true, want false")
+	}
+}
+
+// TestPointerButtonConsumedNotHandled covers the case a press's hit-path
+// reaches a PointerHandler that chooses not to mark the event handled
+// (probe with handlePtr: false): consumed must track e.Handled, not mere
+// hit-path presence, so this is false even though the pointer is over an
+// interactive widget.
+func TestPointerButtonConsumedNotHandled(t *testing.T) {
+	notHandling := &probe{name: "notHandling"} // handlePtr defaults to false
+	notHandling.SetWidth(50)
+	notHandling.SetHeight(50)
+	root := controls.NewCanvas().Add(notHandling, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	if consumed := r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0); consumed {
+		t.Fatalf("PointerButton over a non-handling widget: consumed = true, want false")
+	}
+}
+
+// TestPointerButtonConsumedUnderCapture covers the captured-delivery branch:
+// consumed is unconditionally true while a capture is active, since the
+// pointer was already claimed exclusively by a fluo widget regardless of
+// whether that widget marks this particular delivery handled.
+func TestPointerButtonConsumedUnderCapture(t *testing.T) {
+	a := &probe{name: "a", capturing: true} // captures on press, doesn't set handlePtr
+	a.SetWidth(50)
+	a.SetHeight(50)
+	root := controls.NewCanvas().Add(a, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // captures
+	if r.Captured() != core.Widget(a) {
+		t.Fatalf("Captured() = %v, want a", r.Captured())
+	}
+	if consumed := r.PointerButton(input.ButtonLeft, false, render.Point{X: 10, Y: 10}, 0); !consumed {
+		t.Fatalf("PointerButton delivered under capture: consumed = false, want true")
+	}
+}
+
+// TestKeyDownConsumed covers KeyDown's consumed return: true when the
+// currently focused widget's focus-anchored dispatch (the focused widget
+// itself, or an ancestor it bubbles to) sets e.Handled, false when nothing
+// is focused at all — even if the rootless/root-only fallback in
+// dispatchKey happens to mark the event handled, since no fluo widget holds
+// focus in that case.
+func TestKeyDownConsumed(t *testing.T) {
+	a := &probe{name: "a", focusable: true, handleKey: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	root := controls.NewCanvas().Add(a, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // focuses a
+	if r.Focused() != core.Widget(a) {
+		t.Fatalf("Focused() = %v, want a", r.Focused())
+	}
+	if consumed := r.KeyDown(input.KeyEnter, 0, 0); !consumed {
+		t.Fatalf("KeyDown to a focused, handling widget: consumed = false, want true")
+	}
+
+	r.Focus(nil)
+	if consumed := r.KeyDown(input.KeyEnter, 0, 0); consumed {
+		t.Fatalf("KeyDown with nothing focused: consumed = true, want false")
+	}
+}
+
+// TestKeyDownConsumedTabBookkeeping covers Tab/Shift+Tab: the router's own
+// focus-cycling bookkeeping (KeyDown's tail, run when nothing upstream
+// handles KeyTab) marks the event Handled for its own purposes, but must NOT
+// count as a fluo widget having taken the key — it is router-internal
+// navigation, not delivery to any widget.
+func TestKeyDownConsumedTabBookkeeping(t *testing.T) {
+	a := &probe{name: "a", focusable: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	b := &probe{name: "b", focusable: true}
+	b.SetWidth(50)
+	b.SetHeight(50)
+	root := controls.NewCanvas().Add(a, 0, 0).Add(b, 60, 0)
+	layout(root, 200, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // focus a
+	if consumed := r.KeyDown(input.KeyTab, 0, 0); consumed {
+		t.Fatalf("KeyDown(Tab) resolved via focus-cycling bookkeeping: consumed = true, want false")
+	}
+	if r.Focused() != core.Widget(b) {
+		t.Fatalf("Focused() after Tab = %v, want b", r.Focused())
+	}
+}
+
+// TestWantCaptureKeyboard covers WantCaptureKeyboard's focus-tracking:
+// false with nothing focused, true once a widget is, false again once focus
+// is cleared.
+func TestWantCaptureKeyboard(t *testing.T) {
+	a := &probe{name: "a", focusable: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	root := controls.NewCanvas().Add(a, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	if r.WantCaptureKeyboard() {
+		t.Fatalf("WantCaptureKeyboard() with nothing focused = true, want false")
+	}
+
+	r.Focus(a)
+	if !r.WantCaptureKeyboard() {
+		t.Fatalf("WantCaptureKeyboard() with a focused = false, want true")
+	}
+
+	r.Focus(nil)
+	if r.WantCaptureKeyboard() {
+		t.Fatalf("WantCaptureKeyboard() after clearing focus = true, want false")
+	}
+}
+
+// TestWantCapturePointer covers WantCapturePointer across hover and capture:
+// false with the pointer over empty space, true once hover reaches a
+// PointerHandler, and true while a capture is active even with the pointer
+// positioned outside the captor's own bounds (capture bypasses hit-testing
+// entirely — see Capture's doc comment).
+func TestWantCapturePointer(t *testing.T) {
+	a := &probe{name: "a", capturing: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	root := controls.NewCanvas().Add(a, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	if r.WantCapturePointer() {
+		t.Fatalf("WantCapturePointer() before any move = true, want false")
+	}
+
+	r.PointerMove(render.Point{X: 90, Y: 90}, 0) // empty space
+	if r.WantCapturePointer() {
+		t.Fatalf("WantCapturePointer() over empty space = true, want false")
+	}
+
+	r.PointerMove(render.Point{X: 10, Y: 10}, 0) // over a
+	if !r.WantCapturePointer() {
+		t.Fatalf("WantCapturePointer() over a = false, want true")
+	}
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // a captures
+	if r.Captured() != core.Widget(a) {
+		t.Fatalf("Captured() = %v, want a", r.Captured())
+	}
+	if !r.WantCapturePointer() {
+		t.Fatalf("WantCapturePointer() while captured = false, want true")
+	}
+}
