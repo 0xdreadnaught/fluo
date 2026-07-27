@@ -1157,3 +1157,44 @@ func TestDialog(t *testing.T) {
 		core.RenderWidget(host, r)
 	})
 }
+
+// TestToastStack is the golden for controls.OverlayHost.ShowToast: two
+// stacked toasts ("Saved.", the newer one, and "Connecting...", the older
+// one pushed up above it) in the host's bottom-right corner, each a small
+// raised ButtonFace bevel card around its message — inside a 220x140 frame.
+// Opened via the real ShowToast API (no timers.Queue wired, so both simply
+// stay open with no auto-dismiss) rather than by reaching into any
+// unexported controls internals.
+func TestToastStack(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "toast", 220, 140, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		host := controls.NewOverlayHost()
+		host.SetContent(controls.NewFixed(220, 140, th.Color.WindowBackground))
+
+		frame := render.Rect{X: 0, Y: 0, W: 220, H: 140}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		// First layout pass: gives the host real arranged bounds, so
+		// arrangeToasts has a real corner to stack against.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		host.ShowToast(controls.ToastSpec{Face: face, Message: "Connecting..."})
+		host.ShowToast(controls.ToastSpec{Face: face, Message: "Saved."})
+
+		// Second layout pass: stacks both now-open toasts.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		core.RenderWidget(host, r)
+	})
+}
