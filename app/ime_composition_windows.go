@@ -28,9 +28,12 @@ var (
 
 // gwlpWndProc is GWLP_WNDPROC (winuser.h): the SetWindowLongPtrW index that
 // replaces a window's WndProc pointer — this file's subclassing hook.
-// GWL_*/GWLP_* indices are ordinary (negative) ints at the Win32 ABI level;
-// converting the Go int constant through int32 before uintptr sign-extends
-// it to the correct 64-bit bit pattern for the x64 calling convention
+// GWL_*/GWLP_* indices are ordinary (negative) ints at the Win32 ABI level.
+// It is a mutable int32 rather than an untyped constant on purpose: the
+// uintptr(int32(...)) conversion at the call sites must happen at RUNTIME,
+// because Go rejects the equivalent constant conversion (-4 is not
+// representable in unsigned uintptr). At runtime the int32 sign-extends to
+// the correct 64-bit bit pattern for the x64 calling convention
 // (uintptr(int32(-4)) == 0xFFFFFFFFFFFFFFFC), matching how other Win32
 // bindings handle these same negative indices.
 //
@@ -44,7 +47,7 @@ var (
 // out not to hold for whatever 32-bit target (if any) this ever needs to
 // run on, this Call becomes a NewProc lookup failure at runtime, not a
 // build failure.
-const gwlpWndProc = -4
+var gwlpWndProc int32 = -4
 
 // WM_IME_* message IDs and GCS_*/ISC_* flags this file decodes (winuser.h /
 // imm.h). wmImeSetContext's ISC_SHOWUICOMPOSITIONWINDOW bit is cleared
