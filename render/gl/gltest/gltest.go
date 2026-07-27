@@ -71,6 +71,22 @@ func Run(t *testing.T, w, h int, frame func(fb *Framebuffer)) {
 	t.Helper()
 	runtime.LockOSThread() // GL is thread-affine; tests must not use t.Parallel()
 
+	// Context bring-up fails on a headless machine (no display, no GL driver).
+	// This glfw binding logs platform errors from Init and returns nil rather
+	// than an error (go-gl/glfw issue 127), so a failed Init only surfaces
+	// when the next call panics with "not initialized". Guard the whole setup
+	// phase and skip — rather than fail — on any such failure. frame runs only
+	// after ctxReady is set, so genuine panics in the render body are never
+	// swallowed here.
+	ctxReady := false
+	defer func() {
+		if !ctxReady {
+			if r := recover(); r != nil {
+				t.Skipf("no GL context available: %v", r)
+			}
+		}
+	}()
+
 	if err := glfw.Init(); err != nil {
 		t.Skipf("no GL context available: %v", err)
 	}
@@ -110,6 +126,7 @@ func Run(t *testing.T, w, h int, frame func(fb *Framebuffer)) {
 
 	gl.Viewport(0, 0, int32(w), int32(h))
 
+	ctxReady = true
 	frame(&Framebuffer{W: w, H: h, FBO: fbo, Tex: tex})
 }
 
