@@ -1005,6 +1005,388 @@ func TestTextBoxBlinkStopsOnUnfocusAndResetsOnRefocus(t *testing.T) {
 
 // --- Fix: Ctrl+Right degrade behavior (locked, not a regression) ---
 
+// --- Multi-line mode ---
+
+// newFocusedMultilineTextBox mirrors newFocusedTextBox, but with multi-line
+// mode enabled and a taller box (300x120, several line-heights) so vertical
+// navigation/scrolling tests below have real room to work with.
+func newFocusedMultilineTextBox(t *testing.T, initial string) (*TextBox, *input.Router) {
+	t.Helper()
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true)
+	if initial != "" {
+		tb.SetText(initial)
+	}
+	tb.SetWidth(300)
+	tb.SetHeight(120)
+
+	r := input.NewRouter()
+	r.SetRoot(tb)
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: 300, H: 120})
+	r.Focus(tb)
+	return tb, r
+}
+
+func TestTextBoxMultilineDefaultFalseAndSetter(t *testing.T) {
+	tb := NewTextBox(nil)
+	if tb.Multiline() {
+		t.Fatal("Multiline() = true for a fresh TextBox, want false (default)")
+	}
+	tb.SetMultiline(true)
+	if !tb.Multiline() {
+		t.Fatal("Multiline() = false after SetMultiline(true), want true")
+	}
+}
+
+func TestTextBoxMultilineEnterInsertsNewline(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "ab")
+	tb.SetCaret(1)
+
+	var got []string
+	tb.OnChanged(func(s string) { got = append(got, s) })
+
+	r.KeyDown(input.KeyEnter, 0, 0)
+
+	if tb.Text() != "a\nb" {
+		t.Fatalf("Text() = %q, want %q", tb.Text(), "a\nb")
+	}
+	if c := tb.Caret(); c != 2 {
+		t.Fatalf("Caret() = %d, want 2 (just after the inserted newline)", c)
+	}
+	if len(got) != 1 || got[0] != "a\nb" {
+		t.Fatalf("OnChanged calls = %v, want [%q]", got, "a\nb")
+	}
+}
+
+// TestTextBoxSingleLineEnterUnhandled locks the "DO NOT change single-line
+// Enter behavior" requirement: single-line mode never had a KeyEnter case
+// before multi-line mode existed, so Enter must still fall through
+// unhandled (no mutation, no OnChanged) — a host that wants Enter-to-submit
+// on a single-line box sees the unhandled key bubble past it exactly as it
+// always has.
+func TestTextBoxSingleLineEnterUnhandled(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "ab")
+	var calls int
+	tb.OnChanged(func(string) { calls++ })
+
+	e := &input.KeyEvent{Action: input.Press, Key: input.KeyEnter, Router: r}
+	tb.OnKey(e)
+
+	if e.Handled {
+		t.Fatal("Handled = true for Enter on a single-line TextBox, want false (unchanged)")
+	}
+	if tb.Text() != "ab" {
+		t.Fatalf("Text() = %q, want unchanged %q", tb.Text(), "ab")
+	}
+	if calls != 0 {
+		t.Fatalf("OnChanged calls = %d, want 0", calls)
+	}
+}
+
+// TestTextBoxSingleLineUpDownUnhandled is Enter's counterpart for Up/Down:
+// neither was ever part of the single-line keyboard map, so both must stay
+// unhandled (and leave the caret untouched) in single-line mode.
+func TestTextBoxSingleLineUpDownUnhandled(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "hello")
+	tb.SetCaret(2)
+
+	up := &input.KeyEvent{Action: input.Press, Key: input.KeyUp, Router: r}
+	tb.OnKey(up)
+	if up.Handled {
+		t.Fatal("Up: Handled = true on a single-line TextBox, want false")
+	}
+
+	down := &input.KeyEvent{Action: input.Press, Key: input.KeyDown, Router: r}
+	tb.OnKey(down)
+	if down.Handled {
+		t.Fatal("Down: Handled = true on a single-line TextBox, want false")
+	}
+	if c := tb.Caret(); c != 2 {
+		t.Fatalf("Caret() = %d, want unchanged 2", c)
+	}
+}
+
+// TestTextBoxLineColMapping locks lineCol/indexOfLineCol as exact inverses
+// against a text with three lines of differing length ("ab", "cde", "f"),
+// including the boundary indices immediately before/after each '\n' and the
+// very end of the text.
+func TestTextBoxLineColMapping(t *testing.T) {
+	tb := NewTextBox(nil).SetMultiline(true)
+	tb.SetText("ab\ncde\nf") // a b \n c d e \n f — indices 0..8
+
+	cases := []struct {
+		idx       int
+		line, col int
+	}{
+		{0, 0, 0},
+		{1, 0, 1},
+		{2, 0, 2}, // just before the first '\n': end of line 0
+		{3, 1, 0}, // just after the first '\n': start of line 1
+		{5, 1, 2},
+		{6, 1, 3}, // just before the second '\n': end of line 1
+		{7, 2, 0}, // just after the second '\n': start of line 2
+		{8, 2, 1}, // len(runes): end of the whole text
+	}
+	for _, c := range cases {
+		if line, col := tb.lineCol(c.idx); line != c.line || col != c.col {
+			t.Fatalf("lineCol(%d) = (%d,%d), want (%d,%d)", c.idx, line, col, c.line, c.col)
+		}
+		if idx := tb.indexOfLineCol(c.line, c.col); idx != c.idx {
+			t.Fatalf("indexOfLineCol(%d,%d) = %d, want %d", c.line, c.col, idx, c.idx)
+		}
+	}
+}
+
+func TestTextBoxUpDownPreservesDesiredColumn(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "abc\nde\nfghij")
+	tb.SetCaret(11) // line 2 ("fghij"), col 4 — desired column becomes 4
+
+	r.KeyDown(input.KeyUp, 0, 0)
+	if line, col := tb.lineCol(tb.Caret()); line != 1 || col != 2 {
+		t.Fatalf("after Up onto shorter 'de': lineCol = (%d,%d), want (1,2) (clamped to line end)", line, col)
+	}
+
+	r.KeyDown(input.KeyUp, 0, 0)
+	if line, col := tb.lineCol(tb.Caret()); line != 0 || col != 3 {
+		t.Fatalf("after 2nd Up onto shorter 'abc': lineCol = (%d,%d), want (0,3) (still tracking desired col 4, clamped to 3)", line, col)
+	}
+
+	r.KeyDown(input.KeyDown, 0, 0)
+	r.KeyDown(input.KeyDown, 0, 0)
+	if c := tb.Caret(); c != 11 {
+		t.Fatalf("after 2x Down back onto the longer line: Caret() = %d, want 11 (desired col 4 restored, not stuck at 3)", c)
+	}
+}
+
+func TestTextBoxUpDownClampAtFirstAndLastLine(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "ab\ncd")
+
+	tb.SetCaret(1)
+	r.KeyDown(input.KeyUp, 0, 0)
+	if line, _ := tb.lineCol(tb.Caret()); line != 0 {
+		t.Fatalf("Up at the first line: line = %d, want 0 (clamped)", line)
+	}
+
+	tb.SetCaret(4)
+	r.KeyDown(input.KeyDown, 0, 0)
+	if line, _ := tb.lineCol(tb.Caret()); line != 1 {
+		t.Fatalf("Down at the last line: line = %d, want 1 (clamped)", line)
+	}
+}
+
+func TestTextBoxShiftUpDownExtendSelection(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "abc\ndef\nghi")
+	tb.SetCaret(9) // line2, col1
+
+	r.KeyDown(input.KeyUp, 0, input.ModShift)
+	if s, e := tb.Selection(); s != 5 || e != 9 {
+		t.Fatalf("Shift+Up: Selection() = (%d,%d), want (5,9)", s, e)
+	}
+
+	r.KeyDown(input.KeyUp, 0, input.ModShift)
+	if s, e := tb.Selection(); s != 1 || e != 9 {
+		t.Fatalf("Shift+Up again: Selection() = (%d,%d), want (1,9) (anchor pinned at 9)", s, e)
+	}
+}
+
+func TestTextBoxHomeEndPerLineInMultiline(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "abc\nde")
+	tb.SetCaret(5) // line 1 ("de"), col 1
+
+	r.KeyDown(input.KeyHome, 0, 0)
+	if c := tb.Caret(); c != 4 {
+		t.Fatalf("Home: Caret() = %d, want 4 (start of the CURRENT line 'de', not 0)", c)
+	}
+
+	tb.SetCaret(5)
+	r.KeyDown(input.KeyEnd, 0, 0)
+	if c := tb.Caret(); c != 6 {
+		t.Fatalf("End: Caret() = %d, want 6 (end of the CURRENT line 'de')", c)
+	}
+}
+
+func TestTextBoxLeftRightCrossLineBoundaries(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "ab\ncd")
+	tb.SetCaret(2) // just before the '\n'
+
+	r.KeyDown(input.KeyRight, 0, 0)
+	if line, col := tb.lineCol(tb.Caret()); line != 1 || col != 0 {
+		t.Fatalf("Right over the newline: lineCol = (%d,%d), want (1,0)", line, col)
+	}
+
+	r.KeyDown(input.KeyLeft, 0, 0)
+	if line, col := tb.lineCol(tb.Caret()); line != 0 || col != 2 {
+		t.Fatalf("Left back over the newline: lineCol = (%d,%d), want (0,2)", line, col)
+	}
+}
+
+func TestTextBoxSelectionCutCopyPasteAcrossNewlines(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "abc\ndef\nghi")
+	clip := &fakeClip{}
+	r.SetClipboard(clip)
+
+	tb.Select(1, 9) // "bc\ndef\ng" — spans both newlines
+	r.KeyDown(input.KeyC, 0, input.ModCtrl)
+	if clip.text != "bc\ndef\ng" {
+		t.Fatalf("clipboard after copy = %q, want %q", clip.text, "bc\ndef\ng")
+	}
+	if tb.Text() != "abc\ndef\nghi" {
+		t.Fatalf("Text() after copy = %q, want unchanged", tb.Text())
+	}
+
+	r.KeyDown(input.KeyX, 0, input.ModCtrl)
+	if tb.Text() != "ahi" {
+		t.Fatalf("Text() after cut = %q, want %q", tb.Text(), "ahi")
+	}
+
+	tb.SetCaret(1) // between 'a' and "hi"
+	r.KeyDown(input.KeyV, 0, input.ModCtrl)
+	if tb.Text() != "abc\ndef\nghi" {
+		t.Fatalf("Text() after paste = %q, want %q (newlines preserved on paste)", tb.Text(), "abc\ndef\nghi")
+	}
+}
+
+func TestTextBoxMultilinePasteNormalizesCRLF(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "")
+	clip := &fakeClip{text: "one\r\ntwo\rthree"}
+	r.SetClipboard(clip)
+
+	r.KeyDown(input.KeyV, 0, input.ModCtrl)
+
+	if tb.Text() != "one\ntwo\nthree" {
+		t.Fatalf("Text() after paste = %q, want %q (CRLF and lone CR normalized to LF, not stripped)", tb.Text(), "one\ntwo\nthree")
+	}
+}
+
+func TestTextBoxMultilineDesiredHeightIsTaller(t *testing.T) {
+	face := buttonFace(t)
+	tb := NewTextBox(face).SetMultiline(true)
+	core.MeasureWidget(tb, render.Size{W: 1000, H: 1000})
+	d := core.DesiredSizeOf(tb)
+
+	want := face.LineHeight()*textBoxMultilineDefaultLines + 2*tb.metrics.PaddingM
+	if d.H != want {
+		t.Fatalf("DesiredSize().H = %v, want %v (%d line-heights + padding)", d.H, want, textBoxMultilineDefaultLines)
+	}
+}
+
+// TestTextBoxVerticalScrollKeepsCaretVisible mirrors
+// TestTextBoxHScrollKeepsCaretVisible for the new vertical axis: ten lines
+// in a box tall enough for only ~2 must scroll vscroll so the caret's own
+// line (the last one here) stays within the inner (padding-inset) height.
+func TestTextBoxVerticalScrollKeepsCaretVisible(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true)
+	tb.SetText("l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9") // 10 lines; caret ends on the last
+	tb.SetWidth(200)
+	tb.SetHeight(50) // narrow explicit height: room for roughly 2 lines
+
+	core.MeasureWidget(tb, render.Size{W: 200, H: 50})
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50})
+
+	if tb.vscroll <= 0 {
+		t.Fatalf("vscroll = %v, want > 0 (short box, caret on the last of many lines)", tb.vscroll)
+	}
+
+	pad := tb.metrics.PaddingM
+	innerH := tb.Bounds().H - 2*pad
+	lh := tb.lineHeight()
+	line, _ := tb.lineCol(tb.Caret())
+	caretY := float32(line)*lh - tb.vscroll
+	const eps = 0.01
+	if caretY < -eps || caretY > innerH-lh+eps {
+		t.Fatalf("caret line display y = %v, want within [0, %v] (inner height minus one line)", caretY, innerH-lh)
+	}
+}
+
+// TestTextBoxDisabledMultilineIgnoresKeys mirrors
+// TestTextBoxDisabledIgnoresAllKeys for the multi-line-only keys (Enter,
+// Up, Down): a disabled multi-line TextBox must ignore those too.
+func TestTextBoxDisabledMultilineIgnoresKeys(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true)
+	tb.SetText("ab\ncd")
+	tb.SetEnabled(false)
+	tb.OnFocusChanged(true)
+
+	r := input.NewRouter()
+	cases := []input.KeyEvent{
+		{Action: input.Press, Key: input.KeyEnter, Router: r},
+		{Action: input.Press, Key: input.KeyUp, Router: r},
+		{Action: input.Press, Key: input.KeyDown, Router: r},
+	}
+	for i := range cases {
+		e := cases[i]
+		tb.OnKey(&e)
+		if e.Handled {
+			t.Fatalf("case %d: Handled = true on a disabled TextBox, want false", i)
+		}
+	}
+	if tb.Text() != "ab\ncd" {
+		t.Fatalf("Text() = %q, want unchanged", tb.Text())
+	}
+}
+
+// --- IME anchor: CaretScreenRect ---
+
+func TestTextBoxCaretScreenRectFalseWhenUnfocused(t *testing.T) {
+	tb := NewTextBox(buttonFace(t))
+	tb.SetText("hello")
+	tb.SetWidth(300)
+	tb.SetHeight(30)
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: 300, H: 30})
+
+	if _, ok := tb.CaretScreenRect(); ok {
+		t.Fatal("CaretScreenRect() ok = true while unfocused, want false")
+	}
+}
+
+// TestTextBoxCaretScreenRectSingleLine locks CaretScreenRect's math against
+// the exact same expression Render uses to place the drawn caret bar
+// (textX+xOf(caret), vertically centered by lineHeight()) — so the IME
+// anchor and the visible caret can never drift apart.
+func TestTextBoxCaretScreenRectSingleLine(t *testing.T) {
+	tb, _ := newFocusedTextBox(t, "hello")
+	tb.SetCaret(3)
+
+	got, ok := tb.CaretScreenRect()
+	if !ok {
+		t.Fatal("CaretScreenRect() ok = false while focused, want true")
+	}
+
+	bounds := tb.Bounds()
+	pad := tb.metrics.PaddingM
+	lh := tb.lineHeight()
+	wantX := bounds.X + pad - tb.hscroll + tb.xOf(3)
+	wantY := bounds.Y + (bounds.H-lh)/2
+
+	if got.X != wantX || got.Y != wantY || got.H != lh {
+		t.Fatalf("CaretScreenRect() = %+v, want X=%v Y=%v H=%v", got, wantX, wantY, lh)
+	}
+}
+
+// TestTextBoxCaretScreenRectMultiline mirrors the single-line case for a
+// multi-line box: the caret sits on its own (line, col), so both X and Y
+// must reflect renderMultiline's per-line placement (xOfInLine + vscroll),
+// not the single-line xOf/centered-Y math above.
+func TestTextBoxCaretScreenRectMultiline(t *testing.T) {
+	tb, _ := newFocusedMultilineTextBox(t, "abc\nde")
+	tb.SetCaret(5) // line 1 ("de"), col 1
+
+	got, ok := tb.CaretScreenRect()
+	if !ok {
+		t.Fatal("CaretScreenRect() ok = false while focused, want true")
+	}
+
+	bounds := tb.Bounds()
+	pad := tb.metrics.PaddingM
+	lh := tb.lineHeight()
+	line, col := tb.lineCol(tb.Caret())
+	wantX := bounds.X + pad - tb.hscroll + tb.xOfInLine(line, col)
+	wantY := bounds.Y + pad - tb.vscroll + float32(line)*lh
+
+	if got.X != wantX || got.Y != wantY || got.H != lh {
+		t.Fatalf("CaretScreenRect() = %+v, want X=%v Y=%v H=%v (line=%d col=%d)", got, wantX, wantY, lh, line, col)
+	}
+}
+
 func TestTextBoxCtrlRightDegradesToPlainRight(t *testing.T) {
 	tb, r := newFocusedTextBox(t, "hello")
 	tb.SetCaret(2)
@@ -1020,5 +1402,146 @@ func TestTextBoxCtrlRightDegradesToPlainRight(t *testing.T) {
 	}
 	if s, e2 := tb.Selection(); s != e2 {
 		t.Fatalf("Ctrl+Right: Selection() = (%d,%d), want collapsed (Ctrl without Shift does not extend)", s, e2)
+	}
+}
+
+// TestTextBoxOnCompositionUpdateSetsPreeditWithoutTouchingCommittedText is
+// Task 6 Phase B's core contract: an Active composition update stores the
+// provisional preedit string for display, and does NOT mutate Text() or
+// fire OnChanged — the committed buffer stays exactly what it was before
+// the composition began, until (and unless) it actually commits.
+func TestTextBoxOnCompositionUpdateSetsPreeditWithoutTouchingCommittedText(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "he")
+	var changed []string
+	tb.OnChanged(func(s string) { changed = append(changed, s) })
+
+	r.CompositionUpdate("ん", 1)
+
+	if got := tb.Text(); got != "he" {
+		t.Fatalf("Text() during composition = %q, want %q (committed text untouched)", got, "he")
+	}
+	if len(changed) != 0 {
+		t.Fatalf("OnChanged calls = %v, want none (a provisional composition update never fires it)", changed)
+	}
+	if !tb.composing {
+		t.Fatal("composing = false after CompositionUpdate, want true")
+	}
+	if got := string(tb.preedit); got != "ん" {
+		t.Fatalf("preedit = %q, want %q", got, "ん")
+	}
+	if tb.preeditCaret != 1 {
+		t.Fatalf("preeditCaret = %d, want 1", tb.preeditCaret)
+	}
+}
+
+// TestTextBoxOnCompositionCommitInsertsAndClearsPreedit verifies the commit
+// path funnels through the same insertText/replaceRange mutation every
+// other user edit uses: Text() reflects the inserted string, OnChanged
+// fires with it, the caret lands just after it, and the preedit is cleared
+// (composing back to false).
+func TestTextBoxOnCompositionCommitInsertsAndClearsPreedit(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "he")
+	tb.SetCaret(2)
+	var changed []string
+	tb.OnChanged(func(s string) { changed = append(changed, s) })
+
+	r.CompositionUpdate("ん", 1)
+	r.CompositionCommit("ん")
+
+	if got := tb.Text(); got != "heん" {
+		t.Fatalf("Text() after commit = %q, want %q", got, "heん")
+	}
+	if len(changed) != 1 || changed[0] != "heん" {
+		t.Fatalf("OnChanged calls = %v, want [%q]", changed, "heん")
+	}
+	if want := len([]rune("heん")); tb.Caret() != want {
+		t.Fatalf("Caret() after commit = %d, want %d (just after the inserted text)", tb.Caret(), want)
+	}
+	if tb.composing {
+		t.Fatal("composing = true after commit, want false")
+	}
+	if len(tb.preedit) != 0 {
+		t.Fatalf("preedit after commit = %q, want empty", string(tb.preedit))
+	}
+}
+
+// TestTextBoxOnCompositionCancelClearsPreeditWithoutInserting is the
+// Escape/cancel path: no insertion, no OnChanged, preedit cleared.
+func TestTextBoxOnCompositionCancelClearsPreeditWithoutInserting(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "he")
+	var changed []string
+	tb.OnChanged(func(s string) { changed = append(changed, s) })
+
+	r.CompositionUpdate("ん", 1)
+	r.CompositionCancel()
+
+	if got := tb.Text(); got != "he" {
+		t.Fatalf("Text() after cancel = %q, want %q (nothing inserted)", got, "he")
+	}
+	if len(changed) != 0 {
+		t.Fatalf("OnChanged calls = %v, want none", changed)
+	}
+	if tb.composing {
+		t.Fatal("composing = true after cancel, want false")
+	}
+	if len(tb.preedit) != 0 {
+		t.Fatalf("preedit after cancel = %q, want empty", string(tb.preedit))
+	}
+}
+
+// TestTextBoxOnCompositionIgnoredWhenNotFocused mirrors OnKey's own
+// disabled/unfocused guard: an unfocused (or disabled) TextBox must not
+// react to composition events at all — no preedit, no mutation.
+func TestTextBoxOnCompositionIgnoredWhenNotFocused(t *testing.T) {
+	tb := NewTextBox(buttonFace(t))
+	tb.SetText("he")
+	// Deliberately never focused (OnFocusChanged(true) never called).
+
+	tb.OnComposition(input.CompositionEvent{Preedit: "ん", CaretPos: 1, Active: true})
+
+	if tb.composing {
+		t.Fatal("composing = true while unfocused, want false")
+	}
+	if got := tb.Text(); got != "he" {
+		t.Fatalf("Text() = %q, want %q (unchanged)", got, "he")
+	}
+}
+
+// TestTextBoxKeyDownIgnoredWhileComposing is the defensive OnKey guard: a
+// rune KeyDown delivered mid-composition must not insert into the committed
+// buffer (an active composition owns keyboard input until it ends — see
+// OnKey's own doc comment).
+func TestTextBoxKeyDownIgnoredWhileComposing(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "he")
+
+	r.CompositionUpdate("ん", 1)
+
+	e := &input.KeyEvent{Action: input.Press, Key: 0, Rune: 'x', Router: r}
+	tb.OnKey(e)
+
+	if e.Handled {
+		t.Fatal("OnKey during composition: Handled = true, want false (ignored)")
+	}
+	if got := tb.Text(); got != "he" {
+		t.Fatalf("Text() after KeyDown during composition = %q, want %q (unchanged)", got, "he")
+	}
+}
+
+// TestTextBoxKeyDownStillWorksWhenNotComposing is the regression guard for
+// the OnKey composing check above: with no composition active (the default,
+// zero-value state), a normal rune KeyDown must behave exactly as before
+// Phase B — inserted at the caret, Handled set.
+func TestTextBoxKeyDownStillWorksWhenNotComposing(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "he")
+	tb.SetCaret(2)
+
+	e := &input.KeyEvent{Action: input.Press, Key: 0, Rune: 'y', Router: r}
+	tb.OnKey(e)
+
+	if !e.Handled {
+		t.Fatal("OnKey: Handled = false, want true")
+	}
+	if got := tb.Text(); got != "hey" {
+		t.Fatalf("Text() = %q, want %q", got, "hey")
 	}
 }

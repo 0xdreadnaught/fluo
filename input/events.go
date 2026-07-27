@@ -139,3 +139,57 @@ type Focusable interface {
 type CursorShaper interface {
 	Cursor() Cursor
 }
+
+// CaretRector is an optional interface for focusable widgets that expose a
+// text caret's on-screen rectangle, so a host can anchor platform UI to it —
+// e.g. the Windows OS IME candidate/composition window (see app.Run),
+// positioned at the focused text caret rather than a default screen corner.
+// See Router.FocusedCaretRect, which type-asserts the currently focused
+// widget against this interface.
+type CaretRector interface {
+	// CaretScreenRect returns the caret's rectangle in window logical
+	// coordinates — the same space PointerEvent.Pos and core.Widget bounds
+	// are expressed in — and false when the widget currently has no caret
+	// to report (e.g. it isn't focused).
+	CaretScreenRect() (render.Rect, bool)
+}
+
+// CompositionEvent carries an IME composition update or its end (commit or
+// cancellation) — see CompositionHandler and Router.CompositionUpdate/
+// CompositionCommit/CompositionCancel, the platform-agnostic entry points a
+// Windows imm32 decoder (or a test) drives this from.
+//
+// A composition is in progress while Active is true: Preedit is the current,
+// provisional (not yet committed) composition string, and CaretPos is the
+// caret's RUNE offset within Preedit (not within the widget's own committed
+// text) — e.g. a CJK IME reporting the user is midway through typing a
+// candidate. Active becomes false exactly once, when the composition ends:
+// either committed (Canceled is false and Committed holds the finalized text
+// to insert at the caret) or canceled (Canceled is true; Committed is
+// meaningless and nothing should be inserted — e.g. the user pressed Escape,
+// or switched focus away mid-composition).
+type CompositionEvent struct {
+	// Preedit is the provisional composition string, valid while Active is
+	// true.
+	Preedit string
+	// CaretPos is the caret's rune offset within Preedit, valid while Active
+	// is true.
+	CaretPos int
+	// Committed is the finalized text to insert, valid when Active is false
+	// and Canceled is false.
+	Committed string
+	// Active reports whether a composition is currently in progress.
+	Active bool
+	// Canceled reports whether the composition ended without a commit.
+	// Meaningless while Active is true.
+	Canceled bool
+}
+
+// CompositionHandler is an optional interface for focusable widgets that
+// accept IME composition input (inline preedit text, e.g. for CJK entry) —
+// see Router.CompositionUpdate/CompositionCommit/CompositionCancel, which
+// type-assert the currently focused widget against this interface exactly as
+// FocusedCaretRect does against CaretRector.
+type CompositionHandler interface {
+	OnComposition(e CompositionEvent)
+}

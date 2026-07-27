@@ -28,6 +28,29 @@ once it reaches 1.0.
   put Max at the top, vertical progress fills bottom-to-top.
 - **Solid progress bars** — `ProgressBar.SetSolid(true)` renders a single
   continuous fill instead of the classic chunked blocks (still the default).
+- **Font collections** — `text.LoadCollection`/`text.LoadCollectionMember`
+  load `.ttc`/`.otc` files and pick a member face by index, alongside the
+  existing single-font `text.Load`; `Face.OnGlyphDropped` reports when a
+  glyph couldn't be added to a full atlas, so callers can react (grow a new
+  face, log, etc.) instead of silently missing glyphs.
+- **Input consume-reporting** — `input.Router`'s pointer and keyboard
+  dispatch now return whether fluo consumed the event, and the router gains
+  `WantCapturePointer`/`WantCaptureKeyboard` queries (mirrored on
+  `app.Surface`) reporting whether it currently wants exclusive input — for
+  apps that embed fluo alongside their own input handling and need to know
+  when to yield.
+- **Multi-line TextBox** — `TextBox.SetMultiline(true)` turns on an opt-in
+  multi-line mode: Enter inserts a newline, Up/Down move the caret between
+  lines (preserving its column), Home/End act on the current line, and the
+  box scrolls both axes as needed. Single-line boxes are unchanged.
+- **Toast notifications** — `OverlayHost.ShowToast` shows a transient,
+  bottom-right-stacked notification with an optional auto-dismiss `Timeout`
+  (driven by a `timers.Queue` via `OverlayHost.SetTimers`), a returned
+  `dismiss` func for closing it early, and click-to-dismiss.
+- **Windows IME support** — the OS candidate window is anchored to the text
+  caret, and `TextBox` renders inline preedit (composition) text at the
+  caret while composing, instead of leaving IME users without visual
+  feedback until they commit.
 
 ### Fixed
 

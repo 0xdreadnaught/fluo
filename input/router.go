@@ -353,7 +353,18 @@ func (r *Router) PointerMove(p render.Point, mods Modifiers) Cursor {
 // no bubbling — including when p falls outside the captured widget's
 // bounds. Otherwise it hit-tests and bubbles leaf→root, stopping at the
 // first handler that sets e.Handled.
-func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifiers) {
+//
+// consumed reports whether a fluo widget took the event, for hosts that run
+// their own canvas/input handling in the same window and need to know
+// whether to also act on this press themselves (mirroring Dear ImGui's
+// WantCaptureMouse): true while a capture is active (the pointer was
+// already claimed exclusively by a fluo widget, e.g. mid-drag, regardless of
+// whether that widget's OnPointer happens to set e.Handled for this
+// particular delivery), or — with no capture — whatever e.Handled ends up
+// after the hit-path bubble, i.e. some widget on the path actually handled
+// it rather than the press merely passing over non-interactive/empty space.
+// False with no root set, matching every other dispatch entry point.
+func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifiers) bool {
 	action := Release
 	if press {
 		action = Press
@@ -361,18 +372,20 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 
 	if r.Captured() != nil {
 		r.deliverCaptured(action, p, b, render.Point{}, mods)
-		return
+		return true
 	}
 	// No root set yet and nothing captured: nothing to hit-test or focus.
 	if r.root == nil {
-		return
+		return false
 	}
 
 	path := HitPath(r.root, p)
 	if press {
 		r.focusFromPath(path)
 	}
-	Bubble(path, &PointerEvent{Action: action, Pos: p, Button: b, Mods: mods, Router: r})
+	e := &PointerEvent{Action: action, Pos: p, Button: b, Mods: mods, Router: r}
+	Bubble(path, e)
+	return e.Handled
 }
 
 // PointerWheel routes a wheel/scroll event at p (logical px), bubbling
@@ -447,6 +460,66 @@ func (r *Router) Focus(w core.Widget) {
 // Focused returns the widget currently holding keyboard focus, or nil.
 func (r *Router) Focused() core.Widget {
 	return r.focused
+}
+
+// dispatchComposition delivers e to the focused widget's OnComposition, if
+// one is focused and implements CompositionHandler — shared by
+// CompositionUpdate/CompositionCommit/CompositionCancel below, mirroring
+// FocusedCaretRect's own "focused, and implements the optional interface"
+// guard. Silently does nothing otherwise (nothing focused, or the focused
+// widget isn't composition-aware, e.g. a Button) — a platform IME decoder
+// calls these unconditionally as OS messages arrive, with no reason to
+// track focus state of its own.
+func (r *Router) dispatchComposition(e CompositionEvent) {
+	if r.focused == nil {
+		return
+	}
+	if ch, ok := r.focused.(CompositionHandler); ok {
+		ch.OnComposition(e)
+	}
+}
+
+// CompositionUpdate delivers a provisional (uncommitted) IME composition
+// update to the focused widget — preedit is the current composition string
+// and caretPos is the caret's rune offset within it. A no-op if nothing is
+// focused, or the focused widget doesn't implement CompositionHandler. See
+// CompositionEvent's doc comment for the full Active/Preedit/CaretPos
+// contract this constructs.
+func (r *Router) CompositionUpdate(preedit string, caretPos int) {
+	r.dispatchComposition(CompositionEvent{Preedit: preedit, CaretPos: caretPos, Active: true})
+}
+
+// CompositionCommit delivers a finalized IME composition to the focused
+// widget: text is the composed string to insert at the caret, and the
+// composition is over (Active false, Canceled false). A no-op if nothing is
+// focused, or the focused widget doesn't implement CompositionHandler.
+func (r *Router) CompositionCommit(text string) {
+	r.dispatchComposition(CompositionEvent{Committed: text})
+}
+
+// CompositionCancel delivers a composition-canceled notification to the
+// focused widget: the composition ended without a commit (e.g. the user
+// pressed Escape, or focus moved away mid-composition) — any preedit the
+// widget was displaying should be discarded, with nothing inserted. A no-op
+// if nothing is focused, or the focused widget doesn't implement
+// CompositionHandler.
+func (r *Router) CompositionCancel() {
+	r.dispatchComposition(CompositionEvent{Canceled: true})
+}
+
+// FocusedCaretRect returns the currently focused widget's caret rectangle
+// (window logical coordinates), for a host anchoring platform UI to it — see
+// CaretRector's doc comment. false when nothing is focused, or the focused
+// widget doesn't implement CaretRector (e.g. a Button) — mirroring
+// WantCaptureKeyboard/WantCapturePointer's "nothing to report" convention.
+func (r *Router) FocusedCaretRect() (render.Rect, bool) {
+	if r.focused == nil {
+		return render.Rect{}, false
+	}
+	if cr, ok := r.focused.(CaretRector); ok {
+		return cr.CaretScreenRect()
+	}
+	return render.Rect{}, false
 }
 
 // focusableList returns the widgets under (and including) w that are both
@@ -559,9 +632,22 @@ func (r *Router) dispatchKey(e *KeyEvent) {
 // focusable widget, otherwise to the next, and the event is marked handled
 // (no re-dispatch — this is router-internal bookkeeping, not delivered to
 // any widget).
-func (r *Router) KeyDown(k Key, rn rune, mods Modifiers) {
+//
+// consumed reports whether a fluo widget currently holding keyboard focus
+// took the key — for hosts running their own input handling alongside fluo
+// in the same window (see PointerButton's matching doc comment). It is true
+// only when BOTH a widget was already focused when this call started AND
+// the focus-anchored dispatch (the focused widget itself, or an ancestor it
+// bubbled to — see dispatchKey) set e.Handled; a widget merely holding
+// focus while the key goes unhandled, or the router's own Tab/Shift+Tab
+// focus-cycling bookkeeping below (which runs precisely when nothing
+// upstream handled the key, focused or not), do not count as a fluo widget
+// having taken the key.
+func (r *Router) KeyDown(k Key, rn rune, mods Modifiers) bool {
 	e := &KeyEvent{Action: Press, Key: k, Rune: rn, Mods: mods, Router: r}
+	hadFocus := r.focused != nil
 	r.dispatchKey(e)
+	consumed := hadFocus && e.Handled
 	if !e.Handled && k == KeyTab {
 		if mods&ModShift != 0 {
 			r.FocusPrev()
@@ -570,6 +656,7 @@ func (r *Router) KeyDown(k Key, rn rune, mods Modifiers) {
 		}
 		e.Handled = true
 	}
+	return consumed
 }
 
 // KeyUp routes a key-release the same way KeyDown does (focused widget,
@@ -577,4 +664,33 @@ func (r *Router) KeyDown(k Key, rn rune, mods Modifiers) {
 func (r *Router) KeyUp(k Key, mods Modifiers) {
 	e := &KeyEvent{Action: Release, Key: k, Mods: mods, Router: r}
 	r.dispatchKey(e)
+}
+
+// WantCaptureKeyboard reports whether a fluo widget currently holds
+// keyboard focus. A host running its own input handling alongside fluo in
+// the same window can check this before acting on a key itself — e.g. to
+// avoid also treating a keystroke as a shortcut in its own canvas while a
+// fluo TextBox has focus and is about to consume it via KeyDown.
+func (r *Router) WantCaptureKeyboard() bool {
+	return r.focused != nil
+}
+
+// WantCapturePointer reports whether fluo currently wants pointer input:
+// either a widget holds an active pointer capture (see Capture), or the
+// last-computed hover path (updated by PointerMove) reaches a widget that
+// implements PointerHandler — i.e. the pointer currently sits over
+// interactive fluo UI rather than empty/click-through space. Like
+// WantCaptureKeyboard, this lets a host running its own canvas input in the
+// same window decide, ahead of an actual event, whether fluo is the one
+// that should be acting on the pointer right now.
+func (r *Router) WantCapturePointer() bool {
+	if r.Captured() != nil {
+		return true
+	}
+	for _, w := range r.hover {
+		if _, ok := w.(PointerHandler); ok {
+			return true
+		}
+	}
+	return false
 }

@@ -502,6 +502,87 @@ func TestTextBox(t *testing.T) {
 	})
 }
 
+// TestTextBoxPreedit is the Task 6 Phase B golden: a focused TextBox with
+// committed text "Hello " and an IME composition in progress — preedit
+// "world" spliced in at the caret, with the composition's own caret sitting
+// at offset 3 within it (between "wor" and "ld") rather than at the end of
+// the preedit run. The composition is driven through the real dispatch
+// path (router.CompositionUpdate, not TextBox.OnComposition directly) to
+// prove Router→CompositionHandler wiring end-to-end, exactly like
+// TestTextBox drives focus through OnFocusChanged. The golden should show
+// "Hello " in the normal text color, followed by "world" in the same color
+// but with a thin underline rule beneath it (the provisional/uncommitted
+// cue — see TextBox.renderComposing), and the caret bar positioned inside
+// "world" between "wor" and "ld" rather than after it or at the original
+// pre-composition caret position. No selection highlight is drawn (an
+// active composition never has one — see renderComposing's doc comment),
+// and no timers.Queue is wired, so the caret renders solid.
+func TestTextBoxPreedit(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "textbox_preedit", 200, 40, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tb := controls.NewTextBox(face)
+		tb.SetText("Hello ") // caret ends at 6 (end of committed text)
+
+		router := input.NewRouter()
+		router.SetRoot(tb)
+		router.Focus(tb)                     // fires OnFocusChanged(true) on tb
+		router.CompositionUpdate("world", 3) // preedit "world", caret between "wor" and "ld"
+
+		frame := render.Rect{X: 0, Y: 0, W: 200, H: 40}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(tb, frame)
+		core.RenderWidget(tb, r)
+	})
+}
+
+// TestTextBoxMultiline is the multi-line TextBox golden: a focused,
+// multi-line TextBox reading "Hello fluo\nSecond line\nThird", filling a
+// 220x100 frame. The selection (runes 6..17, "fluo\nSecond") spans the
+// first newline entirely and continues partway into the second line, so
+// the highlight band is visibly split across two lines — the first
+// covering just "fluo" (the tail of line 0) and the second covering just
+// "Second" (the head of line 1) — proving per-line selection intersection
+// (see TextBox.renderMultiline). The caret (solid — no timers.Queue wired)
+// sits at index 17, on line 1 right after "Second" and before " line". As
+// in TestTextBox, focus is set directly via OnFocusChanged and no router is
+// involved.
+func TestTextBoxMultiline(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "textbox_multiline", 220, 100, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tb := controls.NewTextBox(face).SetMultiline(true)
+		tb.SetText("Hello fluo\nSecond line\nThird")
+		tb.Select(6, 17) // "fluo\nSecond": spans the first newline
+		tb.OnFocusChanged(true)
+
+		frame := render.Rect{X: 0, Y: 0, W: 220, H: 100}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(tb, frame)
+		core.RenderWidget(tb, r)
+	})
+}
+
 // TestSliderProgress is the Phase 5 Task 7 golden: a Slider at 0.6 (over the
 // default [0,1] range) stacked above a ProgressBar at 0.3, in a vertical
 // StackPanel gapped by PaddingM, filling a 200x60 frame.
@@ -1114,6 +1195,47 @@ func TestDialog(t *testing.T) {
 		})
 
 		// Second layout pass: arranges the now-open dialog's scrim/card/rows.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		core.RenderWidget(host, r)
+	})
+}
+
+// TestToastStack is the golden for controls.OverlayHost.ShowToast: two
+// stacked toasts ("Saved.", the newer one, and "Connecting...", the older
+// one pushed up above it) in the host's bottom-right corner, each a small
+// raised ButtonFace bevel card around its message — inside a 220x140 frame.
+// Opened via the real ShowToast API (no timers.Queue wired, so both simply
+// stay open with no auto-dismiss) rather than by reaching into any
+// unexported controls internals.
+func TestToastStack(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "toast", 220, 140, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		host := controls.NewOverlayHost()
+		host.SetContent(controls.NewFixed(220, 140, th.Color.WindowBackground))
+
+		frame := render.Rect{X: 0, Y: 0, W: 220, H: 140}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		// First layout pass: gives the host real arranged bounds, so
+		// arrangeToasts has a real corner to stack against.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		host.ShowToast(controls.ToastSpec{Face: face, Message: "Connecting..."})
+		host.ShowToast(controls.ToastSpec{Face: face, Message: "Saved."})
+
+		// Second layout pass: stacks both now-open toasts.
 		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
 		core.ArrangeWidget(host, frame)
 

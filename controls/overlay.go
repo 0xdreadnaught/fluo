@@ -4,6 +4,7 @@ import (
 	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/input"
 	"github.com/0xdreadnaught/fluo/render"
+	"github.com/0xdreadnaught/fluo/timers"
 )
 
 // popupEntry is one entry in an OverlayHost's popup stack: the popup widget
@@ -99,6 +100,26 @@ type OverlayHost struct {
 	popups  []popupEntry
 	router  *input.Router
 
+	// toasts is the stack of currently open transient notifications — see
+	// ShowToast (controls/toast.go). Kept entirely separate from popups: a
+	// toast never engages the modal capture/light-dismiss machinery above
+	// (it isn't opened via showPopup at all), and is stacked/positioned by
+	// its own corner-anchored layout (arrangeToasts) rather than placePopup's
+	// anchor-relative one. It IS included in Children() (after content and
+	// every popup, so it hit-tests and renders topmost of all) so a toast's
+	// own OnPointer (click-to-dismiss) and Render are reached normally.
+	toasts []*toastEntry
+
+	// timerQueue, wired via SetTimers, drives ShowToast's auto-dismiss
+	// timers. nil (the zero value, or after SetTimers(nil)) disables
+	// auto-dismiss for any toast shown from then on — see ShowToast's doc
+	// comment for the degradation. Mirrors ToolTipArea/TextBox/Button's own
+	// SetTimers convention, except a superseded queue's effect on toasts
+	// ALREADY showing is left alone (there is no single pending timer to
+	// stop up front, unlike those widgets — a host may have many open
+	// toasts, each with its own independent timer).
+	timerQueue *timers.Queue
+
 	// popupHover is the last hit-test path (root→leaf, rooted at whichever
 	// popup OnPointer's popupAt found as the CONTAINING popup for the most
 	// recent forwarded Move — not necessarily the topmost one; see
@@ -156,6 +177,16 @@ func (h *OverlayHost) SetContent(w core.Widget) *OverlayHost {
 // to whatever the ordinary (uncaptured) bubble happens to deliver.
 func (h *OverlayHost) SetRouter(r *input.Router) {
 	h.router = r
+}
+
+// SetTimers wires q as the driver for ShowToast's auto-dismiss timers (see
+// its doc comment). Passing nil detaches any previously wired queue; toasts
+// shown from then on simply have no auto-dismiss (see ShowToast). SetTimers
+// is normally called once, e.g. by the host application right after
+// SetRouter — same as every other control's SetTimers method.
+func (h *OverlayHost) SetTimers(q *timers.Queue) *OverlayHost {
+	h.timerQueue = q
+	return h
 }
 
 // ShowPopup opens popup as a MODAL popup, placing it near anchor (a
@@ -338,11 +369,11 @@ func OverlayHostFor(w core.Widget) *OverlayHost {
 	return nil
 }
 
-// MeasureContent measures content and every open popup, each with the full
-// available space (popups size to their own content, same as content
-// itself; neither is narrowed on the host's account). The host's own
-// desired size is content's desired size — popups are overlay-positioned
-// and never affect it.
+// MeasureContent measures content, every open popup, and every open toast,
+// each with the full available space (popups and toasts size to their own
+// content, same as content itself; none is narrowed on the host's account).
+// The host's own desired size is content's desired size — popups and toasts
+// are overlay-positioned and never affect it.
 func (h *OverlayHost) MeasureContent(available render.Size) render.Size {
 	var desired render.Size
 	if h.content != nil {
@@ -352,6 +383,9 @@ func (h *OverlayHost) MeasureContent(available render.Size) render.Size {
 	for _, p := range h.popups {
 		core.MeasureWidget(p.w, available)
 	}
+	for _, tst := range h.toasts {
+		core.MeasureWidget(tst.w, available)
+	}
 	return desired
 }
 
@@ -359,7 +393,8 @@ func (h *OverlayHost) MeasureContent(available render.Size) render.Size {
 // places each popup at its computed position (see placePopup) sized to
 // exactly its own desired size — never stretched or otherwise touched by
 // the popup widget's own alignment, since the rect handed to ArrangeWidget
-// already equals its desired size on both axes.
+// already equals its desired size on both axes — and finally stacks every
+// open toast in the host's corner (see arrangeToasts).
 func (h *OverlayHost) ArrangeContent(bounds render.Rect) {
 	if h.content != nil {
 		core.ArrangeWidget(h.content, bounds)
@@ -368,6 +403,7 @@ func (h *OverlayHost) ArrangeContent(bounds render.Rect) {
 		desired := core.DesiredSizeOf(p.w)
 		core.ArrangeWidget(p.w, placePopup(p.anchor, desired, bounds))
 	}
+	h.arrangeToasts(bounds)
 }
 
 // placePopup computes a popup's absolute placement rect given the anchor it
@@ -410,17 +446,21 @@ func clampF(v, lo, hi float32) float32 {
 	return v
 }
 
-// Children returns [content, popups...] (content first, popups in stack
-// order, topmost last) — see the OverlayHost doc comment for why this order
-// matters to both hit-testing and rendering. A host with no content yet set
-// simply omits it (no nil entries).
+// Children returns [content, popups..., toasts...] (content first, popups in
+// stack order, toasts last in show order) — see the OverlayHost doc comment
+// for why this order matters to both hit-testing and rendering; toasts sit
+// after popups so a toast always hit-tests/renders above even an open modal
+// popup. A host with no content yet set simply omits it (no nil entries).
 func (h *OverlayHost) Children() []core.Widget {
-	out := make([]core.Widget, 0, 1+len(h.popups))
+	out := make([]core.Widget, 0, 1+len(h.popups)+len(h.toasts))
 	if h.content != nil {
 		out = append(out, h.content)
 	}
 	for _, p := range h.popups {
 		out = append(out, p.w)
+	}
+	for _, tst := range h.toasts {
+		out = append(out, tst.w)
 	}
 	return out
 }
