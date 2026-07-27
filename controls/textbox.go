@@ -30,6 +30,15 @@ const caretBlinkPeriod = 530 * time.Millisecond
 // wider than a hairline 1px rule so it stays visible after SDF/AA rounding).
 const caretWidth float32 = 1.5
 
+// preeditUnderlineThickness is the drawn height of the thin underline rule
+// beneath an active IME composition's provisional (uncommitted) preedit run
+// (see OnComposition/renderComposing) — the conventional "this text isn't
+// committed yet" cue most IME-aware text fields draw themselves, since
+// fluo's text.Face has no underline/strikethrough styling of its own to
+// lean on. Matches caretWidth's own convention of a hairline rule sized to
+// stay visible after SDF/AA rounding.
+const preeditUnderlineThickness float32 = 1.5
+
 // TextBox is a focusable, token-styled text input, single-line by default.
 // The data model (text/caret/selection, rune-indexed) and rendering (chrome,
 // selection highlight, caret, horizontal scroll, placeholder) were built in
@@ -109,6 +118,21 @@ type TextBox struct {
 	caretVisible bool
 
 	onChanged func(string)
+
+	// preedit is the active IME composition's provisional (uncommitted)
+	// string, spliced in for display at t.caret while composing is true
+	// (see OnComposition/renderComposing) — entirely separate from runes:
+	// the committed text (Text()) is never touched by an in-progress
+	// composition, only by its eventual commit (via insertText, the same
+	// path every other user edit goes through). preeditCaret is the caret's
+	// RUNE offset WITHIN preedit (not into runes) — see CaretScreenRect,
+	// which places the caret inside the preedit run rather than at t.caret
+	// while composing. Phase B of Task 6 (inline preedit rendering), built
+	// on Task 5's OS candidate-window anchoring (app/ime.go) — see also
+	// input.CompositionHandler, which this type implements.
+	preedit      []rune
+	preeditCaret int
+	composing    bool
 
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
@@ -539,6 +563,62 @@ func (t *TextBox) pasteClipboard(r *input.Router) {
 	t.replaceRange(start, end, s)
 }
 
+// OnComposition implements input.CompositionHandler, the Task 6 Phase B
+// inline-preedit half of IME support (candidate-window anchoring is Phase A,
+// see app/ime.go): while e.Active, it stores e.Preedit/e.CaretPos for
+// renderComposing to splice in at the caret — the committed buffer (runes,
+// Text()) is left completely untouched for the whole composition, so a
+// user's still-in-progress CJK candidate never corrupts what OnChanged has
+// already reported. When the composition ends (e.Active false), the preedit
+// is cleared unconditionally, and — unless e.Canceled — e.Committed is
+// inserted at the caret via insertText, the SAME mutation path every other
+// user edit (typing, Backspace/Delete, Ctrl+X, Ctrl+V) already goes through:
+// this fires OnChanged, InvalidateArrange, and restartBlink exactly as a
+// typed character would, with no special-casing needed here for that. A
+// canceled composition (e.Canceled true, e.g. Escape) or one that ends with
+// an empty commit does no mutation at all beyond clearing the preedit —
+// InvalidateArrange/restartBlink are still called directly on THAT path
+// (insertText's replaceRange only runs, and only calls them itself, when
+// there is actually a commit to insert) so the caret redraws immediately
+// rather than possibly showing a stale preedit remnant until the next
+// unrelated invalidation.
+//
+// Ignored entirely while disabled or unfocused, matching OnKey's own guard.
+// Also ignored while NOT currently composing and e reports the composition
+// has already ended (e.Active false) with nothing to commit — a defensive
+// no-op against a redundant end notification (see the Windows decoder's own
+// doc comment on WM_IME_ENDCOMPOSITION bookkeeping), so a second such
+// notification never re-fires InvalidateArrange/restartBlink for no reason.
+func (t *TextBox) OnComposition(e input.CompositionEvent) {
+	if !t.enabled || !t.focused {
+		return
+	}
+
+	if e.Active {
+		t.preedit = []rune(e.Preedit)
+		t.preeditCaret = clampInt(e.CaretPos, 0, len(t.preedit))
+		t.composing = true
+		t.InvalidateArrange()
+		t.restartBlink()
+		return
+	}
+
+	if !t.composing && e.Committed == "" {
+		return
+	}
+
+	t.composing = false
+	t.preedit = nil
+	t.preeditCaret = 0
+
+	if !e.Canceled && e.Committed != "" {
+		t.insertText(e.Committed)
+		return
+	}
+	t.InvalidateArrange()
+	t.restartBlink()
+}
+
 // AcceptsFocus implements input.Focusable: a disabled textbox never accepts
 // focus.
 func (t *TextBox) AcceptsFocus() bool {
@@ -581,6 +661,14 @@ func (t *TextBox) OnFocusChanged(focused bool) {
 // vertically centered) by lineHeight(); in multi-line mode, bounds origin +
 // padding + (xOfInLine(line,col)-hscroll, line*lineHeight()-vscroll) by
 // lineHeight() — see caretX/xOfInLine and their doc comments.
+//
+// While an IME composition is active (t.composing), the reported rect is
+// shifted to the caret's position INSIDE the preedit run (preeditMeasure of
+// preeditCaret runes further along) rather than the plain t.caret position —
+// so a host anchoring platform UI to this rect (e.g. the Windows candidate
+// window, see app/ime_windows.go) keeps tracking the caret as the user moves
+// it within an in-progress composition, not just the point where the
+// composition began.
 func (t *TextBox) CaretScreenRect() (render.Rect, bool) {
 	if !t.focused {
 		return render.Rect{}, false
@@ -593,13 +681,30 @@ func (t *TextBox) CaretScreenRect() (render.Rect, bool) {
 	if !t.multiline {
 		textY := bounds.Y + (bounds.H-lh)/2
 		cx := textX + t.xOf(t.caret)
+		if t.composing {
+			cx += t.preeditMeasure(t.preeditCaret)
+		}
 		return render.Rect{X: cx, Y: textY, W: caretWidth, H: lh}, true
 	}
 
 	line, col := t.lineCol(t.caret)
 	cx := textX + t.xOfInLine(line, col)
+	if t.composing {
+		cx += t.preeditMeasure(t.preeditCaret)
+	}
 	cy := bounds.Y + pad - t.vscroll + float32(line)*lh
 	return render.Rect{X: cx, Y: cy, W: caretWidth, H: lh}, true
+}
+
+// preeditMeasure returns the pixel width of the first n runes of the active
+// preedit buffer (0 for a nil face, matching xOf's own nil-face convention)
+// — shared by CaretScreenRect and renderComposing/renderComposingMultiline
+// to place the caret INSIDE the preedit run at its own preeditCaret offset.
+func (t *TextBox) preeditMeasure(n int) float32 {
+	if t.face == nil {
+		return 0
+	}
+	return t.face.Measure(string(t.preedit[:n])).W
 }
 
 // lineHeight returns face.LineHeight(), or 0 for a nil face (matching
@@ -1038,6 +1143,11 @@ func (t *TextBox) Render(r render.Renderer) {
 	textY := bounds.Y + (bounds.H-lh)/2
 	textX := bounds.X + pad - t.hscroll
 
+	if t.composing {
+		t.renderComposing(r, textX, textY, lh)
+		return
+	}
+
 	start, end := t.Selection()
 	hasSel := start != end
 
@@ -1081,6 +1191,49 @@ func (t *TextBox) drawTextWithSelection(r render.Renderer, runes []rune, start, 
 	}
 }
 
+// renderComposing is Render's single-line body while an IME composition is
+// active (t.composing): the committed text before the caret, then the
+// provisional preedit run spliced in with a thin underline beneath it
+// (preeditUnderlineThickness — see its own doc comment), then the committed
+// text after the caret, and finally the caret itself — positioned INSIDE
+// the preedit run at preeditCaret (see preeditMeasure/CaretScreenRect's
+// matching math) rather than at t.caret. Deliberately draws no selection
+// highlight: starting a composition is treated like any other edit that
+// collapses a prior selection (OnComposition never itself touches
+// anchor/caret directly, but every real IME input path that reaches it goes
+// through a fresh caret position first), so there is no meaningful
+// selection range left to intersect against the spliced preedit run.
+func (t *TextBox) renderComposing(r render.Renderer, textX, textY, lh float32) {
+	c := t.colors
+	color := c.WindowText
+	if !t.enabled {
+		color = c.GrayText
+	}
+
+	if pre := string(t.runes[:t.caret]); t.face != nil && pre != "" {
+		t.face.Draw(r, render.Point{X: textX, Y: textY}, pre, color)
+	}
+	preeditX := textX + t.xOf(t.caret)
+	x := preeditX
+
+	if preeditStr := string(t.preedit); t.face != nil && preeditStr != "" {
+		t.face.Draw(r, render.Point{X: preeditX, Y: textY}, preeditStr, color)
+		w := t.preeditMeasure(len(t.preedit))
+		underlineY := textY + lh - preeditUnderlineThickness
+		r.FillRect(render.Rect{X: preeditX, Y: underlineY, W: w, H: preeditUnderlineThickness}, color)
+		x = preeditX + w
+	}
+
+	if post := string(t.runes[t.caret:]); t.face != nil && post != "" {
+		t.face.Draw(r, render.Point{X: x, Y: textY}, post, color)
+	}
+
+	if t.caretShown() {
+		cx := preeditX + t.preeditMeasure(t.preeditCaret)
+		r.FillRect(render.Rect{X: cx, Y: textY, W: caretWidth, H: lh}, c.WindowText)
+	}
+}
+
 // renderMultiline is Render's multi-line body (see SetMultiline), invoked
 // in place of Render's single-line drawing (never both — see Render's early
 // return): draws each '\n'-delimited line of displayText() at its own
@@ -1104,6 +1257,11 @@ func (t *TextBox) renderMultiline(r render.Renderer, bounds render.Rect) {
 
 	s, color := t.displayText()
 	lines := strings.Split(s, "\n")
+
+	if t.composing {
+		t.renderComposingMultiline(r, bounds, textX, lh, lines, color)
+		return
+	}
 
 	start, end := t.Selection()
 
@@ -1134,6 +1292,54 @@ func (t *TextBox) renderMultiline(r render.Renderer, bounds render.Rect) {
 		cx := textX + t.xOfInLine(line, col)
 		cy := bounds.Y + pad - t.vscroll + float32(line)*lh
 		r.FillRect(render.Rect{X: cx, Y: cy, W: caretWidth, H: lh}, c.WindowText)
+	}
+}
+
+// renderComposingMultiline is renderMultiline's counterpart to
+// renderComposing (see its doc comment for why no selection highlight is
+// drawn): lines/color are the same displayText()/strings.Split split
+// renderMultiline itself computed. Only the caret's own line has the
+// preedit spliced in — an IME composition string never itself contains a
+// newline (see OnComposition/CaretScreenRect, which make the same
+// assumption) — every other line draws exactly as renderMultiline's
+// unselected branch would.
+func (t *TextBox) renderComposingMultiline(r render.Renderer, bounds render.Rect, textX, lh float32, lines []string, color render.Color) {
+	pad := t.metrics.PaddingM
+	caretLine, caretCol := t.lineCol(t.caret)
+
+	for i, line := range lines {
+		lineY := bounds.Y + pad - t.vscroll + float32(i)*lh
+
+		if i != caretLine {
+			if t.face != nil && line != "" {
+				t.face.Draw(r, render.Point{X: textX, Y: lineY}, line, color)
+			}
+			continue
+		}
+
+		runes := []rune(line)
+		if pre := string(runes[:caretCol]); t.face != nil && pre != "" {
+			t.face.Draw(r, render.Point{X: textX, Y: lineY}, pre, color)
+		}
+		preeditX := textX + t.xOfInLine(i, caretCol)
+		x := preeditX
+
+		if preeditStr := string(t.preedit); t.face != nil && preeditStr != "" {
+			t.face.Draw(r, render.Point{X: preeditX, Y: lineY}, preeditStr, color)
+			w := t.preeditMeasure(len(t.preedit))
+			underlineY := lineY + lh - preeditUnderlineThickness
+			r.FillRect(render.Rect{X: preeditX, Y: underlineY, W: w, H: preeditUnderlineThickness}, color)
+			x = preeditX + w
+		}
+
+		if post := string(runes[caretCol:]); t.face != nil && post != "" {
+			t.face.Draw(r, render.Point{X: x, Y: lineY}, post, color)
+		}
+
+		if t.caretShown() {
+			cx := preeditX + t.preeditMeasure(t.preeditCaret)
+			r.FillRect(render.Rect{X: cx, Y: lineY, W: caretWidth, H: lh}, t.colors.WindowText)
+		}
 	}
 }
 
@@ -1191,6 +1397,17 @@ func (t *TextBox) RenderOverlay(r render.Renderer) {}
 // and the caret's own line in multi-line mode (homeTarget/endTarget).
 func (t *TextBox) OnKey(e *input.KeyEvent) {
 	if !t.enabled || !t.focused || e.Action != input.Press {
+		return
+	}
+
+	// An active IME composition owns keyboard input until it ends (see
+	// OnComposition): on Windows, WM_CHAR/normal key messages simply don't
+	// arrive for the keystrokes composing a CJK candidate in the first
+	// place, so this guard mainly defends against programmatic misuse (a
+	// caller driving OnComposition directly — e.g. a test — while also
+	// dispatching an ordinary KeyDown) mutating the committed buffer out
+	// from under an unfinished composition.
+	if t.composing {
 		return
 	}
 

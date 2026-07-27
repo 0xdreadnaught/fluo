@@ -1404,3 +1404,144 @@ func TestTextBoxCtrlRightDegradesToPlainRight(t *testing.T) {
 		t.Fatalf("Ctrl+Right: Selection() = (%d,%d), want collapsed (Ctrl without Shift does not extend)", s, e2)
 	}
 }
+
+// TestTextBoxOnCompositionUpdateSetsPreeditWithoutTouchingCommittedText is
+// Task 6 Phase B's core contract: an Active composition update stores the
+// provisional preedit string for display, and does NOT mutate Text() or
+// fire OnChanged — the committed buffer stays exactly what it was before
+// the composition began, until (and unless) it actually commits.
+func TestTextBoxOnCompositionUpdateSetsPreeditWithoutTouchingCommittedText(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "he")
+	var changed []string
+	tb.OnChanged(func(s string) { changed = append(changed, s) })
+
+	r.CompositionUpdate("ん", 1)
+
+	if got := tb.Text(); got != "he" {
+		t.Fatalf("Text() during composition = %q, want %q (committed text untouched)", got, "he")
+	}
+	if len(changed) != 0 {
+		t.Fatalf("OnChanged calls = %v, want none (a provisional composition update never fires it)", changed)
+	}
+	if !tb.composing {
+		t.Fatal("composing = false after CompositionUpdate, want true")
+	}
+	if got := string(tb.preedit); got != "ん" {
+		t.Fatalf("preedit = %q, want %q", got, "ん")
+	}
+	if tb.preeditCaret != 1 {
+		t.Fatalf("preeditCaret = %d, want 1", tb.preeditCaret)
+	}
+}
+
+// TestTextBoxOnCompositionCommitInsertsAndClearsPreedit verifies the commit
+// path funnels through the same insertText/replaceRange mutation every
+// other user edit uses: Text() reflects the inserted string, OnChanged
+// fires with it, the caret lands just after it, and the preedit is cleared
+// (composing back to false).
+func TestTextBoxOnCompositionCommitInsertsAndClearsPreedit(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "he")
+	tb.SetCaret(2)
+	var changed []string
+	tb.OnChanged(func(s string) { changed = append(changed, s) })
+
+	r.CompositionUpdate("ん", 1)
+	r.CompositionCommit("ん")
+
+	if got := tb.Text(); got != "heん" {
+		t.Fatalf("Text() after commit = %q, want %q", got, "heん")
+	}
+	if len(changed) != 1 || changed[0] != "heん" {
+		t.Fatalf("OnChanged calls = %v, want [%q]", changed, "heん")
+	}
+	if want := len([]rune("heん")); tb.Caret() != want {
+		t.Fatalf("Caret() after commit = %d, want %d (just after the inserted text)", tb.Caret(), want)
+	}
+	if tb.composing {
+		t.Fatal("composing = true after commit, want false")
+	}
+	if len(tb.preedit) != 0 {
+		t.Fatalf("preedit after commit = %q, want empty", string(tb.preedit))
+	}
+}
+
+// TestTextBoxOnCompositionCancelClearsPreeditWithoutInserting is the
+// Escape/cancel path: no insertion, no OnChanged, preedit cleared.
+func TestTextBoxOnCompositionCancelClearsPreeditWithoutInserting(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "he")
+	var changed []string
+	tb.OnChanged(func(s string) { changed = append(changed, s) })
+
+	r.CompositionUpdate("ん", 1)
+	r.CompositionCancel()
+
+	if got := tb.Text(); got != "he" {
+		t.Fatalf("Text() after cancel = %q, want %q (nothing inserted)", got, "he")
+	}
+	if len(changed) != 0 {
+		t.Fatalf("OnChanged calls = %v, want none", changed)
+	}
+	if tb.composing {
+		t.Fatal("composing = true after cancel, want false")
+	}
+	if len(tb.preedit) != 0 {
+		t.Fatalf("preedit after cancel = %q, want empty", string(tb.preedit))
+	}
+}
+
+// TestTextBoxOnCompositionIgnoredWhenNotFocused mirrors OnKey's own
+// disabled/unfocused guard: an unfocused (or disabled) TextBox must not
+// react to composition events at all — no preedit, no mutation.
+func TestTextBoxOnCompositionIgnoredWhenNotFocused(t *testing.T) {
+	tb := NewTextBox(buttonFace(t))
+	tb.SetText("he")
+	// Deliberately never focused (OnFocusChanged(true) never called).
+
+	tb.OnComposition(input.CompositionEvent{Preedit: "ん", CaretPos: 1, Active: true})
+
+	if tb.composing {
+		t.Fatal("composing = true while unfocused, want false")
+	}
+	if got := tb.Text(); got != "he" {
+		t.Fatalf("Text() = %q, want %q (unchanged)", got, "he")
+	}
+}
+
+// TestTextBoxKeyDownIgnoredWhileComposing is the defensive OnKey guard: a
+// rune KeyDown delivered mid-composition must not insert into the committed
+// buffer (an active composition owns keyboard input until it ends — see
+// OnKey's own doc comment).
+func TestTextBoxKeyDownIgnoredWhileComposing(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "he")
+
+	r.CompositionUpdate("ん", 1)
+
+	e := &input.KeyEvent{Action: input.Press, Key: 0, Rune: 'x', Router: r}
+	tb.OnKey(e)
+
+	if e.Handled {
+		t.Fatal("OnKey during composition: Handled = true, want false (ignored)")
+	}
+	if got := tb.Text(); got != "he" {
+		t.Fatalf("Text() after KeyDown during composition = %q, want %q (unchanged)", got, "he")
+	}
+}
+
+// TestTextBoxKeyDownStillWorksWhenNotComposing is the regression guard for
+// the OnKey composing check above: with no composition active (the default,
+// zero-value state), a normal rune KeyDown must behave exactly as before
+// Phase B — inserted at the caret, Handled set.
+func TestTextBoxKeyDownStillWorksWhenNotComposing(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "he")
+	tb.SetCaret(2)
+
+	e := &input.KeyEvent{Action: input.Press, Key: 0, Rune: 'y', Router: r}
+	tb.OnKey(e)
+
+	if !e.Handled {
+		t.Fatal("OnKey: Handled = false, want true")
+	}
+	if got := tb.Text(); got != "hey" {
+		t.Fatalf("Text() = %q, want %q", got, "hey")
+	}
+}

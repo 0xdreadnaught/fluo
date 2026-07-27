@@ -32,3 +32,25 @@ func updateIMEAnchor(router *input.Router, anchor imeAnchor) {
 		anchor.SetCaretRect(r)
 	}
 }
+
+// imeComposition is app's seam for installing (and later tearing down) the
+// platform decoder that turns raw OS IME composition messages into
+// input.Router.CompositionUpdate/CompositionCommit/CompositionCancel calls
+// — Task 6 Phase B's Windows-only counterpart to imeAnchor's Phase A
+// candidate-window anchoring above. installIMEComposition's Windows
+// implementation (ime_composition_windows.go) subclasses the glfw window's
+// WndProc via user32 SetWindowLongPtrW to intercept
+// WM_IME_STARTCOMPOSITION/WM_IME_COMPOSITION/WM_IME_ENDCOMPOSITION; every
+// other platform's implementation (ime_composition_other.go) is a no-op, on
+// the same reasoning as noopIMEAnchor.
+//
+// Unlike imeAnchor (SetCaretRect, polled once per frame from Run's own
+// loop), there is nothing for Run to call after setup beyond eventual
+// teardown: composition delivery happens entirely inside the (possibly
+// subclassed) WndProc, asynchronously to the frame loop, dispatching
+// straight into the router as OS messages arrive. Close releases whatever
+// platform resources setup acquired (restoring the original WndProc on
+// Windows); Run defers it.
+type imeComposition interface {
+	Close()
+}

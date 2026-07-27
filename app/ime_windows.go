@@ -69,17 +69,27 @@ type windowsIMEAnchor struct {
 	hwnd syscall.Handle
 }
 
-// newIMEAnchor queries win's HWND via glfw's Win32-native accessor
-// ((*glfw.Window).GetWin32Window() C.HWND, native_windows.go in the go-gl/
-// glfw binding) and wraps it as a windowsIMEAnchor. The conversion from
-// glfw's cgo-typed C.HWND to syscall.Handle goes through unsafe.Pointer
-// without this file itself importing "C" or cgo: HWND is a Win32 opaque
-// pointer type (DECLARE_HANDLE), so the returned value is pointer-shaped and
-// convertible via unsafe.Pointer purely from Go's conversion rules, with no
-// need to name the cgo type here.
+// hwndOf converts win's native Win32 window handle (via glfw's
+// GetWin32Window() C.HWND accessor) to a syscall.Handle — the ONE place in
+// this package that performs the cgo-typed-to-stdlib-syscall conversion
+// described below, so both newIMEAnchor here and
+// ime_composition_windows.go's installIMEComposition (which subclasses the
+// same window's WndProc for inline preedit — Task 6 Phase B) share a single
+// acquisition point rather than each re-deriving the HWND their own way.
+//
+// The conversion from glfw's cgo-typed C.HWND to syscall.Handle goes through
+// unsafe.Pointer without this file itself importing "C" or cgo: HWND is a
+// Win32 opaque pointer type (DECLARE_HANDLE), so the returned value is
+// pointer-shaped and convertible via unsafe.Pointer purely from Go's
+// conversion rules, with no need to name the cgo type here.
+func hwndOf(win *glfw.Window) syscall.Handle {
+	return syscall.Handle(uintptr(unsafe.Pointer(win.GetWin32Window())))
+}
+
+// newIMEAnchor queries win's HWND (via hwndOf) and wraps it as a
+// windowsIMEAnchor.
 func newIMEAnchor(win *glfw.Window) imeAnchor {
-	hwnd := syscall.Handle(uintptr(unsafe.Pointer(win.GetWin32Window())))
-	return &windowsIMEAnchor{hwnd: hwnd}
+	return &windowsIMEAnchor{hwnd: hwndOf(win)}
 }
 
 // SetCaretRect implements imeAnchor: anchors the OS IME composition window's

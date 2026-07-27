@@ -253,6 +253,8 @@ func Run(cfg Config, frame func(*Ctx)) error {
 	router := surf.Router()
 	router.SetClipboard(glfwClipboard{win: win})
 	imeAnc := newIMEAnchor(win)
+	imeComp := installIMEComposition(win, router)
+	defer imeComp.Close()
 	cursors := newStandardCursors()
 	curCursor := input.CursorArrow
 	curMods := input.Modifiers(0)

@@ -462,6 +462,51 @@ func (r *Router) Focused() core.Widget {
 	return r.focused
 }
 
+// dispatchComposition delivers e to the focused widget's OnComposition, if
+// one is focused and implements CompositionHandler — shared by
+// CompositionUpdate/CompositionCommit/CompositionCancel below, mirroring
+// FocusedCaretRect's own "focused, and implements the optional interface"
+// guard. Silently does nothing otherwise (nothing focused, or the focused
+// widget isn't composition-aware, e.g. a Button) — a platform IME decoder
+// calls these unconditionally as OS messages arrive, with no reason to
+// track focus state of its own.
+func (r *Router) dispatchComposition(e CompositionEvent) {
+	if r.focused == nil {
+		return
+	}
+	if ch, ok := r.focused.(CompositionHandler); ok {
+		ch.OnComposition(e)
+	}
+}
+
+// CompositionUpdate delivers a provisional (uncommitted) IME composition
+// update to the focused widget — preedit is the current composition string
+// and caretPos is the caret's rune offset within it. A no-op if nothing is
+// focused, or the focused widget doesn't implement CompositionHandler. See
+// CompositionEvent's doc comment for the full Active/Preedit/CaretPos
+// contract this constructs.
+func (r *Router) CompositionUpdate(preedit string, caretPos int) {
+	r.dispatchComposition(CompositionEvent{Preedit: preedit, CaretPos: caretPos, Active: true})
+}
+
+// CompositionCommit delivers a finalized IME composition to the focused
+// widget: text is the composed string to insert at the caret, and the
+// composition is over (Active false, Canceled false). A no-op if nothing is
+// focused, or the focused widget doesn't implement CompositionHandler.
+func (r *Router) CompositionCommit(text string) {
+	r.dispatchComposition(CompositionEvent{Committed: text})
+}
+
+// CompositionCancel delivers a composition-canceled notification to the
+// focused widget: the composition ended without a commit (e.g. the user
+// pressed Escape, or focus moved away mid-composition) — any preedit the
+// widget was displaying should be discarded, with nothing inserted. A no-op
+// if nothing is focused, or the focused widget doesn't implement
+// CompositionHandler.
+func (r *Router) CompositionCancel() {
+	r.dispatchComposition(CompositionEvent{Canceled: true})
+}
+
 // FocusedCaretRect returns the currently focused widget's caret rectangle
 // (window logical coordinates), for a host anchoring platform UI to it — see
 // CaretRector's doc comment. false when nothing is focused, or the focused

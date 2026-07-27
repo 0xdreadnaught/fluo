@@ -502,6 +502,50 @@ func TestTextBox(t *testing.T) {
 	})
 }
 
+// TestTextBoxPreedit is the Task 6 Phase B golden: a focused TextBox with
+// committed text "Hello " and an IME composition in progress — preedit
+// "world" spliced in at the caret, with the composition's own caret sitting
+// at offset 3 within it (between "wor" and "ld") rather than at the end of
+// the preedit run. The composition is driven through the real dispatch
+// path (router.CompositionUpdate, not TextBox.OnComposition directly) to
+// prove Router→CompositionHandler wiring end-to-end, exactly like
+// TestTextBox drives focus through OnFocusChanged. The golden should show
+// "Hello " in the normal text color, followed by "world" in the same color
+// but with a thin underline rule beneath it (the provisional/uncommitted
+// cue — see TextBox.renderComposing), and the caret bar positioned inside
+// "world" between "wor" and "ld" rather than after it or at the original
+// pre-composition caret position. No selection highlight is drawn (an
+// active composition never has one — see renderComposing's doc comment),
+// and no timers.Queue is wired, so the caret renders solid.
+func TestTextBoxPreedit(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "textbox_preedit", 200, 40, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tb := controls.NewTextBox(face)
+		tb.SetText("Hello ") // caret ends at 6 (end of committed text)
+
+		router := input.NewRouter()
+		router.SetRoot(tb)
+		router.Focus(tb)                     // fires OnFocusChanged(true) on tb
+		router.CompositionUpdate("world", 3) // preedit "world", caret between "wor" and "ld"
+
+		frame := render.Rect{X: 0, Y: 0, W: 200, H: 40}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(tb, frame)
+		core.RenderWidget(tb, r)
+	})
+}
+
 // TestTextBoxMultiline is the multi-line TextBox golden: a focused,
 // multi-line TextBox reading "Hello fluo\nSecond line\nThird", filling a
 // 220x100 frame. The selection (runes 6..17, "fluo\nSecond") spans the
