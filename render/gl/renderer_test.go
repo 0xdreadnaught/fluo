@@ -502,6 +502,43 @@ func TestTextBox(t *testing.T) {
 	})
 }
 
+// TestTextBoxMultiline is the multi-line TextBox golden: a focused,
+// multi-line TextBox reading "Hello fluo\nSecond line\nThird", filling a
+// 220x100 frame. The selection (runes 6..17, "fluo\nSecond") spans the
+// first newline entirely and continues partway into the second line, so
+// the highlight band is visibly split across two lines — the first
+// covering just "fluo" (the tail of line 0) and the second covering just
+// "Second" (the head of line 1) — proving per-line selection intersection
+// (see TextBox.renderMultiline). The caret (solid — no timers.Queue wired)
+// sits at index 17, on line 1 right after "Second" and before " line". As
+// in TestTextBox, focus is set directly via OnFocusChanged and no router is
+// involved.
+func TestTextBoxMultiline(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "textbox_multiline", 220, 100, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tb := controls.NewTextBox(face).SetMultiline(true)
+		tb.SetText("Hello fluo\nSecond line\nThird")
+		tb.Select(6, 17) // "fluo\nSecond": spans the first newline
+		tb.OnFocusChanged(true)
+
+		frame := render.Rect{X: 0, Y: 0, W: 220, H: 100}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(tb, frame)
+		core.RenderWidget(tb, r)
+	})
+}
+
 // TestSliderProgress is the Phase 5 Task 7 golden: a Slider at 0.6 (over the
 // default [0,1] range) stacked above a ProgressBar at 0.3, in a vertical
 // StackPanel gapped by PaddingM, filling a 200x60 frame.
