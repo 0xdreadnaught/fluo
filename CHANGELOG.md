@@ -8,6 +8,16 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-27
+
+### Fixed
+
+- The GL golden-image test harness (`render/gl/gltest`) now skips cleanly on a
+  headless machine (no display or GL driver) instead of panicking. Some glfw
+  builds log the platform error from `Init` and return `nil`, which bypassed
+  the existing skip guard; the context-setup phase is now guarded so the test
+  is skipped rather than failed.
+
 ## [0.3.0] - 2026-07-27
 
 ### Added
