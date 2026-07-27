@@ -53,6 +53,12 @@ type probe struct {
 	renders     int
 	measures    int
 	pointerHits []string
+
+	// handled: when true, OnPointer/OnKey mark the event Handled, so tests
+	// can exercise the consumed return the input/Surface bool forwarders
+	// propagate (see TestPointerButtonForwardsConsumed,
+	// TestKeyDownForwardsConsumed).
+	handled bool
 }
 
 func (p *probe) MeasureContent(available render.Size) render.Size {
@@ -70,6 +76,17 @@ func (p *probe) OnPointer(e *input.PointerEvent) {
 		p.pointerHits = append(p.pointerHits, "release")
 	case input.Wheel:
 		p.pointerHits = append(p.pointerHits, "wheel")
+	}
+	if p.handled {
+		e.Handled = true
+	}
+}
+
+// OnKey marks the event Handled when p.handled is set, mirroring OnPointer
+// above — used to exercise KeyDown's consumed return via Surface.
+func (p *probe) OnKey(e *input.KeyEvent) {
+	if p.handled {
+		e.Handled = true
 	}
 }
 
@@ -228,5 +245,97 @@ func TestRouterReturnsSameRouterUsedBySetRoot(t *testing.T) {
 
 	if s.Router().Root() != core.Widget(root) {
 		t.Fatal("Router().Root() is not the widget passed to SetRoot")
+	}
+}
+
+// TestPointerButtonForwardsConsumed proves Surface.PointerButton's return
+// value is exactly what the underlying Router.PointerButton reports, not a
+// value Surface derives independently — a press over a widget that marks
+// itself handled comes back true; the same press with handling turned off
+// comes back false.
+func TestPointerButtonForwardsConsumed(t *testing.T) {
+	s := app.NewSurface()
+	root := &probe{handled: true}
+	s.SetRoot(root)
+	r := &mockRenderer{}
+	s.Frame(r, 100, 100, 100, 100) // lay out so root fills 0,0..100,100
+
+	if consumed := s.PointerButton(input.ButtonLeft, true, render.Point{X: 5, Y: 5}, 0); !consumed {
+		t.Fatalf("PointerButton over a handling widget: consumed = false, want true")
+	}
+
+	root.handled = false
+	if consumed := s.PointerButton(input.ButtonLeft, true, render.Point{X: 5, Y: 5}, 0); consumed {
+		t.Fatalf("PointerButton over a non-handling widget: consumed = true, want false")
+	}
+}
+
+// TestKeyDownForwardsConsumed proves Surface.KeyDown's return value mirrors
+// Router.KeyDown: true only once root actually holds focus (via
+// Router().Focus, forwarded through) and marks itself handled; false with
+// no widget focused, even with the same handled flag set.
+func TestKeyDownForwardsConsumed(t *testing.T) {
+	s := app.NewSurface()
+	root := &probe{handled: true}
+	s.SetRoot(root)
+
+	if consumed := s.KeyDown(input.Key('A'), 'a', 0); consumed {
+		t.Fatalf("KeyDown with nothing focused: consumed = true, want false")
+	}
+
+	s.Router().Focus(root)
+	if consumed := s.KeyDown(input.Key('A'), 'a', 0); !consumed {
+		t.Fatalf("KeyDown to a focused, handling widget: consumed = false, want true")
+	}
+}
+
+// TestWantCapturePointerForwardsRouter proves Surface.WantCapturePointer
+// mirrors Router().WantCapturePointer() as the pointer moves on/off
+// interactive fluo UI.
+func TestWantCapturePointerForwardsRouter(t *testing.T) {
+	s := app.NewSurface()
+	root := &probe{}
+	s.SetRoot(root)
+	r := &mockRenderer{}
+	s.Frame(r, 100, 100, 100, 100) // lay out so root fills 0,0..100,100
+
+	if s.WantCapturePointer() != s.Router().WantCapturePointer() {
+		t.Fatal("Surface.WantCapturePointer() diverges from Router().WantCapturePointer() before any move")
+	}
+	if s.WantCapturePointer() {
+		t.Fatalf("WantCapturePointer() before any move = true, want false")
+	}
+
+	s.PointerMove(render.Point{X: 5, Y: 5}, 0) // over root
+	if s.WantCapturePointer() != s.Router().WantCapturePointer() {
+		t.Fatal("Surface.WantCapturePointer() diverges from Router().WantCapturePointer() after hovering root")
+	}
+	if !s.WantCapturePointer() {
+		t.Fatalf("WantCapturePointer() over root = false, want true")
+	}
+}
+
+// TestWantCaptureKeyboardForwardsRouter proves Surface.WantCaptureKeyboard
+// mirrors Router().WantCaptureKeyboard() as focus is set and cleared.
+func TestWantCaptureKeyboardForwardsRouter(t *testing.T) {
+	s := app.NewSurface()
+	root := &probe{}
+	s.SetRoot(root)
+
+	if s.WantCaptureKeyboard() {
+		t.Fatalf("WantCaptureKeyboard() with nothing focused = true, want false")
+	}
+
+	s.Router().Focus(root)
+	if s.WantCaptureKeyboard() != s.Router().WantCaptureKeyboard() {
+		t.Fatal("Surface.WantCaptureKeyboard() diverges from Router().WantCaptureKeyboard() with root focused")
+	}
+	if !s.WantCaptureKeyboard() {
+		t.Fatalf("WantCaptureKeyboard() with root focused = false, want true")
+	}
+
+	s.Router().Focus(nil)
+	if s.WantCaptureKeyboard() {
+		t.Fatalf("WantCaptureKeyboard() after clearing focus = true, want false")
 	}
 }

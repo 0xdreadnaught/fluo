@@ -108,9 +108,13 @@ func (s *Surface) PointerMove(p render.Point, mods input.Modifiers) input.Cursor
 	return s.router.PointerMove(p, mods)
 }
 
-// PointerButton forwards to Router().PointerButton.
-func (s *Surface) PointerButton(b input.Button, press bool, p render.Point, mods input.Modifiers) {
-	s.router.PointerButton(b, press, p, mods)
+// PointerButton forwards to Router().PointerButton. The returned consumed
+// reports whether a fluo widget took the press/release, for a caller
+// driving its own canvas input alongside fluo in the same window (see
+// input.Router.PointerButton's doc comment) — when true, the caller should
+// not also act on this event itself.
+func (s *Surface) PointerButton(b input.Button, press bool, p render.Point, mods input.Modifiers) bool {
+	return s.router.PointerButton(b, press, p, mods)
 }
 
 // PointerWheel forwards to Router().PointerWheel.
@@ -118,12 +122,32 @@ func (s *Surface) PointerWheel(delta, p render.Point, mods input.Modifiers) {
 	s.router.PointerWheel(delta, p, mods)
 }
 
-// KeyDown forwards to Router().KeyDown.
-func (s *Surface) KeyDown(k input.Key, r rune, mods input.Modifiers) {
-	s.router.KeyDown(k, r, mods)
+// KeyDown forwards to Router().KeyDown. The returned consumed reports
+// whether a fluo widget currently holding keyboard focus took the key (see
+// input.Router.KeyDown's doc comment) — when true, the caller should not
+// also act on this key itself.
+func (s *Surface) KeyDown(k input.Key, r rune, mods input.Modifiers) bool {
+	return s.router.KeyDown(k, r, mods)
 }
 
 // KeyUp forwards to Router().KeyUp.
 func (s *Surface) KeyUp(k input.Key, mods input.Modifiers) {
 	s.router.KeyUp(k, mods)
+}
+
+// WantCapturePointer forwards to Router().WantCapturePointer: true when
+// fluo currently wants pointer input (an active capture, or the pointer
+// hovering interactive fluo UI). A caller driving its own canvas input
+// alongside fluo in the same window can check this ahead of an event to
+// decide whether fluo is the one that should act on the pointer right now.
+func (s *Surface) WantCapturePointer() bool {
+	return s.router.WantCapturePointer()
+}
+
+// WantCaptureKeyboard forwards to Router().WantCaptureKeyboard: true when a
+// fluo widget currently holds keyboard focus. A caller driving its own
+// canvas input alongside fluo in the same window can check this ahead of a
+// key event to decide whether fluo is the one that should act on it.
+func (s *Surface) WantCaptureKeyboard() bool {
+	return s.router.WantCaptureKeyboard()
 }
