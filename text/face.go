@@ -2,6 +2,7 @@ package text
 
 import (
 	"math"
+	"sync"
 
 	"golang.org/x/image/font/sfnt"
 
@@ -18,6 +19,39 @@ import (
 type Face struct {
 	Font   *Font
 	SizePx float32
+
+	// OnGlyphDropped, if set, is called when Draw cannot place a rune's
+	// coverage mask in the shared atlas (see atlasSize) — in practice, the
+	// atlas is full. Default nil: Draw silently skips the glyph, same as
+	// before this field existed, so leaving it unset changes nothing. It
+	// fires at most once per distinct rune over fa's lifetime, so a
+	// persistently full atlas reports once per glyph rather than spamming
+	// every frame that rune is drawn.
+	OnGlyphDropped func(r rune)
+
+	droppedMu sync.Mutex
+	dropped   map[rune]bool
+}
+
+// reportDropped invokes fa.OnGlyphDropped for r, if set, the first time r is
+// reported dropped for fa; later calls for the same r are ignored so a full
+// atlas doesn't call back every frame.
+func (fa *Face) reportDropped(r rune) {
+	if fa.OnGlyphDropped == nil {
+		return
+	}
+	fa.droppedMu.Lock()
+	already := fa.dropped[r]
+	if !already {
+		if fa.dropped == nil {
+			fa.dropped = make(map[rune]bool)
+		}
+		fa.dropped[r] = true
+	}
+	fa.droppedMu.Unlock()
+	if !already {
+		fa.OnGlyphDropped(r)
+	}
 }
 
 // NewFace returns a Face for f at sizePx, ensuring f's shared glyph
@@ -118,6 +152,11 @@ func (fa *Face) Draw(r render.Renderer, at render.Point, s string, c render.Colo
 				},
 				Src: e.uv,
 			})
+		} else if err != nil {
+			// The glyph couldn't be placed (the atlas is full); still
+			// advance the pen below, same as before OnGlyphDropped existed
+			// — this only reports the failure, it never changes it.
+			fa.reportDropped(ch)
 		}
 
 		penX += fa.Font.advance(gi, fa.SizePx)

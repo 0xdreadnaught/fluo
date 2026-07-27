@@ -178,6 +178,57 @@ func TestFaceDrawBaselineConsistent(t *testing.T) {
 	}
 }
 
+// TestFaceOnGlyphDroppedAtlasFull is the atlas-full-surfacing unit test.
+// Actually filling the 1024x1024 coverage atlas would take thousands of
+// distinct real glyphs, so instead this forces the atlas into the "full"
+// state directly (same package, so the shelf-packer fields are reachable)
+// and asserts Draw reports each distinct dropped rune to OnGlyphDropped
+// exactly once, even though 'A' appears twice in the drawn string.
+func TestFaceOnGlyphDroppedAtlasFull(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := NewFace(f, 16)
+	atlas := fa.Font.sharedAtlas()
+
+	// Push the coverage shelf packer past the atlas's bottom edge so every
+	// subsequent glyphCoverage call fails with "atlas full", without
+	// needing to actually rasterize enough real glyphs to fill it.
+	atlas.covCursorY = atlasSize
+	atlas.covRowH = 0
+
+	var dropped []rune
+	fa.OnGlyphDropped = func(r rune) { dropped = append(dropped, r) }
+
+	rr := &recordingRenderer{scale: 1}
+	fa.Draw(rr, render.Point{}, "AAB", render.RGB(255, 255, 255))
+
+	if want := []rune{'A', 'B'}; len(dropped) != len(want) || dropped[0] != want[0] || dropped[1] != want[1] {
+		t.Fatalf("dropped = %v, want %v (one call per distinct rune, in first-seen order)", dropped, want)
+	}
+	if len(rr.glyphQuads) != 0 {
+		t.Errorf("glyphQuads = %v, want none (every glyph dropped)", rr.glyphQuads)
+	}
+}
+
+// TestFaceOnGlyphDroppedDefaultNil asserts the default (unset)
+// OnGlyphDropped changes nothing: Draw must not panic when the callback is
+// nil, even along the dropped-glyph path.
+func TestFaceOnGlyphDroppedDefaultNil(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := NewFace(f, 16)
+	atlas := fa.Font.sharedAtlas()
+	atlas.covCursorY = atlasSize
+	atlas.covRowH = 0
+
+	rr := &recordingRenderer{scale: 1}
+	fa.Draw(rr, render.Point{}, "A", render.RGB(255, 255, 255)) // must not panic
+}
+
 func TestMeasure(t *testing.T) {
 	f, _ := Load(goregular.TTF)
 	fa := NewFace(f, 16)

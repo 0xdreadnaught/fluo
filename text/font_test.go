@@ -2,6 +2,8 @@ package text
 
 import (
 	"math"
+	"os"
+	"strings"
 	"testing"
 
 	"golang.org/x/image/font/gofont/goregular"
@@ -123,5 +125,65 @@ func TestRasterGlyphIntegerBearings(t *testing.T) {
 		if sum == 0 {
 			t.Errorf("rasterGlyph(%q): mask has no coverage", r)
 		}
+	}
+}
+
+// TestLoadRejectsCollection is the .ttc-detection unit test: Load must
+// reject collection data with an error that points the caller at
+// LoadCollection, rather than surfacing sfnt.Parse's opaque "invalid single
+// font" message. The fabricated header only needs the 4-byte "ttcf" tag
+// Load checks for; it never reaches sfnt.Parse.
+func TestLoadRejectsCollection(t *testing.T) {
+	fake := []byte("ttcf\x00\x00\x00\x00\x00\x00\x00\x00")
+	_, err := Load(fake)
+	if err == nil {
+		t.Fatal("Load(collection bytes) = nil error, want an error directing to LoadCollection")
+	}
+	if !strings.Contains(err.Error(), "LoadCollection") {
+		t.Errorf("Load(collection bytes) error = %q, want it to mention LoadCollection", err)
+	}
+}
+
+// TestLoadCollectionRealFont exercises LoadCollection and
+// LoadCollectionMember against a real .ttc, skipping if one isn't present
+// on the machine running the test (we don't want to embed a large font in
+// the repo just for this).
+func TestLoadCollectionRealFont(t *testing.T) {
+	const path = "/mnt/c/Windows/Fonts/msyh.ttc"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Skipf("real .ttc not available at %s: %v", path, err)
+	}
+
+	fonts, err := LoadCollection(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fonts) < 1 {
+		t.Fatal("LoadCollection: NumFonts < 1")
+	}
+
+	// Member 0 of a CJK system face should have (and be able to rasterize)
+	// a glyph for a common Han character.
+	gi, ok := fonts[0].glyphIndex('中')
+	if !ok {
+		t.Fatal("msyh.ttc member 0: no glyph for 中")
+	}
+	mask, _, _, err := fonts[0].rasterGlyph(gi, 24, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := mask.Bounds(); b.Dx() <= 0 || b.Dy() <= 0 {
+		t.Errorf("msyh.ttc member 0: empty raster for 中: %v", b)
+	}
+
+	// LoadCollectionMember(data, 0) should agree with LoadCollection's
+	// first member.
+	member0, err := LoadCollectionMember(data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := member0.glyphIndex('中'); !ok {
+		t.Error("LoadCollectionMember(data, 0): no glyph for 中")
 	}
 }

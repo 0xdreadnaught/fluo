@@ -1,6 +1,7 @@
 package text
 
 import (
+	"fmt"
 	"sync"
 
 	"golang.org/x/image/font"
@@ -28,13 +29,70 @@ type Font struct {
 	atlasMu sync.Mutex
 }
 
-// Load parses raw TrueType/OpenType font bytes into a Font.
+// collectionMagic is the four-byte "ttcf" tag that opens a TrueType/OpenType
+// Collection (.ttc): multiple fonts packed into one file, e.g. the CJK
+// system faces that ship several weights/scripts under one name. sfnt.Parse
+// rejects this data with a low-level "invalid single font" message that
+// doesn't say what to do about it; Load checks for the tag itself so it can
+// point the caller at LoadCollection instead.
+const collectionMagic = "ttcf"
+
+// Load parses raw TrueType/OpenType font bytes into a Font. Font collection
+// data (.ttc, identified by the "ttcf" tag) is rejected with an error
+// pointing to LoadCollection or LoadCollectionMember, since a collection
+// holds more than one font and Load returns exactly one.
 func Load(ttf []byte) (*Font, error) {
+	if len(ttf) >= 4 && string(ttf[:4]) == collectionMagic {
+		return nil, fmt.Errorf("text: Load: data is a font collection (.ttc); use LoadCollection or LoadCollectionMember instead")
+	}
 	sf, err := sfnt.Parse(ttf)
 	if err != nil {
 		return nil, err
 	}
-	return &Font{sf: sf}, nil
+	return newFont(sf), nil
+}
+
+// LoadCollection parses raw font-collection bytes (.ttc: a TrueType/OpenType
+// Collection holding multiple fonts, e.g. the CJK system faces that bundle
+// several weights or scripts in one file) into one Font per member, in
+// collection order.
+func LoadCollection(data []byte) ([]*Font, error) {
+	c, err := sfnt.ParseCollection(data)
+	if err != nil {
+		return nil, err
+	}
+	n := c.NumFonts()
+	fonts := make([]*Font, n)
+	for i := 0; i < n; i++ {
+		sf, err := c.Font(i)
+		if err != nil {
+			return nil, fmt.Errorf("text: LoadCollection: font %d: %w", i, err)
+		}
+		fonts[i] = newFont(sf)
+	}
+	return fonts, nil
+}
+
+// LoadCollectionMember parses raw font-collection bytes (see LoadCollection)
+// and returns only the member at index, without materializing every other
+// font in the collection.
+func LoadCollectionMember(data []byte, index int) (*Font, error) {
+	c, err := sfnt.ParseCollection(data)
+	if err != nil {
+		return nil, err
+	}
+	sf, err := c.Font(index)
+	if err != nil {
+		return nil, fmt.Errorf("text: LoadCollectionMember: font %d: %w", index, err)
+	}
+	return newFont(sf), nil
+}
+
+// newFont builds a Font from an already-parsed sfnt.Font. Load,
+// LoadCollection, and LoadCollectionMember all funnel through this so a
+// single font and a collection member are constructed identically.
+func newFont(sf *sfnt.Font) *Font {
+	return &Font{sf: sf}
 }
 
 // sharedAtlas returns f's shared SDF glyph atlas, creating it on first
