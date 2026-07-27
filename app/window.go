@@ -252,6 +252,7 @@ func Run(cfg Config, frame func(*Ctx)) error {
 	surf := NewSurface()
 	router := surf.Router()
 	router.SetClipboard(glfwClipboard{win: win})
+	imeAnc := newIMEAnchor(win)
 	cursors := newStandardCursors()
 	curCursor := input.CursorArrow
 	curMods := input.Modifiers(0)
@@ -382,6 +383,14 @@ func Run(cfg Config, frame func(*Ctx)) error {
 		r.Begin(fbW, fbH, scale)
 		frame(ctx)
 		r.End()
+
+		// Anchor the OS IME candidate/composition window (Windows only —
+		// see app/ime_windows.go/ime_other.go) to whatever caret the
+		// frame callback just laid out/focused, so it tracks focus and
+		// caret movement one frame after either changes rather than a
+		// frame behind (frame's own layout/focus calls into ctx.Input
+		// already ran by this point).
+		updateIMEAnchor(router, imeAnc)
 
 		win.SwapBuffers()
 	}

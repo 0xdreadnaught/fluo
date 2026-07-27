@@ -139,3 +139,17 @@ type Focusable interface {
 type CursorShaper interface {
 	Cursor() Cursor
 }
+
+// CaretRector is an optional interface for focusable widgets that expose a
+// text caret's on-screen rectangle, so a host can anchor platform UI to it —
+// e.g. the Windows OS IME candidate/composition window (see app.Run),
+// positioned at the focused text caret rather than a default screen corner.
+// See Router.FocusedCaretRect, which type-asserts the currently focused
+// widget against this interface.
+type CaretRector interface {
+	// CaretScreenRect returns the caret's rectangle in window logical
+	// coordinates — the same space PointerEvent.Pos and core.Widget bounds
+	// are expressed in — and false when the widget currently has no caret
+	// to report (e.g. it isn't focused).
+	CaretScreenRect() (render.Rect, bool)
+}

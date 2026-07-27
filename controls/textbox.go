@@ -568,6 +568,40 @@ func (t *TextBox) OnFocusChanged(focused bool) {
 	}
 }
 
+// CaretScreenRect implements input.CaretRector: the caret's rectangle in
+// window logical coordinates, for a host anchoring platform UI to it (e.g.
+// app's Windows IME candidate-window anchor). false while unfocused —
+// mirroring caretShown()'s own "never while unfocused" rule, though unlike
+// caretShown() this does NOT further depend on the blink phase: the anchored
+// UI should track the caret's position regardless of whether the drawn caret
+// bar happens to be mid-blink-off this particular frame.
+//
+// The math mirrors Render/renderMultiline's own caret placement exactly: in
+// single-line mode, bounds origin + padding + (xOf(caret)-hscroll,
+// vertically centered) by lineHeight(); in multi-line mode, bounds origin +
+// padding + (xOfInLine(line,col)-hscroll, line*lineHeight()-vscroll) by
+// lineHeight() — see caretX/xOfInLine and their doc comments.
+func (t *TextBox) CaretScreenRect() (render.Rect, bool) {
+	if !t.focused {
+		return render.Rect{}, false
+	}
+	bounds := t.Bounds()
+	pad := t.metrics.PaddingM
+	lh := t.lineHeight()
+	textX := bounds.X + pad - t.hscroll
+
+	if !t.multiline {
+		textY := bounds.Y + (bounds.H-lh)/2
+		cx := textX + t.xOf(t.caret)
+		return render.Rect{X: cx, Y: textY, W: caretWidth, H: lh}, true
+	}
+
+	line, col := t.lineCol(t.caret)
+	cx := textX + t.xOfInLine(line, col)
+	cy := bounds.Y + pad - t.vscroll + float32(line)*lh
+	return render.Rect{X: cx, Y: cy, W: caretWidth, H: lh}, true
+}
+
 // lineHeight returns face.LineHeight(), or 0 for a nil face (matching
 // TextBlock's nil-face convention).
 func (t *TextBox) lineHeight() float32 {

@@ -1011,3 +1011,109 @@ func TestWantCapturePointer(t *testing.T) {
 		t.Fatalf("WantCapturePointer() while captured = false, want true")
 	}
 }
+
+// --- FocusedCaretRect ---
+
+// caretProbe is a minimal input.CaretRector: reports a fixed rect while ok is
+// true, false otherwise — kept separate from probe (used pervasively by
+// every other test in this file) so those tests don't need to know anything
+// about caret rects.
+type caretProbe struct {
+	core.Element
+	rect render.Rect
+	ok   bool
+}
+
+func (c *caretProbe) AcceptsFocus() bool                   { return true }
+func (c *caretProbe) CaretScreenRect() (render.Rect, bool) { return c.rect, c.ok }
+
+func TestFocusedCaretRectNothingFocused(t *testing.T) {
+	root := controls.NewCanvas()
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	if _, ok := r.FocusedCaretRect(); ok {
+		t.Fatal("FocusedCaretRect() ok = true with nothing focused, want false")
+	}
+}
+
+// TestFocusedCaretRectFocusedNonCaretProvider covers a focused widget that
+// simply doesn't implement CaretRector (e.g. a Button) — FocusedCaretRect
+// must report false rather than panicking on the failed type assertion.
+func TestFocusedCaretRectFocusedNonCaretProvider(t *testing.T) {
+	a := &probe{name: "a", focusable: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	root := controls.NewCanvas().Add(a, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+	r.Focus(a)
+
+	if _, ok := r.FocusedCaretRect(); ok {
+		t.Fatal("FocusedCaretRect() ok = true for a focused non-CaretRector widget, want false")
+	}
+}
+
+func TestFocusedCaretRectFakeProvider(t *testing.T) {
+	c := &caretProbe{rect: render.Rect{X: 5, Y: 6, W: 2, H: 14}, ok: true}
+	root := controls.NewCanvas().Add(c, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+	r.Focus(c)
+
+	got, ok := r.FocusedCaretRect()
+	if !ok {
+		t.Fatal("FocusedCaretRect() ok = false with a focused CaretRector, want true")
+	}
+	if got != c.rect {
+		t.Fatalf("FocusedCaretRect() = %v, want %v", got, c.rect)
+	}
+}
+
+// TestFocusedCaretRectFakeProviderReportsFalse covers a focused CaretRector
+// that itself has nothing to report right now (mirrors TextBox.
+// CaretScreenRect's own "false" branches, e.g. transiently unfocused from
+// its own point of view) — FocusedCaretRect must pass that false straight
+// through rather than treating "implements CaretRector" alone as enough.
+func TestFocusedCaretRectFakeProviderReportsFalse(t *testing.T) {
+	c := &caretProbe{ok: false}
+	root := controls.NewCanvas().Add(c, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+	r.Focus(c)
+
+	if _, ok := r.FocusedCaretRect(); ok {
+		t.Fatal("FocusedCaretRect() ok = true when the CaretRector itself reports false, want false")
+	}
+}
+
+// TestFocusedCaretRectRealTextBox is the end-to-end wiring check with the
+// real control CaretRector is meant for: FocusedCaretRect must return
+// exactly what the focused TextBox's own CaretScreenRect reports.
+func TestFocusedCaretRectRealTextBox(t *testing.T) {
+	tb := controls.NewTextBox(nil)
+	tb.SetText("hi")
+	tb.SetWidth(200)
+	tb.SetHeight(30)
+	root := controls.NewCanvas().Add(tb, 0, 0)
+	layout(root, 300, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+	r.Focus(tb)
+
+	got, ok := r.FocusedCaretRect()
+	if !ok {
+		t.Fatal("FocusedCaretRect() ok = false with a focused TextBox, want true")
+	}
+	want, _ := tb.CaretScreenRect()
+	if got != want {
+		t.Fatalf("FocusedCaretRect() = %v, want %v (TextBox.CaretScreenRect())", got, want)
+	}
+}

@@ -1324,6 +1324,69 @@ func TestTextBoxDisabledMultilineIgnoresKeys(t *testing.T) {
 	}
 }
 
+// --- IME anchor: CaretScreenRect ---
+
+func TestTextBoxCaretScreenRectFalseWhenUnfocused(t *testing.T) {
+	tb := NewTextBox(buttonFace(t))
+	tb.SetText("hello")
+	tb.SetWidth(300)
+	tb.SetHeight(30)
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: 300, H: 30})
+
+	if _, ok := tb.CaretScreenRect(); ok {
+		t.Fatal("CaretScreenRect() ok = true while unfocused, want false")
+	}
+}
+
+// TestTextBoxCaretScreenRectSingleLine locks CaretScreenRect's math against
+// the exact same expression Render uses to place the drawn caret bar
+// (textX+xOf(caret), vertically centered by lineHeight()) — so the IME
+// anchor and the visible caret can never drift apart.
+func TestTextBoxCaretScreenRectSingleLine(t *testing.T) {
+	tb, _ := newFocusedTextBox(t, "hello")
+	tb.SetCaret(3)
+
+	got, ok := tb.CaretScreenRect()
+	if !ok {
+		t.Fatal("CaretScreenRect() ok = false while focused, want true")
+	}
+
+	bounds := tb.Bounds()
+	pad := tb.metrics.PaddingM
+	lh := tb.lineHeight()
+	wantX := bounds.X + pad - tb.hscroll + tb.xOf(3)
+	wantY := bounds.Y + (bounds.H-lh)/2
+
+	if got.X != wantX || got.Y != wantY || got.H != lh {
+		t.Fatalf("CaretScreenRect() = %+v, want X=%v Y=%v H=%v", got, wantX, wantY, lh)
+	}
+}
+
+// TestTextBoxCaretScreenRectMultiline mirrors the single-line case for a
+// multi-line box: the caret sits on its own (line, col), so both X and Y
+// must reflect renderMultiline's per-line placement (xOfInLine + vscroll),
+// not the single-line xOf/centered-Y math above.
+func TestTextBoxCaretScreenRectMultiline(t *testing.T) {
+	tb, _ := newFocusedMultilineTextBox(t, "abc\nde")
+	tb.SetCaret(5) // line 1 ("de"), col 1
+
+	got, ok := tb.CaretScreenRect()
+	if !ok {
+		t.Fatal("CaretScreenRect() ok = false while focused, want true")
+	}
+
+	bounds := tb.Bounds()
+	pad := tb.metrics.PaddingM
+	lh := tb.lineHeight()
+	line, col := tb.lineCol(tb.Caret())
+	wantX := bounds.X + pad - tb.hscroll + tb.xOfInLine(line, col)
+	wantY := bounds.Y + pad - tb.vscroll + float32(line)*lh
+
+	if got.X != wantX || got.Y != wantY || got.H != lh {
+		t.Fatalf("CaretScreenRect() = %+v, want X=%v Y=%v H=%v (line=%d col=%d)", got, wantX, wantY, lh, line, col)
+	}
+}
+
 func TestTextBoxCtrlRightDegradesToPlainRight(t *testing.T) {
 	tb, r := newFocusedTextBox(t, "hello")
 	tb.SetCaret(2)

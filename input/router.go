@@ -462,6 +462,21 @@ func (r *Router) Focused() core.Widget {
 	return r.focused
 }
 
+// FocusedCaretRect returns the currently focused widget's caret rectangle
+// (window logical coordinates), for a host anchoring platform UI to it — see
+// CaretRector's doc comment. false when nothing is focused, or the focused
+// widget doesn't implement CaretRector (e.g. a Button) — mirroring
+// WantCaptureKeyboard/WantCapturePointer's "nothing to report" convention.
+func (r *Router) FocusedCaretRect() (render.Rect, bool) {
+	if r.focused == nil {
+		return render.Rect{}, false
+	}
+	if cr, ok := r.focused.(CaretRector); ok {
+		return cr.CaretScreenRect()
+	}
+	return render.Rect{}, false
+}
+
 // focusableList returns the widgets under (and including) w that are both
 // visible (core.IsVisible) and implement Focusable with AcceptsFocus() ==
 // true, in DFS document order (a widget before its children, children in
