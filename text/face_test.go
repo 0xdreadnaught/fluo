@@ -2,12 +2,36 @@ package text
 
 import (
 	"math"
+	"os"
 	"testing"
 
 	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/sfnt"
 
 	"github.com/0xdreadnaught/fluo/render"
 )
+
+// cjkFallbackPath is the real .ttc used to exercise Face's fallback chain
+// against an actual font that covers Han characters goregular (a Latin-only
+// text face) lacks — see TestLoadCollectionRealFont in font_test.go for the
+// same skip-if-missing pattern (we don't embed a large font in the repo
+// just for these tests).
+const cjkFallbackPath = "/mnt/c/Windows/Fonts/msyh.ttc"
+
+// loadCJKFallback loads member 0 of cjkFallbackPath, skipping the calling
+// test if the file isn't present on the machine running it.
+func loadCJKFallback(t *testing.T) *Font {
+	t.Helper()
+	data, err := os.ReadFile(cjkFallbackPath)
+	if err != nil {
+		t.Skipf("real .ttc not available at %s: %v", cjkFallbackPath, err)
+	}
+	f, err := LoadCollectionMember(data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
 
 // recordingRenderer is a minimal render.Renderer stub for exercising
 // Face.Draw's crisp HD-text path without a GPU: it records DrawGlyphs and
@@ -241,5 +265,159 @@ func TestMeasure(t *testing.T) {
 	}
 	if fa.Measure("").W != 0 {
 		t.Error("empty string width != 0")
+	}
+}
+
+// TestResolveGlyphNoFallback is the graceful-tofu regression test: a Face
+// with no fallback chain (the NewFace path) must resolve every rune to its
+// own Font, even one goregular has no glyph for — falling back to glyph
+// index 0 (.notdef), never an error or panic. This is the same behavior
+// Measure and Draw had before Face gained fallback support.
+func TestResolveGlyphNoFallback(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := NewFace(f, 16)
+
+	if srcFont, gi := fa.resolveGlyph('A'); srcFont != f || gi == 0 {
+		t.Errorf("resolveGlyph('A') = (%p, %v), want (primary, nonzero glyph)", srcFont, gi)
+	}
+	srcFont, gi := fa.resolveGlyph('中')
+	if srcFont != f {
+		t.Errorf("resolveGlyph(中) font = %p, want primary %p (no fallback chain)", srcFont, f)
+	}
+	if gi != 0 {
+		t.Errorf("resolveGlyph(中) glyph = %v, want 0 (.notdef; goregular has no CJK coverage)", gi)
+	}
+
+	// Must not panic, and must still measure/draw something (the notdef
+	// glyph typically has a nonzero advance).
+	fa.Measure("中")
+	rr := &recordingRenderer{scale: 1}
+	fa.Draw(rr, render.Point{}, "中", render.RGB(255, 255, 255))
+}
+
+// TestResolveGlyphWithFallback is the fallback-resolution unit test: given
+// a primary (goregular, Latin-only) and a fallback that covers Han
+// characters, resolveGlyph must resolve a glyph the primary has ('A') to
+// the primary, and one only the fallback has (中) to the fallback — using
+// the fallback's own glyph index, not the primary's.
+func TestResolveGlyphWithFallback(t *testing.T) {
+	primary, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback := loadCJKFallback(t)
+	fa := NewFaceWithFallback(primary, []*Font{fallback}, 16)
+
+	if srcFont, gi := fa.resolveGlyph('A'); srcFont != primary || gi == 0 {
+		t.Errorf("resolveGlyph('A') = (%p, %v), want (primary %p, nonzero glyph)", srcFont, gi, primary)
+	}
+
+	srcFont, gi := fa.resolveGlyph('中')
+	if srcFont != fallback {
+		t.Errorf("resolveGlyph(中) font = %p, want fallback %p", srcFont, fallback)
+	}
+	wantGi, ok := fallback.glyphIndex('中')
+	if !ok {
+		t.Fatal("fallback font unexpectedly has no glyph for 中")
+	}
+	if gi != wantGi {
+		t.Errorf("resolveGlyph(中) glyph = %v, want fallback's own index %v", gi, wantGi)
+	}
+}
+
+// TestAddFallback asserts AddFallback appends to the chain, returns fa for
+// chaining, and that a rune resolved only via an appended fallback picks it
+// up (same outcome as passing it to NewFaceWithFallback up front).
+func TestAddFallback(t *testing.T) {
+	primary, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback := loadCJKFallback(t)
+
+	fa := NewFace(primary, 16)
+	if len(fa.Fallbacks) != 0 {
+		t.Fatalf("fresh NewFace: Fallbacks = %v, want empty", fa.Fallbacks)
+	}
+
+	ret := fa.AddFallback(fallback)
+	if ret != fa {
+		t.Error("AddFallback did not return fa for chaining")
+	}
+	if len(fa.Fallbacks) != 1 || fa.Fallbacks[0] != fallback {
+		t.Errorf("Fallbacks = %v, want [%p]", fa.Fallbacks, fallback)
+	}
+
+	if srcFont, _ := fa.resolveGlyph('中'); srcFont != fallback {
+		t.Errorf("after AddFallback, resolveGlyph(中) font = %p, want fallback %p", srcFont, fallback)
+	}
+}
+
+// TestFaceFallbackMeasureAgreement is the Measure-agreement test: measuring
+// a mixed string (Latin from the primary, one CJK glyph only the fallback
+// covers) must equal the sum of per-glyph advances computed from each
+// rune's resolveGlyph source font — the same resolution Draw uses — with
+// kerning applied only between consecutive glyphs sharing a source font.
+// Single-font Measure (TestMeasure above) is unchanged by this: with no
+// fallback chain, every rune resolves to the same font and this reduces to
+// the pre-fallback computation.
+func TestFaceFallbackMeasureAgreement(t *testing.T) {
+	primary, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback := loadCJKFallback(t)
+	fa := NewFaceWithFallback(primary, []*Font{fallback}, 16)
+
+	const s = "Hi 中文 fluo"
+	var want float32
+	var prevFont *Font
+	var prevGi sfnt.GlyphIndex
+	hasPrev := false
+	for _, r := range s {
+		srcFont, gi := fa.resolveGlyph(r)
+		if hasPrev && prevFont == srcFont {
+			want += prevFont.kern(prevGi, gi, fa.SizePx)
+		}
+		want += srcFont.advance(gi, fa.SizePx)
+		prevFont, prevGi, hasPrev = srcFont, gi, true
+	}
+
+	got := fa.Measure(s).W
+	if got != want {
+		t.Errorf("Measure(%q).W = %v, want %v (sum of per-glyph advances from resolved source fonts)", s, got, want)
+	}
+}
+
+// TestFaceFallbackDrawBatchesPerTexture is the Draw-batching test for a
+// mixed string: Face.Draw must call DrawGlyphs once per distinct source
+// font's atlas texture — here, twice, once for the primary's Latin glyphs
+// and once for the fallback's CJK glyph — rather than once for the whole
+// string (which would only be correct when every glyph shares one atlas).
+// It also re-confirms (mirroring TestFaceDrawUsesDrawGlyphs) that the
+// single-font path still collapses to exactly one DrawGlyphs call.
+func TestFaceFallbackDrawBatchesPerTexture(t *testing.T) {
+	primary, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback := loadCJKFallback(t)
+	fa := NewFaceWithFallback(primary, []*Font{fallback}, 16)
+
+	rr := &recordingRenderer{scale: 1}
+	fa.Draw(rr, render.Point{X: 2, Y: 3}, "Hi 中", render.RGB(255, 255, 255))
+	if rr.glyphCalls != 2 {
+		t.Errorf("mixed-font string: DrawGlyphs called %d times, want 2 (one per distinct source-font atlas)", rr.glyphCalls)
+	}
+
+	// Same Face, Latin-only string: every glyph resolves to the primary,
+	// so this must still collapse to one DrawGlyphs call.
+	rr2 := &recordingRenderer{scale: 1}
+	fa.Draw(rr2, render.Point{X: 2, Y: 3}, "Hi", render.RGB(255, 255, 255))
+	if rr2.glyphCalls != 1 {
+		t.Errorf("Latin-only string on a fallback-capable Face: DrawGlyphs called %d times, want 1", rr2.glyphCalls)
 	}
 }

@@ -58,6 +58,9 @@ func TestHasGlyph(t *testing.T) {
 	if f.HasGlyph(0xE0000) {
 		t.Error("HasGlyph(U+E0000) = true, want false (unassigned private-use codepoint)")
 	}
+	if f.HasGlyph('中') {
+		t.Error("HasGlyph(中, U+4E2D) = true, want false (goregular is a Latin text font, no CJK coverage) — Face's fallback chain relies on this being false")
+	}
 	t.Logf("goregular HasGlyph(U+2713 checkmark) = %v", f.HasGlyph('✓'))
 }
 
