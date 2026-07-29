@@ -8,6 +8,18 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-29
+
+### Added
+
+- **Font fallback chains** — `text.NewFaceWithFallback(primary, fallbacks, sizePx)`
+  and `Face.AddFallback` build a `Face` from a primary font plus an ordered list
+  of fallback fonts. Codepoints the primary font lacks are rasterized from the
+  first fallback that has a real glyph, so mixed-script text (for example Latin
+  alongside CJK) no longer renders as `.notdef` tofu boxes. Vertical metrics and
+  glyph-atlas sizing stay driven by the primary font so layout is unchanged;
+  only the per-glyph rasterization source and advance fall through the chain.
+
 ## [0.3.1] - 2026-07-27
 
 ### Fixed
