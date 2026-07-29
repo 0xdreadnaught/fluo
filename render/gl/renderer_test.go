@@ -2,6 +2,7 @@ package gl_test
 
 import (
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/go-gl/gl/v3.3-core/gl"
@@ -181,6 +182,40 @@ func TestHDText(t *testing.T) {
 		r.End()
 
 		gltest.CheckGolden(t, "hdtext", fb.Image())
+	})
+}
+
+// cjkFallbackPath is a real CJK system .ttc used to exercise Face's
+// fallback chain against a font that actually covers Han characters
+// goregular (a Latin-only text face) lacks. We don't embed a large font in
+// the repo just for this golden, so TestFaceFallback skips if it's absent
+// — same pattern as text.TestLoadCollectionRealFont.
+const cjkFallbackPath = "/mnt/c/Windows/Fonts/msyh.ttc"
+
+// TestFaceFallback is the font-fallback golden: a Face built via
+// text.NewFaceWithFallback (primary goregular + a CJK fallback) draws a
+// string mixing Latin glyphs (rendered from the primary's atlas) with a
+// Han character the primary lacks (rendered from the fallback's own
+// atlas), exercising Face.Draw's per-source-font texture batching — see
+// text.Face.Draw. Skipped if the CJK system font isn't present, or (via
+// gltest.Run) if no GL context is available.
+func TestFaceFallback(t *testing.T) {
+	data, err := os.ReadFile(cjkFallbackPath)
+	if err != nil {
+		t.Skipf("real .ttc not available at %s: %v", cjkFallbackPath, err)
+	}
+	fallback, err := text.LoadCollectionMember(data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testFrame(t, "face_fallback", 200, 60, func(r *glr.Renderer) {
+		primary, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFaceWithFallback(primary, []*text.Font{fallback}, 24)
+		face.Draw(r, render.Point{X: 8, Y: 8}, "fluo 中文", render.RGB(255, 255, 255))
 	})
 }
 

@@ -16,9 +16,22 @@ import (
 // distinct (glyph, device px) pair is rasterized once at that size (see
 // Atlas.glyphCoverage) since — unlike the retained SDF path — coverage
 // masks aren't resolution-independent.
+//
+// Fallbacks holds an ordered fallback chain: for each rune, Measure and
+// Draw resolve the source font as the first of [Font, Fallbacks...] that
+// actually has a glyph for it (see resolveGlyph), so a codepoint the
+// primary font lacks can still render instead of falling back to
+// .notdef, so long as some font later in the chain covers it. Line
+// metrics (Ascent, LineHeight) and the device-px rasterization size
+// always come from Font alone, never from a fallback, so mixing in a
+// fallback glyph never shifts a line's baseline. Each font in the chain
+// — primary or fallback — rasterizes into its own Atlas (see
+// Font.sharedAtlas), so Draw groups glyph quads by source font and
+// issues one DrawGlyphs call per distinct atlas texture.
 type Face struct {
-	Font   *Font
-	SizePx float32
+	Font      *Font
+	Fallbacks []*Font
+	SizePx    float32
 
 	// OnGlyphDropped, if set, is called when Draw cannot place a rune's
 	// coverage mask in the shared atlas (see atlasSize) — in practice, the
@@ -55,10 +68,62 @@ func (fa *Face) reportDropped(r rune) {
 }
 
 // NewFace returns a Face for f at sizePx, ensuring f's shared glyph
-// atlas exists.
+// atlas exists. The returned Face has no fallback chain: any rune f
+// lacks a glyph for renders as .notdef, exactly as before Face gained
+// fallback support. Use NewFaceWithFallback to set one up front, or
+// AddFallback to grow one afterward.
 func NewFace(f *Font, sizePx float32) *Face {
 	f.sharedAtlas()
 	return &Face{Font: f, SizePx: sizePx}
+}
+
+// NewFaceWithFallback returns a Face for primary at sizePx with an
+// ordered fallback chain: for each rune, Measure and Draw use the first
+// font in [primary, fallbacks...] that actually has a glyph for it (see
+// resolveGlyph), falling back to primary's own .notdef glyph if none of
+// them do. Line metrics and rasterization size still come from primary
+// alone (see the Face doc comment). Every font's shared atlas —
+// primary's and each fallback's — is ensured up front, same as NewFace
+// does for a single font. fallbacks is copied, so the caller's slice
+// can be reused or modified afterward without affecting the Face.
+func NewFaceWithFallback(primary *Font, fallbacks []*Font, sizePx float32) *Face {
+	primary.sharedAtlas()
+	fbs := make([]*Font, len(fallbacks))
+	copy(fbs, fallbacks)
+	for _, fb := range fbs {
+		fb.sharedAtlas()
+	}
+	return &Face{Font: primary, Fallbacks: fbs, SizePx: sizePx}
+}
+
+// AddFallback appends font to the end of fa's fallback chain (see
+// NewFaceWithFallback), ensuring font's shared atlas exists, and returns
+// fa for chaining.
+func (fa *Face) AddFallback(font *Font) *Face {
+	font.sharedAtlas()
+	fa.Fallbacks = append(fa.Fallbacks, font)
+	return fa
+}
+
+// resolveGlyph returns the first font in [fa.Font, fa.Fallbacks...] that
+// has a real glyph for r (see Font.HasGlyph), and that font's glyph
+// index for r. If none of them do, it returns fa.Font and fa.Font's own
+// glyph index for r — typically glyph 0 (.notdef) — so a rune no font in
+// the chain covers still renders exactly as a fallback-less Face would:
+// gracefully, never an error or panic. Measure and Draw both resolve
+// through this method so their advances (and so text width and caret
+// positions) never disagree.
+func (fa *Face) resolveGlyph(r rune) (*Font, sfnt.GlyphIndex) {
+	if gi, ok := fa.Font.glyphIndex(r); ok {
+		return fa.Font, gi
+	}
+	for _, fb := range fa.Fallbacks {
+		if gi, ok := fb.glyphIndex(r); ok {
+			return fb, gi
+		}
+	}
+	gi, _ := fa.Font.glyphIndex(r)
+	return fa.Font, gi
 }
 
 // LineHeight returns the recommended distance between successive
@@ -77,23 +142,38 @@ func (fa *Face) Ascent() float32 {
 }
 
 // Measure returns the size s occupies when drawn with fa: width is the
-// sum of glyph advances plus kerning between consecutive glyphs,
-// height is LineHeight (text is laid out on a single line for now).
-// Runes with no glyph in the font fall back to glyph index 0
-// (.notdef), matching Draw.
+// sum of glyph advances plus kerning between consecutive glyphs, height
+// is LineHeight (text is laid out on a single line for now; LineHeight
+// always comes from fa.Font, never a fallback — see the Face doc
+// comment). Each rune resolves to a source font via resolveGlyph — the
+// same resolution Draw uses, so the two never disagree — and its
+// advance comes from that source font; runes no font in the chain
+// covers fall back to fa.Font's glyph index 0 (.notdef), matching Draw.
+// Kerning is only applied between two consecutive glyphs resolved from
+// the same source font, since a kern table's glyph indices aren't
+// meaningful across fonts.
 func (fa *Face) Measure(s string) render.Size {
 	var w float32
+	var prevFont *Font
 	var prev sfnt.GlyphIndex
 	hasPrev := false
 	for _, r := range s {
-		gi, _ := fa.Font.glyphIndex(r)
-		if hasPrev {
-			w += fa.Font.kern(prev, gi, fa.SizePx)
+		srcFont, gi := fa.resolveGlyph(r)
+		if hasPrev && prevFont == srcFont {
+			w += prevFont.kern(prev, gi, fa.SizePx)
 		}
-		w += fa.Font.advance(gi, fa.SizePx)
-		prev, hasPrev = gi, true
+		w += srcFont.advance(gi, fa.SizePx)
+		prevFont, prev, hasPrev = srcFont, gi, true
 	}
 	return render.Size{W: w, H: fa.LineHeight()}
+}
+
+// glyphBatch accumulates the glyph quads Draw resolves to a single source
+// font's coverage atlas, so they can be submitted to the renderer in one
+// DrawGlyphs call against that atlas's texture.
+type glyphBatch struct {
+	atlas *Atlas
+	quads []render.GlyphQuad
 }
 
 // Draw renders s with fa, with at as the top-left corner of the text box;
@@ -105,14 +185,18 @@ func (fa *Face) Measure(s string) render.Size {
 // kerning are computed from the unsnapped logical-px metrics path and the
 // pen is never snapped cumulatively, only each glyph's own draw origin —
 // so accumulated advance/Measure width never drifts from the snapped
-// pixels actually drawn. Glyph quads are gathered from the Font's shared
-// coverage atlas and submitted to r in a single DrawGlyphs batch. Runes
-// with no glyph in the font fall back to glyph index 0 (.notdef); glyphs
-// with no visible coverage (e.g. space) are skipped but still advance the
-// pen.
+// pixels actually drawn. Each rune resolves to a source font via
+// resolveGlyph — the same resolution Measure uses — and rasterizes into
+// that font's own shared coverage atlas; since a fallback chain can mix
+// glyphs from several fonts (and so several atlas textures) in one string,
+// quads are gathered per source font and submitted to r as one DrawGlyphs
+// call per distinct atlas texture. A Face with no fallback chain resolves
+// every rune to the same font, so this still collapses to exactly one
+// DrawGlyphs call, unchanged from before Face gained fallback support.
+// Runes no font in the chain covers fall back to fa.Font's glyph index 0
+// (.notdef); glyphs with no visible coverage (e.g. space) are skipped but
+// still advance the pen.
 func (fa *Face) Draw(r render.Renderer, at render.Point, s string, c render.Color) {
-	atlas := fa.Font.sharedAtlas()
-
 	scale := r.Scale()
 	if scale <= 0 {
 		scale = 1
@@ -126,16 +210,22 @@ func (fa *Face) Draw(r render.Renderer, at render.Point, s string, c render.Colo
 	baseline := at.Y + fa.Ascent()
 	baseline = float32(math.Round(float64(baseline)*float64(scale))) / scale
 
-	var quads []render.GlyphQuad
+	// batches groups quads by source font, in first-seen order, so Draw
+	// issues one DrawGlyphs call per distinct atlas texture below.
+	var batches []*glyphBatch
+	byFont := make(map[*Font]*glyphBatch)
+
 	penX := at.X // logical px; advances by the UNSNAPPED metric each glyph, never snapped itself
+	var prevFont *Font
 	var prev sfnt.GlyphIndex
 	hasPrev := false
 	for _, ch := range s {
-		gi, _ := fa.Font.glyphIndex(ch)
-		if hasPrev {
-			penX += fa.Font.kern(prev, gi, fa.SizePx)
+		srcFont, gi := fa.resolveGlyph(ch)
+		if hasPrev && prevFont == srcFont {
+			penX += prevFont.kern(prev, gi, fa.SizePx)
 		}
 
+		atlas := srcFont.sharedAtlas()
 		if e, err := atlas.glyphCoverage(gi, px); err == nil && !e.empty {
 			// e.bearing{X,Y} are device px at this entry's px size;
 			// convert to logical (/scale) before combining with the
@@ -143,7 +233,13 @@ func (fa *Face) Draw(r render.Renderer, at render.Point, s string, c render.Colo
 			// origin to a whole device pixel.
 			gx := float32(math.Round(float64(penX+e.bearingX/scale)*float64(scale))) / scale
 			gy := float32(math.Round(float64(baseline+e.bearingY/scale)*float64(scale))) / scale
-			quads = append(quads, render.GlyphQuad{
+			b, ok := byFont[srcFont]
+			if !ok {
+				b = &glyphBatch{atlas: atlas}
+				byFont[srcFont] = b
+				batches = append(batches, b)
+			}
+			b.quads = append(b.quads, render.GlyphQuad{
 				Dst: render.Rect{
 					X: gx,
 					Y: gy,
@@ -159,11 +255,11 @@ func (fa *Face) Draw(r render.Renderer, at render.Point, s string, c render.Colo
 			fa.reportDropped(ch)
 		}
 
-		penX += fa.Font.advance(gi, fa.SizePx)
-		prev, hasPrev = gi, true
+		penX += srcFont.advance(gi, fa.SizePx)
+		prevFont, prev, hasPrev = srcFont, gi, true
 	}
 
-	if len(quads) > 0 {
-		r.DrawGlyphs(quads, atlas.ensureCoverageTexture(r), c)
+	for _, b := range batches {
+		r.DrawGlyphs(b.quads, b.atlas.ensureCoverageTexture(r), c)
 	}
 }
