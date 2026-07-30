@@ -11,6 +11,27 @@ import (
 	"github.com/0xdreadnaught/fluo/timers"
 )
 
+// Severity classifies the kind of condition a Toast is communicating,
+// driving which theme.ColorTokens severity accent (if any) it renders as a
+// glanceable color cue — see Toast.Render.
+type Severity int
+
+const (
+	// SeverityInfo is the zero value and the default for a ToastSpec that
+	// doesn't set Severity. It renders with NO color cue at all — a plain
+	// neutral toast, byte-identical to every toast before severities
+	// existed — so existing ShowToast callers are unaffected by this field
+	// existing.
+	SeverityInfo Severity = iota
+	// SeveritySuccess marks a condition that completed as intended.
+	SeveritySuccess
+	// SeverityWarning marks a condition worth the user's attention but not
+	// necessarily broken.
+	SeverityWarning
+	// SeverityError marks a failed or broken condition.
+	SeverityError
+)
+
 // ToastSpec configures one transient notification shown via
 // OverlayHost.ShowToast.
 type ToastSpec struct {
@@ -21,6 +42,9 @@ type ToastSpec struct {
 	Face *text.Face
 	// Message is the text shown in the toast body.
 	Message string
+	// Severity is the toast's kind, SeverityInfo (no color cue) by default —
+	// see Severity's doc comment.
+	Severity Severity
 	// Timeout is how long the toast stays open before auto-dismissing, once
 	// a timers.Queue is wired via OverlayHost.SetTimers. Timeout <= 0, or no
 	// queue wired, disables auto-dismiss entirely — see ShowToast's doc
@@ -65,7 +89,7 @@ type toastEntry struct {
 // second call (or one after the toast already auto-dismissed) is a no-op.
 func (h *OverlayHost) ShowToast(spec ToastSpec) (dismiss func()) {
 	th := theme.Active()
-	toast := newToast(spec.Face, spec.Message, th.Color, th.Metric)
+	toast := newToast(spec.Face, spec.Message, spec.Severity, th.Color, th.Metric)
 
 	entry := &toastEntry{w: toast}
 	h.toasts = append(h.toasts, entry)
@@ -170,6 +194,12 @@ func (h *OverlayHost) arrangeToasts(bounds render.Rect) {
 // is exported (ShowToast's stacking lives on OverlayHost, one package level
 // up from tipCard's own tooltip-only usage) and optionally dismisses itself
 // on a Press, via a dismiss func ShowToast wires onto it — see OnPointer.
+//
+// A non-SeverityInfo toast additionally renders a colored accent stripe
+// down its left inner edge (see Render and severityColor) — a glanceable
+// cue for the toast's kind. SeverityInfo renders no stripe at all, so a
+// plain ToastSpec (Severity left at its zero value) looks exactly as it did
+// before Severity existed.
 type Toast struct {
 	core.Element
 
@@ -180,19 +210,37 @@ type Toast struct {
 	// idempotent removal path a caller-held dismiss func would.
 	dismiss func()
 
-	colors  theme.ColorTokens
-	metrics theme.MetricTokens
+	severity Severity
+	colors   theme.ColorTokens
+	metrics  theme.MetricTokens
 }
 
 // newToast returns a Toast wrapping a TextBlock showing message in face,
-// colored WindowText — matches newTipPopup/tipCard's own label styling.
-func newToast(face *text.Face, message string, colors theme.ColorTokens, metrics theme.MetricTokens) *Toast {
+// colored WindowText — matches newTipPopup/tipCard's own label styling —
+// and carrying severity for Render's accent-stripe cue.
+func newToast(face *text.Face, message string, severity Severity, colors theme.ColorTokens, metrics theme.MetricTokens) *Toast {
 	label := NewTextBlock(face, message)
 	label.SetColor(colors.WindowText)
 
-	t := &Toast{child: label, colors: colors, metrics: metrics}
+	t := &Toast{child: label, severity: severity, colors: colors, metrics: metrics}
 	core.SetParent(label, t)
 	return t
+}
+
+// severityColor returns severity's theme accent color and ok=true, or
+// ok=false for SeverityInfo — which intentionally has no accent cue at all,
+// so Toast.Render draws nothing for it (see Toast's own doc comment).
+func severityColor(severity Severity, colors theme.ColorTokens) (c render.Color, ok bool) {
+	switch severity {
+	case SeveritySuccess:
+		return colors.SeveritySuccess, true
+	case SeverityWarning:
+		return colors.SeverityWarning, true
+	case SeverityError:
+		return colors.SeverityError, true
+	default:
+		return render.Color{}, false
+	}
 }
 
 // chrome returns the inset on every side: the bevel width plus PaddingS
@@ -240,9 +288,25 @@ func (t *Toast) Children() []core.Widget {
 }
 
 // Render draws the classic raised ButtonFace bevel framing the message —
-// matches tipCard.Render exactly.
+// matches tipCard.Render exactly — then, for a non-SeverityInfo toast, a
+// severity accent stripe down the card's left inner edge: PaddingS wide,
+// inset by BevelWidth from the top/left/bottom so it sits inside the raised
+// bevel rather than covering it. SeverityInfo (the default) draws no
+// stripe, leaving the card identical to a plain pre-Severity toast.
 func (t *Toast) Render(r render.Renderer) {
-	drawRaised(r, t.Bounds(), t.colors.ButtonFace, t.colors)
+	bounds := t.Bounds()
+	drawRaised(r, bounds, t.colors.ButtonFace, t.colors)
+
+	if c, ok := severityColor(t.severity, t.colors); ok {
+		bw := t.metrics.BevelWidth
+		stripe := render.Rect{
+			X: bounds.X + bw,
+			Y: bounds.Y + bw,
+			W: t.metrics.PaddingS,
+			H: bounds.H - 2*bw,
+		}
+		r.FillRect(stripe, c)
+	}
 }
 
 // OnPointer implements input.PointerHandler: a Press dismisses the toast

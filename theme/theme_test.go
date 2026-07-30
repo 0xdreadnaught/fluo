@@ -148,6 +148,28 @@ func TestAcrylicTintPresent(t *testing.T) {
 	}
 }
 
+func TestSeverityTokensDiffer(t *testing.T) {
+	for _, th := range []*Theme{Light(), Dark()} {
+		c := th.Color
+		pairs := []struct {
+			name string
+			a, b render.Color
+		}{
+			{"Info vs Success", c.SeverityInfo, c.SeveritySuccess},
+			{"Info vs Warning", c.SeverityInfo, c.SeverityWarning},
+			{"Info vs Error", c.SeverityInfo, c.SeverityError},
+			{"Success vs Warning", c.SeveritySuccess, c.SeverityWarning},
+			{"Success vs Error", c.SeveritySuccess, c.SeverityError},
+			{"Warning vs Error", c.SeverityWarning, c.SeverityError},
+		}
+		for _, p := range pairs {
+			if p.a == p.b {
+				t.Fatalf("%s: %s severity tokens identical (%v)", th.Name, p.name, p.a)
+			}
+		}
+	}
+}
+
 func TestAcrylicTintLightDarkDiffer(t *testing.T) {
 	l := Light()
 	d := Dark()

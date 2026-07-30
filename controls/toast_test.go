@@ -184,6 +184,56 @@ func TestShowToastNilTimersDegradesToNoAutoDismiss(t *testing.T) {
 	}
 }
 
+func TestShowToastSeverityInfoRendersLikeDefault(t *testing.T) {
+	host := newTestToastHost(t)
+
+	host.ShowToast(ToastSpec{Message: "hi"})
+	host.ShowToast(ToastSpec{Message: "hi", Severity: SeverityInfo})
+
+	plain := host.toasts[0].w.(*Toast)
+	explicit := host.toasts[1].w.(*Toast)
+
+	if plain.severity != SeverityInfo {
+		t.Fatalf("no-Severity toast defaulted to %v, want SeverityInfo", plain.severity)
+	}
+	if _, ok := severityColor(plain.severity, plain.colors); ok {
+		t.Fatal("SeverityInfo (zero value) should have no accent color")
+	}
+	if _, ok := severityColor(explicit.severity, explicit.colors); ok {
+		t.Fatal("explicit SeverityInfo should have no accent color")
+	}
+}
+
+func TestShowToastSeverityUsesMatchingThemeToken(t *testing.T) {
+	th := theme.Active()
+
+	cases := []struct {
+		severity Severity
+		want     render.Color
+	}{
+		{SeveritySuccess, th.Color.SeveritySuccess},
+		{SeverityWarning, th.Color.SeverityWarning},
+		{SeverityError, th.Color.SeverityError},
+	}
+
+	for _, c := range cases {
+		host := newTestToastHost(t)
+		host.ShowToast(ToastSpec{Message: "hi", Severity: c.severity})
+
+		toast := host.toasts[0].w.(*Toast)
+		if toast.severity != c.severity {
+			t.Fatalf("toast.severity = %v, want %v", toast.severity, c.severity)
+		}
+		got, ok := severityColor(toast.severity, toast.colors)
+		if !ok {
+			t.Fatalf("severity %v: expected an accent color", c.severity)
+		}
+		if got != c.want {
+			t.Fatalf("severity %v: accent color = %v, want %v", c.severity, got, c.want)
+		}
+	}
+}
+
 // overlapsRect reports whether a and b (both axis-aligned rects) overlap.
 func overlapsRect(a, b render.Rect) bool {
 	if a.X+a.W <= b.X || b.X+b.W <= a.X {

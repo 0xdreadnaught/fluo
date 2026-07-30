@@ -1389,3 +1389,45 @@ func TestToastStack(t *testing.T) {
 		core.RenderWidget(host, r)
 	})
 }
+
+// TestToastSeverityStack is the golden for the per-severity accent stripe
+// (see controls.Severity and Toast.Render): all four kinds stacked in the
+// host's bottom-right corner, newest ("Something failed.", SeverityError) at
+// the bottom, oldest ("Heads up.", SeverityInfo) pushed to the top — so
+// every accent color is visible in one frame, side by side with the plain
+// SeverityInfo card that carries no stripe at all.
+func TestToastSeverityStack(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "toast_severity", 220, 260, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		host := controls.NewOverlayHost()
+		host.SetContent(controls.NewFixed(220, 260, th.Color.WindowBackground))
+
+		frame := render.Rect{X: 0, Y: 0, W: 220, H: 260}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		// First layout pass: gives the host real arranged bounds, so
+		// arrangeToasts has a real corner to stack against.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		host.ShowToast(controls.ToastSpec{Face: face, Message: "Heads up.", Severity: controls.SeverityInfo})
+		host.ShowToast(controls.ToastSpec{Face: face, Message: "Saved.", Severity: controls.SeveritySuccess})
+		host.ShowToast(controls.ToastSpec{Face: face, Message: "Check this.", Severity: controls.SeverityWarning})
+		host.ShowToast(controls.ToastSpec{Face: face, Message: "Something failed.", Severity: controls.SeverityError})
+
+		// Second layout pass: stacks all four now-open toasts.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		core.RenderWidget(host, r)
+	})
+}

@@ -50,6 +50,14 @@ type ColorTokens struct {
 	// in place of the CaptionFrom/CaptionTo gradient.
 	InactiveCaption render.Color
 
+	// SeverityInfo, SeveritySuccess, SeverityWarning, and SeverityError are
+	// the glanceable accent colors for the four Severity kinds a Toast (or
+	// any future control classifying a condition by severity) can carry.
+	// SeverityInfo is deliberately unused by Toast's default rendering — see
+	// controls.SeverityInfo's doc comment — but still gets a real color here
+	// so the full set is available to whatever else wants it.
+	SeverityInfo, SeveritySuccess, SeverityWarning, SeverityError render.Color
+
 	// WindowBackground, LayerBackground, and CardBackground are surface
 	// fills at increasing elevation.
 	//
