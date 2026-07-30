@@ -8,6 +8,19 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-30
+
+### Added
+
+- **`TextBox.OnSubmit`** — a single-line `TextBox` now fires an `OnSubmit(text)`
+  callback when the user presses Enter (previously Enter was ignored in
+  single-line mode). Multi-line mode is unchanged (Enter still inserts a
+  newline and never fires `OnSubmit`).
+- **Disabled menu items** — `MenuItems.AddDisabled(label, onClick)` adds a menu
+  row that renders greyed (`GrayText`) and is non-interactive: it never
+  highlights on hover and never invokes its action, while staying visible so
+  users can see the option exists.
+
 ## [0.8.0] - 2026-07-30
 
 ### Added
