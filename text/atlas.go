@@ -10,9 +10,12 @@ import (
 	"github.com/0xdreadnaught/fluo/render"
 )
 
-// atlasSize is the fixed width/height, in pixels, of an Atlas's
-// backing image and GPU texture. Growing beyond this is a later-phase
-// concern (see glyph's "atlas full" error).
+// atlasSize is the fixed width/height, in pixels, of every backing image
+// and GPU texture in an Atlas — both the single SDF atlas image (see the
+// img field; growing that is a later-phase concern, see glyph's "atlas
+// full" error) and each individual coverage page (see coveragePage). The
+// coverage atlas itself grows past one atlasSize x atlasSize page by
+// appending more of them (see glyphCoverage); the page size stays fixed.
 const atlasSize = 1024
 
 // atlasEntry describes where a single glyph's SDF lives within an
@@ -44,16 +47,34 @@ type Atlas struct {
 
 	tex render.TextureID
 
-	// Coverage atlas: a dedicated backing image/texture/shelf-cursor/
-	// entries for direct grayscale-AA glyphs (text.Face's HD draw path,
-	// see glyphCoverage), kept fully independent of the SDF fields above
-	// so packing and goldens never collide between the two systems.
-	covImg                 *image.Alpha
-	covCursorX, covCursorY int
-	covRowH                int
-	covEntries             map[coverageKey]coverageEntry
-	covDirty               []image.Rectangle
-	covTex                 render.TextureID
+	// Coverage atlas: an ordered list of fixed-size pages for direct
+	// grayscale-AA glyphs (text.Face's HD draw path, see glyphCoverage),
+	// kept fully independent of the SDF fields above so packing and
+	// goldens never collide between the two systems. Growth (see
+	// glyphCoverage) appends pages; it never removes or reflows one, so
+	// entry.page indices already handed out stay valid for the Atlas's
+	// lifetime.
+	covPages   []*coveragePage
+	covEntries map[coverageKey]coverageEntry
+}
+
+// coveragePage is a single fixed atlasSize x atlasSize backing image for
+// the coverage atlas, plus its own shelf-packer cursor, dirty-rect list,
+// and GPU texture. The coverage atlas starts with one page and grows by
+// appending more (see Atlas.glyphCoverage) rather than capping out, so a
+// document with many distinct glyphs — e.g. a large multilingual string
+// spanning several fallback fonts — is never forced to drop a glyph just
+// because earlier ones filled page 0.
+type coveragePage struct {
+	img                    *image.Alpha
+	cursorX, cursorY, rowH int
+	dirty                  []image.Rectangle
+	tex                    render.TextureID
+}
+
+// newCoveragePage returns an empty page ready for shelf-packing.
+func newCoveragePage() *coveragePage {
+	return &coveragePage{img: image.NewAlpha(image.Rect(0, 0, atlasSize, atlasSize))}
 }
 
 // coverageKey identifies a cached coverage entry: a glyph rasterized at a
@@ -71,7 +92,8 @@ type coverageKey struct {
 // comes from the logical-px metrics path (Font.advance), unchanged by
 // which rendering path draws the glyph.
 type coverageEntry struct {
-	uv                 render.Rect // 0..1 within the coverage atlas texture
+	page               int         // index into Atlas.covPages this entry's mask is packed into
+	uv                 render.Rect // 0..1 within that page's texture
 	w, h               int         // px in the atlas (== device px at this size)
 	bearingX, bearingY float32     // device px, at this entry's px size
 	empty              bool        // true when the mask has no non-zero coverage (e.g. space): Face.Draw skips emitting a quad but still advances the pen
@@ -84,7 +106,7 @@ func NewAtlas(f *Font) *Atlas {
 		f:          f,
 		img:        image.NewAlpha(image.Rect(0, 0, atlasSize, atlasSize)),
 		entries:    make(map[sfnt.GlyphIndex]atlasEntry),
-		covImg:     image.NewAlpha(image.Rect(0, 0, atlasSize, atlasSize)),
+		covPages:   []*coveragePage{newCoveragePage()},
 		covEntries: make(map[coverageKey]coverageEntry),
 	}
 }
@@ -159,6 +181,14 @@ const covPad = 1
 // first request for this (gi, px) pair. Subsequent calls for the same pair
 // return the cached entry; a different px yields a distinct entry, since
 // coverage masks (unlike SDFs) are rasterized directly at their draw size.
+//
+// The coverage atlas grows rather than caps out: when the mask doesn't fit
+// on the last page (the shelf packer has no room left in it), a fresh page
+// is appended and the glyph is packed there instead — see coveragePage.
+// The only case still reported as an error is a single mask too large to
+// ever fit on a whole empty page, which no amount of growth can fix; the
+// glyph itself is degenerate (see the atlasSize doc comment), not the
+// atlas.
 func (a *Atlas) glyphCoverage(gi sfnt.GlyphIndex, px int) (coverageEntry, error) {
 	key := coverageKey{gi: gi, px: px}
 	if e, ok := a.covEntries[key]; ok {
@@ -172,26 +202,37 @@ func (a *Atlas) glyphCoverage(gi sfnt.GlyphIndex, px int) (coverageEntry, error)
 
 	b := mask.Bounds()
 	w, h := b.Dx(), b.Dy()
+	if w > atlasSize || h > atlasSize {
+		return coverageEntry{}, errors.New("glyph too large for a single atlas page")
+	}
+
+	pageIdx := len(a.covPages) - 1
+	page := a.covPages[pageIdx]
 
 	// Shelf packing: advance to a new row if the glyph doesn't fit in the
 	// remaining width of the current one.
-	if a.covCursorX+w > atlasSize {
-		a.covCursorY += a.covRowH
-		a.covCursorX = 0
-		a.covRowH = 0
+	if page.cursorX+w > atlasSize {
+		page.cursorY += page.rowH
+		page.cursorX = 0
+		page.rowH = 0
 	}
-	if a.covCursorY+h > atlasSize {
-		return coverageEntry{}, errors.New("atlas full")
+	if page.cursorY+h > atlasSize {
+		// This page has no room left: grow the atlas with a fresh page
+		// rather than dropping the glyph.
+		page = newCoveragePage()
+		a.covPages = append(a.covPages, page)
+		pageIdx = len(a.covPages) - 1
 	}
 
-	dst := image.Rect(a.covCursorX, a.covCursorY, a.covCursorX+w, a.covCursorY+h)
-	draw.Draw(a.covImg, dst, mask, b.Min, draw.Src)
-	a.covDirty = append(a.covDirty, dst)
+	dst := image.Rect(page.cursorX, page.cursorY, page.cursorX+w, page.cursorY+h)
+	draw.Draw(page.img, dst, mask, b.Min, draw.Src)
+	page.dirty = append(page.dirty, dst)
 
 	e := coverageEntry{
+		page: pageIdx,
 		uv: render.Rect{
-			X: float32(a.covCursorX) / atlasSize,
-			Y: float32(a.covCursorY) / atlasSize,
+			X: float32(page.cursorX) / atlasSize,
+			Y: float32(page.cursorY) / atlasSize,
 			W: float32(w) / atlasSize,
 			H: float32(h) / atlasSize,
 		},
@@ -203,9 +244,9 @@ func (a *Atlas) glyphCoverage(gi sfnt.GlyphIndex, px int) (coverageEntry, error)
 	}
 	a.covEntries[key] = e
 
-	a.covCursorX += w
-	if h > a.covRowH {
-		a.covRowH = h
+	page.cursorX += w
+	if h > page.rowH {
+		page.rowH = h
 	}
 
 	return e, nil
@@ -223,22 +264,23 @@ func maskEmpty(m *image.Alpha) bool {
 	return true
 }
 
-// ensureCoverageTexture returns a's coverage-atlas GPU texture, creating it
-// on first use and uploading any regions that have changed since the last
-// call. Mirrors ensureTexture but for the dedicated coverage image/texture
-// (see the covImg/covTex fields), keeping the two atlases' GPU resources
-// independent.
-func (a *Atlas) ensureCoverageTexture(r render.Renderer) render.TextureID {
-	if a.covTex == render.NoTexture {
-		a.covTex = r.CreateTexture(atlasSize, atlasSize, nil)
+// ensureCoverageTexture returns the GPU texture for coverage-atlas page
+// index page, creating it on first use and uploading any regions of that
+// page that have changed since the last call. Mirrors ensureTexture but
+// per coveragePage, keeping every page's GPU resource independent (and
+// independent of the SDF atlas's own texture).
+func (a *Atlas) ensureCoverageTexture(r render.Renderer, page int) render.TextureID {
+	p := a.covPages[page]
+	if p.tex == render.NoTexture {
+		p.tex = r.CreateTexture(atlasSize, atlasSize, nil)
 	}
 
-	for _, rect := range a.covDirty {
+	for _, rect := range p.dirty {
 		w, h := rect.Dx(), rect.Dy()
 		rgba := make([]byte, w*h*4)
 		for y := 0; y < h; y++ {
 			for x := 0; x < w; x++ {
-				v := a.covImg.AlphaAt(rect.Min.X+x, rect.Min.Y+y).A
+				v := p.img.AlphaAt(rect.Min.X+x, rect.Min.Y+y).A
 				i := (y*w + x) * 4
 				rgba[i+0] = v
 				rgba[i+1] = v
@@ -246,11 +288,11 @@ func (a *Atlas) ensureCoverageTexture(r render.Renderer) render.TextureID {
 				rgba[i+3] = v
 			}
 		}
-		r.UpdateTexture(a.covTex, rect.Min.X, rect.Min.Y, w, h, rgba)
+		r.UpdateTexture(p.tex, rect.Min.X, rect.Min.Y, w, h, rgba)
 	}
-	a.covDirty = nil
+	p.dirty = nil
 
-	return a.covTex
+	return p.tex
 }
 
 // ensureTexture returns a's GPU texture, creating it on first use and

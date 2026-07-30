@@ -26,20 +26,26 @@ import (
 // always come from Font alone, never from a fallback, so mixing in a
 // fallback glyph never shifts a line's baseline. Each font in the chain
 // — primary or fallback — rasterizes into its own Atlas (see
-// Font.sharedAtlas), so Draw groups glyph quads by source font and
-// issues one DrawGlyphs call per distinct atlas texture.
+// Font.sharedAtlas), and that Atlas's coverage side can itself grow
+// across several pages (see Atlas.glyphCoverage), so Draw groups glyph
+// quads by (source font, page) and issues one DrawGlyphs call per
+// distinct page texture.
 type Face struct {
 	Font      *Font
 	Fallbacks []*Font
 	SizePx    float32
 
 	// OnGlyphDropped, if set, is called when Draw cannot place a rune's
-	// coverage mask in the shared atlas (see atlasSize) — in practice, the
-	// atlas is full. Default nil: Draw silently skips the glyph, same as
-	// before this field existed, so leaving it unset changes nothing. It
-	// fires at most once per distinct rune over fa's lifetime, so a
-	// persistently full atlas reports once per glyph rather than spamming
-	// every frame that rune is drawn.
+	// coverage mask at all. The coverage atlas grows (see
+	// Atlas.glyphCoverage): when a page fills up, a new one is allocated
+	// rather than dropping the glyph, so ordinary overflow no longer
+	// reaches this callback. The only case that still does is a single
+	// glyph mask larger than a whole empty page — degenerate, and not
+	// something growth can fix. Default nil: Draw silently skips the
+	// glyph, same as before this field existed, so leaving it unset
+	// changes nothing. It fires at most once per distinct rune over fa's
+	// lifetime, so a persistently oversized glyph reports once rather than
+	// spamming every frame that rune is drawn.
 	OnGlyphDropped func(r rune)
 
 	droppedMu sync.Mutex
@@ -168,11 +174,23 @@ func (fa *Face) Measure(s string) render.Size {
 	return render.Size{W: w, H: fa.LineHeight()}
 }
 
-// glyphBatch accumulates the glyph quads Draw resolves to a single source
-// font's coverage atlas, so they can be submitted to the renderer in one
-// DrawGlyphs call against that atlas's texture.
+// glyphBatchKey identifies one (source font, coverage-atlas page) pair:
+// every glyph quad resolved to the same key shares a single GPU texture
+// and so can be submitted in one DrawGlyphs call (see glyphBatch). Two
+// fonts never share a page (each has its own Atlas), and a font's own
+// atlas can itself span several pages once it grows past the first one
+// (see Atlas.glyphCoverage), so both font and page distinguish a batch.
+type glyphBatchKey struct {
+	font *Font
+	page int
+}
+
+// glyphBatch accumulates the glyph quads Draw resolves to a single
+// (source font, page) pair, so they can be submitted to the renderer in
+// one DrawGlyphs call against that page's texture.
 type glyphBatch struct {
 	atlas *Atlas
+	page  int
 	quads []render.GlyphQuad
 }
 
@@ -188,14 +206,16 @@ type glyphBatch struct {
 // pixels actually drawn. Each rune resolves to a source font via
 // resolveGlyph — the same resolution Measure uses — and rasterizes into
 // that font's own shared coverage atlas; since a fallback chain can mix
-// glyphs from several fonts (and so several atlas textures) in one string,
-// quads are gathered per source font and submitted to r as one DrawGlyphs
-// call per distinct atlas texture. A Face with no fallback chain resolves
-// every rune to the same font, so this still collapses to exactly one
-// DrawGlyphs call, unchanged from before Face gained fallback support.
-// Runes no font in the chain covers fall back to fa.Font's glyph index 0
-// (.notdef); glyphs with no visible coverage (e.g. space) are skipped but
-// still advance the pen.
+// glyphs from several fonts (and so several atlas textures) in one string
+// — and a single font's own atlas can itself span several pages once it
+// grows past the first one (see Atlas.glyphCoverage) — quads are gathered
+// per (source font, page) and submitted to r as one DrawGlyphs call per
+// distinct atlas-page texture. A Face with no fallback chain whose string
+// fits on one page resolves every rune to the same (font, page), so this
+// still collapses to exactly one DrawGlyphs call, unchanged from before
+// Face gained fallback support. Runes no font in the chain covers fall
+// back to fa.Font's glyph index 0 (.notdef); glyphs with no visible
+// coverage (e.g. space) are skipped but still advance the pen.
 func (fa *Face) Draw(r render.Renderer, at render.Point, s string, c render.Color) {
 	scale := r.Scale()
 	if scale <= 0 {
@@ -210,10 +230,11 @@ func (fa *Face) Draw(r render.Renderer, at render.Point, s string, c render.Colo
 	baseline := at.Y + fa.Ascent()
 	baseline = float32(math.Round(float64(baseline)*float64(scale))) / scale
 
-	// batches groups quads by source font, in first-seen order, so Draw
-	// issues one DrawGlyphs call per distinct atlas texture below.
+	// batches groups quads by (source font, atlas page), in first-seen
+	// order, so Draw issues one DrawGlyphs call per distinct page texture
+	// below.
 	var batches []*glyphBatch
-	byFont := make(map[*Font]*glyphBatch)
+	byKey := make(map[glyphBatchKey]*glyphBatch)
 
 	penX := at.X // logical px; advances by the UNSNAPPED metric each glyph, never snapped itself
 	var prevFont *Font
@@ -233,10 +254,11 @@ func (fa *Face) Draw(r render.Renderer, at render.Point, s string, c render.Colo
 			// origin to a whole device pixel.
 			gx := float32(math.Round(float64(penX+e.bearingX/scale)*float64(scale))) / scale
 			gy := float32(math.Round(float64(baseline+e.bearingY/scale)*float64(scale))) / scale
-			b, ok := byFont[srcFont]
+			key := glyphBatchKey{font: srcFont, page: e.page}
+			b, ok := byKey[key]
 			if !ok {
-				b = &glyphBatch{atlas: atlas}
-				byFont[srcFont] = b
+				b = &glyphBatch{atlas: atlas, page: e.page}
+				byKey[key] = b
 				batches = append(batches, b)
 			}
 			b.quads = append(b.quads, render.GlyphQuad{
@@ -249,9 +271,11 @@ func (fa *Face) Draw(r render.Renderer, at render.Point, s string, c render.Colo
 				Src: e.uv,
 			})
 		} else if err != nil {
-			// The glyph couldn't be placed (the atlas is full); still
-			// advance the pen below, same as before OnGlyphDropped existed
-			// — this only reports the failure, it never changes it.
+			// The glyph couldn't be placed anywhere (see glyphCoverage: the
+			// degenerate oversized-glyph case, since ordinary overflow
+			// grows a new page instead); still advance the pen below, same
+			// as before OnGlyphDropped existed — this only reports the
+			// failure, it never changes it.
 			fa.reportDropped(ch)
 		}
 
@@ -260,6 +284,6 @@ func (fa *Face) Draw(r render.Renderer, at render.Point, s string, c render.Colo
 	}
 
 	for _, b := range batches {
-		r.DrawGlyphs(b.quads, b.atlas.ensureCoverageTexture(r), c)
+		r.DrawGlyphs(b.quads, b.atlas.ensureCoverageTexture(r, b.page), c)
 	}
 }
