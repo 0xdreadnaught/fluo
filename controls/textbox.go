@@ -119,6 +119,24 @@ type TextBox struct {
 	rowsRev   uint64
 	rowsValid bool
 
+	// vScrollShown caches computeShowVScroll's decision for the current
+	// arrange bounds — refreshed once at the top of every ArrangeContent
+	// call, then read (not recomputed) by contentWidth, vScrollTrack,
+	// RenderOverlay, and OnPointer's thumb hit-test for the rest of that
+	// layout pass. Always false outside multiline mode.
+	vScrollShown bool
+
+	// vDragging and vDragGrab track an in-progress vertical-thumb drag (see
+	// dragVScroll/OnPointer): vDragging is true only while this TextBox
+	// holds the router's pointer capture for a thumb drag specifically (as
+	// opposed to the pre-existing caret-drag-to-select capture); vDragGrab
+	// is the y-offset (logical px) between the pointer and the thumb's own
+	// top edge at the moment the drag began, so the thumb tracks the
+	// pointer at a fixed grab point rather than snapping its edge to the
+	// cursor — the same convention ScrollViewer.dragGrabY documents.
+	vDragging bool
+	vDragGrab float32
+
 	// desiredCol and desiredColValid track the "desired column" Up/Down
 	// navigation preserves across lines shorter than it (see
 	// moveCaretVertical): desiredColValid is false whenever the caret last
@@ -1039,16 +1057,103 @@ func wrapLogicalLine(runes []rune, start, end int, face *text.Face, width float3
 	return rows
 }
 
-// contentWidth returns the current inner (padding-inset) content width in
-// logical px — the same quantity ArrangeContent computes as innerW — used
-// to key the visual-rows layout at runtime (see visualRows), so it always
-// reflects the box's actual arranged width.
-func (t *TextBox) contentWidth() float32 {
+// fullContentWidth returns the padding-inset content width WITHOUT
+// subtracting the vertical-scroll thumb's gutter, even when the thumb is
+// currently shown — used only by computeShowVScroll to decide whether to
+// show the thumb in the first place (see its own doc comment for why that
+// decision must use this ungated width rather than contentWidth() below).
+func (t *TextBox) fullContentWidth() float32 {
 	w := t.Bounds().W - 2*t.metrics.PaddingM
 	if w < 0 {
 		w = 0
 	}
 	return w
+}
+
+// contentHeight returns the padding-inset content (viewport) height — the
+// height axis has no gutter of its own to further subtract (the vertical
+// thumb's gutter is horizontal-only), so this is also exactly the value
+// ArrangeContent computes as innerH.
+func (t *TextBox) contentHeight() float32 {
+	h := t.Bounds().H - 2*t.metrics.PaddingM
+	if h < 0 {
+		h = 0
+	}
+	return h
+}
+
+// contentWidth returns the current inner content width in logical px that
+// TEXT actually gets to use — fullContentWidth, further reduced by the
+// vertical-scroll thumb's gutter whenever vScrollShown is true (see
+// computeShowVScroll/ArrangeContent, which caches that decision once per
+// arrange pass) — used to key the visual-rows layout at runtime (see
+// visualRows) and to clamp horizontal scroll (updateHScroll), so both
+// always reflect the box's actual, thumb-aware arranged width.
+func (t *TextBox) contentWidth() float32 {
+	w := t.fullContentWidth()
+	if t.vScrollShown {
+		w -= t.metrics.ScrollGutter
+		if w < 0 {
+			w = 0
+		}
+	}
+	return w
+}
+
+// totalContentHeight returns the current total (unclipped) content height:
+// row/line count times lineHeight, using the visual-rows count while
+// wrapping (at the current, gutter-aware contentWidth — safe to call here,
+// unlike inside computeShowVScroll, since every caller of this method runs
+// AFTER vScrollShown has already been decided for this arrange pass) or the
+// logical-line count otherwise. NOT used by computeShowVScroll itself (see
+// its own doc comment on why that needs the ungated width instead); this
+// one backs updateVScroll's maxScroll clamp and the thumb's own geometry
+// (vScrollThumbRect/dragVScroll).
+func (t *TextBox) totalContentHeight() float32 {
+	lh := t.lineHeight()
+	var rows int
+	if t.wrapping() {
+		rows = t.rowCount()
+	} else {
+		rows = t.lineCount()
+	}
+	return float32(rows) * lh
+}
+
+// computeShowVScroll decides whether the vertical scroll thumb should be
+// shown (and its gutter reserved) for the box's CURRENT arrange bounds:
+// true only in multiline mode, only when the content's total row/line
+// height exceeds the viewport height (contentHeight). Deliberately uses
+// fullContentWidth — the width BEFORE any gutter is subtracted — to compute
+// the wrapped row count while wrapping, rather than the gutter-aware
+// contentWidth(): reserving the gutter is itself a consequence of this
+// decision, so using the already-gutter-reduced width here would make the
+// decision depend on its own prior result. This is safe and never
+// flip-flops: a NARROWER width can only produce the same or MORE wrapped
+// rows, never fewer (see wrapLogicalLine), so content that already overflows
+// at the full (ungated) width is guaranteed to still overflow — never
+// LESS — once the gutter narrows things further. Called once per arrange
+// pass (ArrangeContent caches the result in vScrollShown); every other
+// method in this file that cares reads that cached field rather than
+// recomputing, so a wrapped, overflowing box does not re-run this (and the
+// extra, ungated visualRows computation it implies) on every render/hit-test
+// call.
+func (t *TextBox) computeShowVScroll() bool {
+	if !t.multiline {
+		return false
+	}
+	viewportH := t.contentHeight()
+	if viewportH <= 0 {
+		return false
+	}
+	lh := t.lineHeight()
+	var rows int
+	if t.wrapping() {
+		rows = len(t.visualRows(t.fullContentWidth()))
+	} else {
+		rows = t.lineCount()
+	}
+	return float32(rows)*lh > viewportH
 }
 
 // wrapMeasureWidth resolves the content width MeasureContent should wrap
@@ -1437,26 +1542,36 @@ func (t *TextBox) MeasureContent(available render.Size) render.Size {
 }
 
 // ArrangeContent is the single source of truth for hscroll/vscroll clamping
-// (the ScrollViewer clamp-in-arrange pattern applied to each scroll axis):
-// it recomputes the padding-inset inner width/height from the arranged
-// bounds and clamps hscroll (always) and vscroll (multi-line mode only —
-// updateVScroll is a no-op-to-zero in single-line mode) so the caret stays
-// visible within them.
+// (the ScrollViewer clamp-in-arrange pattern applied to each scroll axis)
+// AND for the vertical-scroll thumb's show/hide decision (computeShowVScroll,
+// cached into vScrollShown): it recomputes the padding-inset inner
+// width/height from the arranged bounds and clamps hscroll (always) and
+// vscroll (multi-line mode only — updateVScroll is a no-op-to-zero in
+// single-line mode) so the caret stays visible within them.
+//
+// vScrollShown is refreshed FIRST, before anything else runs, because
+// contentWidth() — which updateHScroll's width argument, and every
+// wrap-aware helper invoked for the rest of this pass, depend on — reduces
+// by the thumb's gutter exactly when vScrollShown is true. A non-overflowing
+// box (vScrollShown false) sees contentWidth() == fullContentWidth() (no
+// gutter reserved), so this whole mechanism is invisible to a box that never
+// needed to scroll — existing goldens with no vertical overflow render
+// byte-for-byte as before this feature.
 //
 // While wrapping (see SetWordWrap), this is also where the visual-rows
-// layout gets re-flowed against the FINAL arranged width if it differs from
-// whatever width MeasureContent last wrapped against: updateVScroll (via
-// rowCount/rowCol) calls contentWidth(), which reads bounds.W straight from
-// t.Bounds() — already set to this exact bounds by core.ArrangeWidget
-// before calling here — and visualRows' own cache (keyed on that width)
-// transparently recomputes on a mismatch. No separate "re-wrap" step is
-// needed beyond that cache lookup.
+// layout gets re-flowed against the FINAL arranged (and now possibly
+// gutter-reduced) width if it differs from whatever width MeasureContent
+// last wrapped against: updateVScroll (via rowCount/rowCol) calls
+// contentWidth(), which reads bounds.W straight from t.Bounds() — already
+// set to this exact bounds by core.ArrangeWidget before calling here — and
+// visualRows' own cache (keyed on that width) transparently recomputes on a
+// mismatch. No separate "re-wrap" step is needed beyond that cache lookup.
 func (t *TextBox) ArrangeContent(bounds render.Rect) {
-	innerW := bounds.W - 2*t.metrics.PaddingM
-	if innerW < 0 {
-		innerW = 0
-	}
-	t.updateHScroll(innerW)
+	// Refreshed first: contentWidth (used by updateHScroll below, and by
+	// every wrap-aware helper for the rest of this pass) depends on it.
+	t.vScrollShown = t.computeShowVScroll()
+
+	t.updateHScroll(t.contentWidth())
 
 	innerH := bounds.H - 2*t.metrics.PaddingM
 	if innerH < 0 {
@@ -1520,13 +1635,11 @@ func (t *TextBox) updateVScroll(innerH float32) {
 	}
 
 	lh := t.lineHeight()
-	var row, total int
+	var row int
 	if t.wrapping() {
 		row, _ = t.rowCol(t.caret)
-		total = t.rowCount()
 	} else {
 		row, _ = t.lineCol(t.caret)
-		total = t.lineCount()
 	}
 	caretY := float32(row) * lh
 
@@ -1540,13 +1653,94 @@ func (t *TextBox) updateVScroll(innerH float32) {
 		t.vscroll = 0
 	}
 
-	maxScroll := float32(total)*lh - innerH
+	maxScroll := t.totalContentHeight() - innerH
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
 	if t.vscroll > maxScroll {
 		t.vscroll = maxScroll
 	}
+}
+
+// --- Vertical scroll thumb (shown only while content overflows) ---
+
+// vScrollTrack returns the vertical thumb's track rect — a scrollGutter-wide
+// strip along the right inner edge, inset by PaddingM on all four sides like
+// the text itself (so the thumb sits comfortably inside the sunken well
+// rather than overlapping its bevel) — and ok==false whenever vScrollShown
+// is false (see computeShowVScroll/ArrangeContent) or the box has no usable
+// height to show a track in.
+func (t *TextBox) vScrollTrack() (render.Rect, bool) {
+	if !t.vScrollShown {
+		return render.Rect{}, false
+	}
+	bounds := t.Bounds()
+	pad := t.metrics.PaddingM
+	gutter := t.metrics.ScrollGutter
+	h := bounds.H - 2*pad
+	if h <= 0 {
+		return render.Rect{}, false
+	}
+	return render.Rect{
+		X: bounds.Right() - pad - gutter,
+		Y: bounds.Y + pad,
+		W: gutter,
+		H: h,
+	}, true
+}
+
+// vScrollThumbRect returns the thumb's current on-screen rect — track
+// position plus the offset proportional to the current vscroll — reusing
+// ScrollViewer's own shared thumb-sizing/positioning math (scrollThumbLength/
+// scrollThumbPos, scrollviewer.go) so it looks and behaves identically.
+// ok==false exactly when vScrollTrack is (nothing to scroll, so nothing to
+// draw or hit-test against).
+func (t *TextBox) vScrollThumbRect() (render.Rect, bool) {
+	track, ok := t.vScrollTrack()
+	if !ok {
+		return render.Rect{}, false
+	}
+	total := t.totalContentHeight()
+	thumbH := scrollThumbLength(track.H, total)
+	maxOffset := total - track.H
+	thumbY := scrollThumbPos(track.Y, track.H, thumbH, t.vscroll, maxOffset)
+	return render.Rect{X: track.X, Y: thumbY, W: track.W, H: thumbH}, true
+}
+
+// dragVScroll recomputes t.vscroll directly from a vertical-thumb drag's
+// current pointer y-position, via scrollDragOffset — the same drag math
+// ScrollViewer.dragTo and virtualizer.dragTo already share (scrollviewer.go),
+// keeping the pointer at the same relative grab point within the thumb
+// (vDragGrab) it was at when the drag began.
+//
+// Deliberately does NOT call InvalidateArrange, unlike every other
+// vscroll-affecting path in this file: updateVScroll's caret-follow clamp
+// (see its own doc comment) starts from whatever t.vscroll ALREADY is and
+// only adjusts it if the caret has scrolled out of view — so invalidating
+// arrange here would let the very next layout pass immediately snap the
+// drag right back to the caret's position, undoing it. fluo only re-runs
+// Measure/Arrange when NeedsLayout is dirty (see app.Surface.Frame) or the
+// window resizes, and no OTHER path in this file marks arrange dirty on a
+// pointer Move — so setting vscroll directly here is enough for it to take
+// effect on the very next Render call and simply persist, exactly like a
+// real editor's "manual scroll sticks until you type or move the caret
+// again": the next actual caret-moving mutation (SetCaret/Select/
+// replaceRange/SetText, all of which DO invalidate arrange) naturally
+// re-syncs the view via that same existing clamp.
+func (t *TextBox) dragVScroll(posY float32) {
+	track, ok := t.vScrollTrack()
+	if !ok {
+		return
+	}
+	thumb, ok := t.vScrollThumbRect()
+	if !ok {
+		return
+	}
+	maxOffset := t.totalContentHeight() - track.H
+	if maxOffset <= 0 {
+		return
+	}
+	t.vscroll = scrollDragOffset(track.Y, track.H, thumb.H, posY, t.vDragGrab, maxOffset)
 }
 
 // ClipRect implements core.ClipProvider, clipping to the textbox's own full
@@ -1883,15 +2077,26 @@ func (t *TextBox) drawLineWithSelection(r render.Renderer, runes []rune, start, 
 	}
 }
 
-// RenderOverlay is a deliberate no-op: classic Windows textboxes draw no
-// separate focus ring (unlike every other focusable control in this
-// package, per drawFocusRing's doc comment in clickable.go) — the caret and
-// the sunken well already read as "this is the focused field," and the box
-// has no raised/sunken chrome swap to signal focus with either (unlike
-// Button's press-sunken state). TextBox still implements OverlayRenderer so
-// core.RenderWidget's overlay dispatch (see core/widget.go) finds a stable
-// method here rather than silently falling through, but it paints nothing.
-func (t *TextBox) RenderOverlay(r render.Renderer) {}
+// RenderOverlay draws no separate focus ring: classic Windows textboxes
+// don't (unlike every other focusable control in this package, per
+// drawFocusRing's doc comment in clickable.go) — the caret and the sunken
+// well already read as "this is the focused field," and the box has no
+// raised/sunken chrome swap to signal focus with either (unlike Button's
+// press-sunken state).
+//
+// It DOES draw the vertical scroll thumb (drawScrollThumb, the same classic
+// track+raised-thumb chrome ScrollViewer and the ListView/DataGrid
+// virtualizer already share — see bevel.go) whenever vScrollTrack reports
+// one (i.e. vScrollShown is true — the content overflows the viewport
+// vertically; see computeShowVScroll). Drawn last, after core.RenderWidget's
+// own clip push/pop around this leaf's (empty) Children() list, so — like
+// every other OverlayRenderer in this package — it is never itself clipped.
+func (t *TextBox) RenderOverlay(r render.Renderer) {
+	if track, ok := t.vScrollTrack(); ok {
+		thumb, _ := t.vScrollThumbRect()
+		drawScrollThumb(r, track, thumb, t.colors)
+	}
+}
 
 // OnKey implements input.KeyHandler, the normative Task 6 keyboard map.
 // Ignored entirely (no mutation, Handled left false) while disabled or
@@ -2018,38 +2223,61 @@ func (t *TextBox) OnKey(e *input.KeyEvent) {
 // with it — a permanent wedge with no widget reachable by the pointer at
 // all, not merely this one ignoring input as intended.
 //
-// Press moves the caret to the nearest rune boundary to the click position
-// (via caretIndexAtPos — x only in single-line mode, x AND y in multi-line
-// mode, see its doc comment) — which also clears any existing selection and
-// sets the drag anchor, since SetCaret sets anchor==caret — and captures the
-// pointer so the drag survives leaving the TextBox's bounds. Move, only
-// while this TextBox holds the capture, extends the selection from that
-// same anchor to the new nearest boundary (Select(t.anchor, idx): t.anchor
-// is left untouched by Select's own reassignment since the same value is
-// passed back in, so it stays pinned at the press position across an entire
-// drag). Release, only while captured, ends the drag.
+// A Press landing inside the current vertical thumb rect (vScrollThumbRect,
+// only ever non-empty while vScrollShown — see computeShowVScroll) starts a
+// THUMB drag instead of the caret-drag-to-select described below: it
+// records the pointer's grab offset within the thumb (vDragGrab) and sets
+// vDragging, checked first (mirroring ScrollViewer.OnPointer's own
+// thumb-vs-content priority). Move, while captured with vDragging set,
+// scrolls via dragVScroll instead of extending the selection; Release clears
+// vDragging alongside releasing capture, matching the caret-drag path.
+//
+// Otherwise (no thumb, or the click missed it): Press moves the caret to
+// the nearest rune boundary to the click position (via caretIndexAtPos — x
+// only in single-line mode, x AND y in multi-line mode, see its doc
+// comment) — which also clears any existing selection and sets the drag
+// anchor, since SetCaret sets anchor==caret — and captures the pointer so
+// the drag survives leaving the TextBox's bounds. Move, only while this
+// TextBox holds the capture, extends the selection from that same anchor to
+// the new nearest boundary (Select(t.anchor, idx): t.anchor is left
+// untouched by Select's own reassignment since the same value is passed
+// back in, so it stays pinned at the press position across an entire drag).
+// Release, only while captured, ends the drag.
 func (t *TextBox) OnPointer(e *input.PointerEvent) {
 	if !t.enabled {
 		if e.Router != nil && e.Router.Captured() == t {
 			e.Router.Release()
+			t.vDragging = false
 		}
 		return
 	}
 	switch e.Action {
 	case input.Press:
+		if rect, ok := t.vScrollThumbRect(); ok && rect.Contains(e.Pos) {
+			t.vDragging = true
+			t.vDragGrab = e.Pos.Y - rect.Y
+			e.Router.Capture(t)
+			e.Handled = true
+			return
+		}
 		idx := t.caretIndexAtPos(e.Pos.X, e.Pos.Y)
 		t.SetCaret(idx)
 		e.Router.Capture(t)
 		e.Handled = true
 	case input.Move:
 		if e.Router.Captured() == t {
-			idx := t.caretIndexAtPos(e.Pos.X, e.Pos.Y)
-			t.Select(t.anchor, idx)
+			if t.vDragging {
+				t.dragVScroll(e.Pos.Y)
+			} else {
+				idx := t.caretIndexAtPos(e.Pos.X, e.Pos.Y)
+				t.Select(t.anchor, idx)
+			}
 			e.Handled = true
 		}
 	case input.Release:
 		if e.Router.Captured() == t {
 			e.Router.Release()
+			t.vDragging = false
 			e.Handled = true
 		}
 	}

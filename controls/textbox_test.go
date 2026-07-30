@@ -1984,3 +1984,198 @@ func TestTextBoxWordWrapMeasureContentFallsBackOnInfiniteAvailableWidth(t *testi
 		t.Fatalf("DesiredSize() = %+v, want finite (Inf-safe fallback to textBoxDefaultWidth)", d)
 	}
 }
+
+// --- Vertical scroll thumb (shown only while content overflows) ---
+
+// newOverflowingMultilineTextBox builds a focused, multi-line (word-wrap
+// OFF) TextBox with ten short lines in a box short enough (50px tall) that
+// only a few can be visible at once — the shared fixture for the vertical
+// scroll thumb tests below. The caret sits at the very end (SetText's own
+// caret-to-end convention), so vscroll clamps near its maximum.
+func newOverflowingMultilineTextBox(t *testing.T) *TextBox {
+	t.Helper()
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true)
+	tb.SetText("l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9")
+	tb.SetWidth(200)
+	tb.SetHeight(50)
+
+	core.MeasureWidget(tb, render.Size{W: 200, H: 50})
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50})
+	return tb
+}
+
+// TestTextBoxVScrollThumbHiddenWhenContentFits is the threshold's "hidden"
+// half: a short box with content that easily fits must show no thumb, and
+// must reserve no gutter (contentWidth stays exactly fullContentWidth) —
+// the "byte-for-byte unchanged when non-overflowing" invariant, checked
+// directly rather than only via a golden.
+func TestTextBoxVScrollThumbHiddenWhenContentFits(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true)
+	tb.SetText("line one\nline two")
+	tb.SetWidth(200)
+	tb.SetHeight(200) // generous: content easily fits
+
+	core.MeasureWidget(tb, render.Size{W: 200, H: 200})
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 200})
+
+	if tb.vScrollShown {
+		t.Fatal("vScrollShown = true for content that fits, want false")
+	}
+	if _, ok := tb.vScrollTrack(); ok {
+		t.Fatal("vScrollTrack ok = true for content that fits, want false (no thumb)")
+	}
+	if got, want := tb.contentWidth(), tb.fullContentWidth(); got != want {
+		t.Fatalf("contentWidth() = %v, want %v (== fullContentWidth: no gutter reserved when not overflowing)", got, want)
+	}
+}
+
+// TestTextBoxVScrollThumbShownWhenContentOverflows is the threshold's
+// "shown" half: content taller than the viewport must show the thumb, with
+// a track inset by PaddingM on all sides (matching the text's own inset)
+// and scrollGutter wide.
+func TestTextBoxVScrollThumbShownWhenContentOverflows(t *testing.T) {
+	tb := newOverflowingMultilineTextBox(t)
+
+	if !tb.vScrollShown {
+		t.Fatal("vScrollShown = false for overflowing content, want true")
+	}
+	track, ok := tb.vScrollTrack()
+	if !ok {
+		t.Fatal("vScrollTrack ok = false, want true (content overflows the viewport)")
+	}
+	bounds := tb.Bounds()
+	pad := tb.metrics.PaddingM
+	gutter := tb.metrics.ScrollGutter
+	want := render.Rect{X: bounds.Right() - pad - gutter, Y: bounds.Y + pad, W: gutter, H: bounds.H - 2*pad}
+	if track != want {
+		t.Fatalf("vScrollTrack() = %+v, want %+v", track, want)
+	}
+}
+
+// TestTextBoxVScrollGutterOnlyReservedWhenShown proves the gutter's
+// reservation is conditional (see computeShowVScroll/ArrangeContent): exactly
+// fullContentWidth minus the gutter once the thumb is shown, checked against
+// the overflowing fixture (the fits-case half of this invariant is already
+// covered by TestTextBoxVScrollThumbHiddenWhenContentFits).
+func TestTextBoxVScrollGutterOnlyReservedWhenShown(t *testing.T) {
+	tb := newOverflowingMultilineTextBox(t)
+
+	want := tb.fullContentWidth() - tb.metrics.ScrollGutter
+	if got := tb.contentWidth(); got != want {
+		t.Fatalf("contentWidth() = %v, want %v (fullContentWidth minus the gutter, once shown)", got, want)
+	}
+}
+
+// TestTextBoxVScrollThumbGeometryReflectsProportionAndOffset checks the
+// thumb's size and position against the exact same shared formulas
+// (scrollThumbLength/scrollThumbPos, scrollviewer.go) it's built from, then
+// proves it actually tracks vscroll: moving the caret to the very start and
+// re-arranging must snap vscroll to 0 and the thumb to the top of the track.
+func TestTextBoxVScrollThumbGeometryReflectsProportionAndOffset(t *testing.T) {
+	tb := newOverflowingMultilineTextBox(t) // caret at the end: vscroll near max
+
+	track, ok := tb.vScrollTrack()
+	if !ok {
+		t.Fatal("vScrollTrack ok = false, want true")
+	}
+	thumb, ok := tb.vScrollThumbRect()
+	if !ok {
+		t.Fatal("vScrollThumbRect ok = false, want true")
+	}
+
+	total := tb.totalContentHeight()
+	wantH := scrollThumbLength(track.H, total)
+	if thumb.H != wantH {
+		t.Fatalf("thumb.H = %v, want %v (scrollThumbLength)", thumb.H, wantH)
+	}
+	maxOffset := total - track.H
+	wantY := scrollThumbPos(track.Y, track.H, thumb.H, tb.vscroll, maxOffset)
+	if thumb.Y != wantY {
+		t.Fatalf("thumb.Y = %v, want %v (scrollThumbPos at the current vscroll)", thumb.Y, wantY)
+	}
+
+	tb.SetCaret(0)
+	core.ArrangeWidget(tb, tb.Bounds())
+	if tb.vscroll != 0 {
+		t.Fatalf("vscroll after caret-to-start = %v, want 0", tb.vscroll)
+	}
+	thumb2, ok := tb.vScrollThumbRect()
+	if !ok {
+		t.Fatal("vScrollThumbRect ok = false after caret-to-start, want true")
+	}
+	if thumb2.Y != track.Y {
+		t.Fatalf("thumb.Y after caret-to-start = %v, want %v (top of the track)", thumb2.Y, track.Y)
+	}
+}
+
+// TestTextBoxVScrollThumbDragScrolls is the draggability requirement: a
+// Press inside the thumb captures the pointer and sets vDragging (instead
+// of the usual caret placement), a Move while captured scrolls via
+// dragVScroll WITHOUT moving the caret, and Release ends the drag and
+// clears the router's capture.
+func TestTextBoxVScrollThumbDragScrolls(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true)
+	tb.SetText("l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9")
+	tb.SetWidth(200)
+	tb.SetHeight(50)
+
+	r := input.NewRouter()
+	r.SetRoot(tb)
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50})
+	r.Focus(tb)
+
+	caretBefore := tb.Caret()
+	track, ok := tb.vScrollTrack()
+	if !ok {
+		t.Fatal("vScrollTrack ok = false, want true (test setup: content must overflow)")
+	}
+	thumb, ok := tb.vScrollThumbRect()
+	if !ok {
+		t.Fatal("vScrollThumbRect ok = false, want true")
+	}
+
+	press := render.Point{X: thumb.X + thumb.W/2, Y: thumb.Y + thumb.H/2}
+	r.PointerButton(input.ButtonLeft, true, press, 0)
+	if !tb.vDragging {
+		t.Fatal("vDragging = false after pressing the thumb, want true")
+	}
+	if got := r.Captured(); got != core.Widget(tb) {
+		t.Fatalf("Captured() after pressing the thumb = %v, want tb", got)
+	}
+
+	r.PointerMove(render.Point{X: press.X, Y: track.Y}, 0) // drag to the very top
+	if tb.vscroll != 0 {
+		t.Fatalf("vscroll after dragging the thumb to the top = %v, want 0", tb.vscroll)
+	}
+	if tb.Caret() != caretBefore {
+		t.Fatalf("Caret() changed by a thumb drag = %d, want unchanged %d (a thumb drag must not move the caret)", tb.Caret(), caretBefore)
+	}
+
+	r.PointerButton(input.ButtonLeft, false, render.Point{X: press.X, Y: track.Y}, 0)
+	if tb.vDragging {
+		t.Fatal("vDragging = true after Release, want false")
+	}
+	if got := r.Captured(); got != nil {
+		t.Fatalf("Captured() after Release = %v, want nil", got)
+	}
+}
+
+// TestTextBoxVScrollSingleLineNeverShowsThumb locks the single-line carve-out:
+// vScrollShown must stay false (and the thumb absent) regardless of content,
+// since single-line TextBox has no vertical axis to scroll at all.
+func TestTextBoxVScrollSingleLineNeverShowsThumb(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)) // no SetMultiline
+	tb.SetText("hello")
+	tb.SetWidth(50)
+	tb.SetHeight(10) // deliberately too short for even one line
+
+	core.MeasureWidget(tb, render.Size{W: 50, H: 10})
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 50, H: 10})
+
+	if tb.vScrollShown {
+		t.Fatal("vScrollShown = true for a single-line TextBox, want false")
+	}
+	if _, ok := tb.vScrollTrack(); ok {
+		t.Fatal("vScrollTrack ok = true for a single-line TextBox, want false")
+	}
+}

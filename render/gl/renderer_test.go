@@ -662,6 +662,42 @@ func TestTextBoxWordWrap(t *testing.T) {
 	})
 }
 
+// TestTextBoxVScroll is the visible-vertical-scroll-thumb golden (see
+// TextBox's vScrollTrack/vScrollThumbRect/RenderOverlay): a focused,
+// multi-line (word-wrap OFF) TextBox holding eight short lines in a 220x100
+// frame tall enough for only about four of them — the content overflows
+// vertically, so the classic track+raised-thumb chrome (drawScrollThumb,
+// the exact same chrome ScrollViewer and the ListView/DataGrid virtualizer
+// already share — see bevel.go) is drawn along the right inner edge. The
+// caret sits at the very end of the text (SetText's own caret-to-end
+// convention), so vscroll is clamped near its maximum and the thumb should
+// sit near the BOTTOM of its track, proportionally sized to roughly half
+// the track's height (about 4 of 8 lines are visible at once).
+func TestTextBoxVScroll(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "textbox_vscroll", 220, 100, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tb := controls.NewTextBox(face).SetMultiline(true)
+		tb.SetText("Line one\nLine two\nLine three\nLine four\nLine five\nLine six\nLine seven\nLine eight")
+		tb.OnFocusChanged(true)
+
+		frame := render.Rect{X: 0, Y: 0, W: 220, H: 100}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(tb, frame)
+		core.RenderWidget(tb, r)
+	})
+}
+
 // TestSliderProgress is the Phase 5 Task 7 golden: a Slider at 0.6 (over the
 // default [0,1] range) stacked above a ProgressBar at 0.3, in a vertical
 // StackPanel gapped by PaddingM, filling a 200x60 frame.
