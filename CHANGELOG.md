@@ -8,6 +8,18 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-30
+
+### Added
+
+- **Per-severity color for toast notifications.** `ToastSpec` gained a
+  `Severity` field (`SeverityInfo` (default), `SeveritySuccess`,
+  `SeverityWarning`, `SeverityError`). Non-info toasts show a colored accent
+  stripe driven by new theme tokens (`ColorTokens.SeverityInfo/Success/Warning/
+  Error`, defined in both `Light()` and `Dark()`), so success/warning/error read
+  at a glance. `SeverityInfo` renders exactly as before, so existing callers are
+  unchanged.
+
 ## [0.7.0] - 2026-07-30
 
 ### Fixed
