@@ -8,6 +8,20 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-30
+
+### Added
+
+- **Word-wrap for multi-line `TextBox`** — `SetWordWrap(true)` soft-wraps long
+  lines at the content width. Breaks are display-only (the text buffer keeps
+  only real newlines), and the caret, selection, up/down navigation, and click
+  hit-testing all track the wrapped visual rows.
+- **Visible vertical scroll thumb for multi-line `TextBox`** — when content
+  overflows the box, a draggable scroll thumb appears on the right edge using
+  the same chrome as `ScrollViewer`, so overflowing text is no longer invisible.
+  The thumb only reserves its gutter when shown, so non-overflowing layouts are
+  unchanged.
+
 ## [0.4.0] - 2026-07-29
 
 ### Added
