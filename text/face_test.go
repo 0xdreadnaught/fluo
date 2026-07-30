@@ -202,13 +202,17 @@ func TestFaceDrawBaselineConsistent(t *testing.T) {
 	}
 }
 
-// TestFaceOnGlyphDroppedAtlasFull is the atlas-full-surfacing unit test.
-// Actually filling the 1024x1024 coverage atlas would take thousands of
-// distinct real glyphs, so instead this forces the atlas into the "full"
-// state directly (same package, so the shelf-packer fields are reachable)
-// and asserts Draw reports each distinct dropped rune to OnGlyphDropped
-// exactly once, even though 'A' appears twice in the drawn string.
-func TestFaceOnGlyphDroppedAtlasFull(t *testing.T) {
+// TestFaceDrawGrowsAtlasInsteadOfDropping is the atlas-growth regression
+// test for Face.Draw. Before growth, forcing the coverage shelf packer
+// past its page's bottom edge made every subsequent glyphCoverage call
+// fail with "atlas full" and drop the glyph; now it must instead grow a
+// second page and keep drawing. This also doubles as the multi-page
+// batching test: 'A' (already packed on page 0) and 'B' (forced onto the
+// newly grown page 1) must produce one DrawGlyphs call per page used, the
+// same "batch per texture" grouping fallback fonts already exercise (see
+// TestFaceFallbackDrawBatchesPerTexture), now applied across pages of one
+// font's own atlas too.
+func TestFaceDrawGrowsAtlasInsteadOfDropping(t *testing.T) {
 	f, err := Load(goregular.TTF)
 	if err != nil {
 		t.Fatal(err)
@@ -216,11 +220,51 @@ func TestFaceOnGlyphDroppedAtlasFull(t *testing.T) {
 	fa := NewFace(f, 16)
 	atlas := fa.Font.sharedAtlas()
 
-	// Push the coverage shelf packer past the atlas's bottom edge so every
-	// subsequent glyphCoverage call fails with "atlas full", without
-	// needing to actually rasterize enough real glyphs to fill it.
-	atlas.covCursorY = atlasSize
-	atlas.covRowH = 0
+	// Pack 'A' onto page 0 the normal way, then push that page's packer
+	// past its bottom edge so the next distinct glyph has no room left on
+	// it, without needing to actually rasterize enough real glyphs to
+	// fill a whole 1024x1024 page.
+	giA, _ := f.glyphIndex('A')
+	if _, err := atlas.glyphCoverage(giA, 16); err != nil {
+		t.Fatal(err)
+	}
+	atlas.covPages[0].cursorY = atlasSize
+	atlas.covPages[0].rowH = 0
+
+	var dropped []rune
+	fa.OnGlyphDropped = func(r rune) { dropped = append(dropped, r) }
+
+	rr := &recordingRenderer{scale: 1}
+	fa.Draw(rr, render.Point{}, "AB", render.RGB(255, 255, 255))
+
+	if len(dropped) != 0 {
+		t.Fatalf("dropped = %v, want none (page growth replaces dropping on ordinary overflow)", dropped)
+	}
+	if len(atlas.covPages) != 2 {
+		t.Fatalf("covPages = %d, want 2 (a fresh page grown for 'B')", len(atlas.covPages))
+	}
+	if rr.glyphCalls != 2 {
+		t.Errorf("DrawGlyphs called %d times, want 2 (one per page: 'A' on page 0, 'B' on the grown page 1)", rr.glyphCalls)
+	}
+	if len(rr.glyphQuads) != 1 {
+		t.Errorf("last DrawGlyphs call had %d quads, want 1", len(rr.glyphQuads))
+	}
+}
+
+// TestFaceOnGlyphDroppedDegenerateGlyph is the atlas-full-surfacing unit
+// test post-growth: OnGlyphDropped now only fires for a glyph mask too
+// large to ever fit on a single empty coverage-atlas page — ordinary
+// overflow grows a new page instead (see
+// TestFaceDrawGrowsAtlasInsteadOfDropping) and never reaches this
+// callback. A SizePx several times atlasSize forces every real glyph's
+// device-px raster past a whole page's dimensions, without needing a
+// production knob to shrink the page itself.
+func TestFaceOnGlyphDroppedDegenerateGlyph(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := NewFace(f, atlasSize*3)
 
 	var dropped []rune
 	fa.OnGlyphDropped = func(r rune) { dropped = append(dropped, r) }
@@ -232,22 +276,21 @@ func TestFaceOnGlyphDroppedAtlasFull(t *testing.T) {
 		t.Fatalf("dropped = %v, want %v (one call per distinct rune, in first-seen order)", dropped, want)
 	}
 	if len(rr.glyphQuads) != 0 {
-		t.Errorf("glyphQuads = %v, want none (every glyph dropped)", rr.glyphQuads)
+		t.Errorf("glyphQuads = %v, want none (every glyph too large to place)", rr.glyphQuads)
 	}
 }
 
 // TestFaceOnGlyphDroppedDefaultNil asserts the default (unset)
 // OnGlyphDropped changes nothing: Draw must not panic when the callback is
-// nil, even along the dropped-glyph path.
+// nil, even along the dropped-glyph path (see
+// TestFaceOnGlyphDroppedDegenerateGlyph for why an oversized SizePx is
+// what still reaches that path after growth).
 func TestFaceOnGlyphDroppedDefaultNil(t *testing.T) {
 	f, err := Load(goregular.TTF)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fa := NewFace(f, 16)
-	atlas := fa.Font.sharedAtlas()
-	atlas.covCursorY = atlasSize
-	atlas.covRowH = 0
+	fa := NewFace(f, atlasSize*3)
 
 	rr := &recordingRenderer{scale: 1}
 	fa.Draw(rr, render.Point{}, "A", render.RGB(255, 255, 255)) // must not panic
