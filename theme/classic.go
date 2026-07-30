@@ -47,6 +47,14 @@ func Light() *Theme {
 			CaptionText:      render.RGB(255, 255, 255),
 			InactiveCaption:  render.RGB(128, 128, 128),
 
+			// Severity accents: muted enough to sit next to the classic
+			// bevel palette, but success/error stay unmistakably apart at
+			// a glance.
+			SeverityInfo:    render.RGB(0, 90, 158),
+			SeveritySuccess: render.RGB(0, 128, 0),
+			SeverityWarning: render.RGB(196, 130, 0),
+			SeverityError:   render.RGB(178, 0, 0),
+
 			// Deprecated pre-v0.2 fields, mapped onto the classic palette
 			// so unmigrated controls still render in classic colors.
 			WindowBackground:      render.RGB(212, 208, 200),
@@ -96,6 +104,13 @@ func Dark() *Theme {
 			CaptionTo:        render.RGB(58, 110, 165),
 			CaptionText:      render.RGB(255, 255, 255),
 			InactiveCaption:  render.RGB(42, 42, 42),
+
+			// Severity accents: brighter than the light variant so each
+			// still reads clearly against the darker button face.
+			SeverityInfo:    render.RGB(70, 130, 190),
+			SeveritySuccess: render.RGB(60, 170, 60),
+			SeverityWarning: render.RGB(214, 158, 0),
+			SeverityError:   render.RGB(214, 60, 60),
 
 			// Deprecated pre-v0.2 fields, mapped onto the classic palette
 			// so unmigrated controls still render in classic colors.
