@@ -8,6 +8,17 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-30
+
+### Changed
+
+- **Glyph coverage atlas now grows across pages instead of dropping glyphs.**
+  When a font's coverage atlas page fills up, a new page is allocated on demand
+  rather than hitting a hard cap, so documents with many distinct glyphs (large
+  multi-script text over a font-fallback chain) keep rendering. Draw batches by
+  atlas page, so the single-page common case is unchanged. `Face.OnGlyphDropped`
+  now fires only for the degenerate case of a glyph larger than a whole page.
+
 ## [0.5.0] - 2026-07-30
 
 ### Added
