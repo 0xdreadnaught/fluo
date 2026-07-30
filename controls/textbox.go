@@ -1,6 +1,7 @@
 package controls
 
 import (
+	"math"
 	"strings"
 	"time"
 
@@ -96,6 +97,46 @@ type TextBox struct {
 	// (padding-inset) height. Always 0 in single-line mode.
 	vscroll float32
 
+	// wordWrap toggles opt-in soft word-wrap (see SetWordWrap); false (the
+	// zero value) is the original behavior, unchanged — only meaningful when
+	// multiline is also true (see wrapping()).
+	wordWrap bool
+
+	// rev counts real mutations to runes (SetText's real-change path,
+	// replaceRange) — the "text revision" half of the visual-rows cache key
+	// (see visualRows/rowsValid). Never decreases; overflow is not a concern
+	// at realistic edit counts.
+	rev uint64
+
+	// rows, rowsWidth, rowsRev, and rowsValid together cache the visual-rows
+	// word-wrap layout (see visualRows/computeVisualRows): rows is valid
+	// (reusable without recomputing) exactly when rowsValid is true AND
+	// rowsWidth/rowsRev both still match the width/rev the cache was last
+	// computed for. Only ever populated while wrapping() is true; read by
+	// every row-based caret/selection/hit-test/render helper below.
+	rows      []visualRow
+	rowsWidth float32
+	rowsRev   uint64
+	rowsValid bool
+
+	// vScrollShown caches computeShowVScroll's decision for the current
+	// arrange bounds — refreshed once at the top of every ArrangeContent
+	// call, then read (not recomputed) by contentWidth, vScrollTrack,
+	// RenderOverlay, and OnPointer's thumb hit-test for the rest of that
+	// layout pass. Always false outside multiline mode.
+	vScrollShown bool
+
+	// vDragging and vDragGrab track an in-progress vertical-thumb drag (see
+	// dragVScroll/OnPointer): vDragging is true only while this TextBox
+	// holds the router's pointer capture for a thumb drag specifically (as
+	// opposed to the pre-existing caret-drag-to-select capture); vDragGrab
+	// is the y-offset (logical px) between the pointer and the thumb's own
+	// top edge at the moment the drag began, so the thumb tracks the
+	// pointer at a fixed grab point rather than snapping its edge to the
+	// cursor — the same convention ScrollViewer.dragGrabY documents.
+	vDragging bool
+	vDragGrab float32
+
 	// desiredCol and desiredColValid track the "desired column" Up/Down
 	// navigation preserves across lines shorter than it (see
 	// moveCaretVertical): desiredColValid is false whenever the caret last
@@ -185,7 +226,15 @@ func (t *TextBox) SetText(s string) *TextBox {
 	t.runes = []rune(s)
 	t.caret = len(t.runes)
 	t.anchor = t.caret
+	t.rev++
 	t.InvalidateArrange()
+	if t.wrapping() {
+		// A wrapped box's desired height depends on the text's own row
+		// count (see MeasureContent), unlike the fixed-height unwrapped
+		// case this method's own doc comment describes — so, only while
+		// wrapping, a real text change must also invalidate measure.
+		t.InvalidateMeasure()
+	}
 	t.restartBlink()
 	return t
 }
@@ -230,6 +279,40 @@ func (t *TextBox) SetMultiline(v bool) *TextBox {
 // Multiline reports whether multi-line mode is enabled (see SetMultiline).
 func (t *TextBox) Multiline() bool {
 	return t.multiline
+}
+
+// SetWordWrap toggles opt-in soft word-wrap; false (the default) is
+// SetMultiline's original "hard-wrap only, scroll horizontally" behavior,
+// byte-for-byte unchanged. Only meaningful when Multiline() is also true —
+// a harmless no-op flag otherwise (single-line mode never consults it; see
+// wrapping()). No '\n' is ever inserted into the buffer when wrap is on:
+// wrapping is a purely DISPLAY-time re-flow of each real ('\n'-delimited)
+// line into one or more visual rows at the box's current content width (see
+// visualRows/computeVisualRows) — Text() and OnChanged are completely
+// unaffected. Horizontal scrolling (hscroll) is disabled while wrap is on,
+// since wrapped rows never exceed the content width by construction (see
+// updateHScroll); vertical scrolling (vscroll) instead counts visual rows
+// rather than logical lines (see updateVScroll).
+//
+// Calls InvalidateMeasure, like SetMultiline: it can change MeasureContent's
+// answer, since a wrapped box's height depends on the resulting visual-row
+// count rather than the fixed textBoxMultilineDefaultLines default.
+func (t *TextBox) SetWordWrap(v bool) *TextBox {
+	t.wordWrap = v
+	t.InvalidateMeasure()
+	return t
+}
+
+// WordWrap reports whether word-wrap is enabled (see SetWordWrap).
+func (t *TextBox) WordWrap() bool {
+	return t.wordWrap
+}
+
+// wrapping reports whether word-wrap is ACTIVE right now: wordWrap is only
+// consulted at all while multiline is also true, so this is the single
+// guard every wrap-aware helper below branches on.
+func (t *TextBox) wrapping() bool {
+	return t.multiline && t.wordWrap
 }
 
 // SetEnabled toggles whether the box accepts focus and pointer/keyboard
@@ -376,7 +459,13 @@ func (t *TextBox) replaceRange(start, end int, s string) {
 	t.caret = start + len(ins)
 	t.anchor = t.caret
 	t.desiredColValid = false
+	t.rev++
 	t.InvalidateArrange()
+	if t.wrapping() {
+		// See SetText's matching comment: only while wrapping does a text
+		// change potentially change the desired (wrapped) height.
+		t.InvalidateMeasure()
+	}
 	t.restartBlink()
 	if t.onChanged != nil {
 		t.onChanged(string(t.runes))
@@ -462,20 +551,32 @@ func (t *TextBox) moveCaretTo(pos int, extend bool) {
 
 // homeTarget returns the rune index Home should move the caret to: 0 in
 // single-line mode — the whole text's start, unchanged — or, in multi-line
-// mode, the start of the caret's OWN line (see SetMultiline).
+// mode, the start of the caret's OWN line (see SetMultiline); while
+// wrapping (see SetWordWrap), "line" here means the caret's own VISUAL row
+// instead of its logical ('\n'-delimited) line — Home stops at a soft wrap
+// point exactly as it would at a hard one.
 func (t *TextBox) homeTarget() int {
 	if !t.multiline {
 		return 0
+	}
+	if t.wrapping() {
+		row, _ := t.rowCol(t.caret)
+		return t.rowStart(row)
 	}
 	line, _ := t.lineCol(t.caret)
 	return t.lineStart(line)
 }
 
 // endTarget is homeTarget's End counterpart: len(t.runes) in single-line
-// mode (unchanged), or the end of the caret's own line in multi-line mode.
+// mode (unchanged), or the end of the caret's own line in multi-line mode
+// (its own visual row, while wrapping — see homeTarget's doc comment).
 func (t *TextBox) endTarget() int {
 	if !t.multiline {
 		return len(t.runes)
+	}
+	if t.wrapping() {
+		row, _ := t.rowCol(t.caret)
+		return t.rowEnd(row)
 	}
 	line, _ := t.lineCol(t.caret)
 	return t.lineEnd(line)
@@ -660,7 +761,10 @@ func (t *TextBox) OnFocusChanged(focused bool) {
 // single-line mode, bounds origin + padding + (xOf(caret)-hscroll,
 // vertically centered) by lineHeight(); in multi-line mode, bounds origin +
 // padding + (xOfInLine(line,col)-hscroll, line*lineHeight()-vscroll) by
-// lineHeight() — see caretX/xOfInLine and their doc comments.
+// lineHeight() — or, while wrapping (see SetWordWrap), the same shape over
+// the caret's own visual (row,col) via rowCol/xOfInRow instead of
+// lineCol/xOfInLine (hscroll is always 0 there — see updateHScroll) — see
+// caretX/xOfInLine/xOfInRow and their doc comments.
 //
 // While an IME composition is active (t.composing), the reported rect is
 // shifted to the caret's position INSIDE the preedit run (preeditMeasure of
@@ -687,12 +791,19 @@ func (t *TextBox) CaretScreenRect() (render.Rect, bool) {
 		return render.Rect{X: cx, Y: textY, W: caretWidth, H: lh}, true
 	}
 
-	line, col := t.lineCol(t.caret)
-	cx := textX + t.xOfInLine(line, col)
+	var row, col int
+	var cx float32
+	if t.wrapping() {
+		row, col = t.rowCol(t.caret)
+		cx = textX + t.xOfInRow(row, col)
+	} else {
+		row, col = t.lineCol(t.caret)
+		cx = textX + t.xOfInLine(row, col)
+	}
 	if t.composing {
 		cx += t.preeditMeasure(t.preeditCaret)
 	}
-	cy := bounds.Y + pad - t.vscroll + float32(line)*lh
+	cy := bounds.Y + pad - t.vscroll + float32(row)*lh
 	return render.Rect{X: cx, Y: cy, W: caretWidth, H: lh}, true
 }
 
@@ -823,6 +934,359 @@ func (t *TextBox) indexOfLineCol(line, col int) int {
 	return start + clampInt(col, 0, end-start)
 }
 
+// --- Word wrap (opt-in; see SetWordWrap) ---
+
+// visualRow is one displayed row of multi-line text while wrapping (see
+// wrapping/SetWordWrap): [start,end) is a rune-index range into t.runes —
+// the row's own text, excluding a trailing real '\n' (matching lineStart/
+// lineEnd's own convention) and excluding any soft-wrap space dropped at a
+// word-boundary break (see wrapLogicalLine). Only ever populated/consulted
+// while wrapping() is true.
+type visualRow struct {
+	start, end int
+}
+
+// computeVisualRows builds the full visual-rows layout for runes at content
+// width (logical px, already padding-inset — see contentWidth): every real
+// '\n' is always a row boundary (exactly like lineStart/lineEnd), and each
+// resulting logical line is independently broken into one or more rows by
+// wrapLogicalLine. A nil face has no glyph widths to wrap by, so it
+// degrades to one row per logical line — the same layout wrapping() off
+// would produce — matching every other nil-face convention in this file.
+// Always returns at least one row (a single empty one for an empty runes).
+func computeVisualRows(runes []rune, face *text.Face, width float32) []visualRow {
+	if face == nil {
+		return logicalLineRows(runes)
+	}
+	var rows []visualRow
+	lineStart := 0
+	for i := 0; i <= len(runes); i++ {
+		if i == len(runes) || runes[i] == '\n' {
+			rows = append(rows, wrapLogicalLine(runes, lineStart, i, face, width)...)
+			lineStart = i + 1
+		}
+	}
+	return rows
+}
+
+// logicalLineRows splits runes into one visualRow per real '\n'-delimited
+// logical line, with no soft wrapping at all — computeVisualRows' fallback
+// for a nil face, and (conceptually) what wrapLogicalLine degenerates to
+// when a whole line already fits within width.
+func logicalLineRows(runes []rune) []visualRow {
+	var rows []visualRow
+	lineStart := 0
+	for i := 0; i <= len(runes); i++ {
+		if i == len(runes) || runes[i] == '\n' {
+			rows = append(rows, visualRow{start: lineStart, end: i})
+			lineStart = i + 1
+		}
+	}
+	return rows
+}
+
+// wrapLogicalLine breaks the single logical line runes[start:end) (no '\n'
+// inside it) into one or more visual rows at width, preferring to break
+// after the last space seen so far (a word boundary) and falling back to a
+// character break only when a single "word" is itself wider than width.
+// Relies on face.Measure's width being prefix-monotonic (more runes never
+// narrower), and — like every other index-based helper in this file (see
+// the type doc comment's "v0 simplification" note) — walks and re-measures
+// substrings rather than keeping a per-rune advance cache; O(n) per row
+// boundary, fine for realistic multi-line content.
+//
+// Three cases, checked in order, whenever the row-so-far plus rune i
+// exceeds width:
+//  1. The row is still empty (i == its own start): rune i is kept anyway —
+//     nothing narrower is possible — and the row ends right after it, so a
+//     single rune wider than width still gets exactly one row instead of an
+//     infinite loop.
+//  2. Rune i itself is the space that overflowed: the row ends BEFORE it
+//     and the next row starts right after it — the space is dropped from
+//     display entirely (shown as neither trailing nor leading whitespace),
+//     the conventional "eat the wrap-point space" rule.
+//  3. Otherwise: break after the last space seen in this row, if any (a
+//     word boundary); with no space at all in the row, character-break
+//     right at i.
+func wrapLogicalLine(runes []rune, start, end int, face *text.Face, width float32) []visualRow {
+	if start == end {
+		return []visualRow{{start: start, end: end}}
+	}
+
+	var rows []visualRow
+	rowStart := start
+	lastSpace := -1
+
+	for i := rowStart; i < end; i++ {
+		w := face.Measure(string(runes[rowStart : i+1])).W
+		if runes[i] == ' ' {
+			lastSpace = i
+		}
+		if w <= width {
+			continue
+		}
+
+		switch {
+		case i == rowStart:
+			rows = append(rows, visualRow{start: rowStart, end: i + 1})
+			rowStart = i + 1
+		case runes[i] == ' ':
+			rows = append(rows, visualRow{start: rowStart, end: i})
+			rowStart = i + 1
+		case lastSpace >= rowStart:
+			rows = append(rows, visualRow{start: rowStart, end: lastSpace + 1})
+			rowStart = lastSpace + 1
+		default:
+			rows = append(rows, visualRow{start: rowStart, end: i})
+			rowStart = i
+		}
+		lastSpace = -1
+		i = rowStart - 1 // resume scanning from the new row's own start
+	}
+
+	// Only add a trailing row if there is unconsumed text left after the
+	// last break: a break inside the loop can, in a sufficiently narrow
+	// (even zero-width) degenerate case, land exactly on rowStart==end —
+	// e.g. two runes in a row each too wide for width alone (case 1 twice
+	// in succession) — and an unconditional append here would then tack on
+	// a spurious empty row after content that already covers the whole
+	// line.
+	if rowStart < end {
+		rows = append(rows, visualRow{start: rowStart, end: end})
+	}
+	return rows
+}
+
+// fullContentWidth returns the padding-inset content width WITHOUT
+// subtracting the vertical-scroll thumb's gutter, even when the thumb is
+// currently shown — used only by computeShowVScroll to decide whether to
+// show the thumb in the first place (see its own doc comment for why that
+// decision must use this ungated width rather than contentWidth() below).
+func (t *TextBox) fullContentWidth() float32 {
+	w := t.Bounds().W - 2*t.metrics.PaddingM
+	if w < 0 {
+		w = 0
+	}
+	return w
+}
+
+// contentHeight returns the padding-inset content (viewport) height — the
+// height axis has no gutter of its own to further subtract (the vertical
+// thumb's gutter is horizontal-only), so this is also exactly the value
+// ArrangeContent computes as innerH.
+func (t *TextBox) contentHeight() float32 {
+	h := t.Bounds().H - 2*t.metrics.PaddingM
+	if h < 0 {
+		h = 0
+	}
+	return h
+}
+
+// contentWidth returns the current inner content width in logical px that
+// TEXT actually gets to use — fullContentWidth, further reduced by the
+// vertical-scroll thumb's gutter whenever vScrollShown is true (see
+// computeShowVScroll/ArrangeContent, which caches that decision once per
+// arrange pass) — used to key the visual-rows layout at runtime (see
+// visualRows) and to clamp horizontal scroll (updateHScroll), so both
+// always reflect the box's actual, thumb-aware arranged width.
+func (t *TextBox) contentWidth() float32 {
+	w := t.fullContentWidth()
+	if t.vScrollShown {
+		w -= t.metrics.ScrollGutter
+		if w < 0 {
+			w = 0
+		}
+	}
+	return w
+}
+
+// totalContentHeight returns the current total (unclipped) content height:
+// row/line count times lineHeight, using the visual-rows count while
+// wrapping (at the current, gutter-aware contentWidth — safe to call here,
+// unlike inside computeShowVScroll, since every caller of this method runs
+// AFTER vScrollShown has already been decided for this arrange pass) or the
+// logical-line count otherwise. NOT used by computeShowVScroll itself (see
+// its own doc comment on why that needs the ungated width instead); this
+// one backs updateVScroll's maxScroll clamp and the thumb's own geometry
+// (vScrollThumbRect/dragVScroll).
+func (t *TextBox) totalContentHeight() float32 {
+	lh := t.lineHeight()
+	var rows int
+	if t.wrapping() {
+		rows = t.rowCount()
+	} else {
+		rows = t.lineCount()
+	}
+	return float32(rows) * lh
+}
+
+// computeShowVScroll decides whether the vertical scroll thumb should be
+// shown (and its gutter reserved) for the box's CURRENT arrange bounds:
+// true only in multiline mode, only when the content's total row/line
+// height exceeds the viewport height (contentHeight). Deliberately uses
+// fullContentWidth — the width BEFORE any gutter is subtracted — to compute
+// the wrapped row count while wrapping, rather than the gutter-aware
+// contentWidth(): reserving the gutter is itself a consequence of this
+// decision, so using the already-gutter-reduced width here would make the
+// decision depend on its own prior result. This is safe and never
+// flip-flops: a NARROWER width can only produce the same or MORE wrapped
+// rows, never fewer (see wrapLogicalLine), so content that already overflows
+// at the full (ungated) width is guaranteed to still overflow — never
+// LESS — once the gutter narrows things further. Called once per arrange
+// pass (ArrangeContent caches the result in vScrollShown); every other
+// method in this file that cares reads that cached field rather than
+// recomputing, so a wrapped, overflowing box does not re-run this (and the
+// extra, ungated visualRows computation it implies) on every render/hit-test
+// call.
+func (t *TextBox) computeShowVScroll() bool {
+	if !t.multiline {
+		return false
+	}
+	viewportH := t.contentHeight()
+	if viewportH <= 0 {
+		return false
+	}
+	lh := t.lineHeight()
+	var rows int
+	if t.wrapping() {
+		rows = len(t.visualRows(t.fullContentWidth()))
+	} else {
+		rows = t.lineCount()
+	}
+	return float32(rows)*lh > viewportH
+}
+
+// wrapMeasureWidth resolves the content width MeasureContent should wrap
+// against from the available OUTER size the layout engine offers (already
+// reflecting any explicit SetWidth, via core.MeasureWidget's explicit-size
+// precedence — so in the common explicit-width case, this is exactly the
+// width that was requested): available.W minus padding, or — if available.W
+// is unconstrained (+Inf, e.g. a container offering infinite cross-axis
+// space) — textBoxDefaultWidth's own content width, so a wrapped box with
+// no explicit width still gets a deterministic, finite measurement rather
+// than wrapping against infinity (which would degenerate to "never wrap").
+func (t *TextBox) wrapMeasureWidth(availableW float32) float32 {
+	if math.IsInf(float64(availableW), 1) {
+		availableW = textBoxDefaultWidth
+	}
+	w := availableW - 2*t.metrics.PaddingM
+	if w < 0 {
+		w = 0
+	}
+	return w
+}
+
+// visualRows returns the current wrap layout for width, recomputing it only
+// when width or the text has changed since the last call (rowsWidth/rowsRev
+// vs. width/t.rev) — the single cache MeasureContent, ArrangeContent, every
+// row-based caret/hit-test helper, and renderMultilineWrapped all share, so
+// a wrapped TextBox re-flows once per real change (a text edit or a width
+// change) rather than every frame or every call.
+func (t *TextBox) visualRows(width float32) []visualRow {
+	if t.rowsValid && t.rowsWidth == width && t.rowsRev == t.rev {
+		return t.rows
+	}
+	t.rows = computeVisualRows(t.runes, t.face, width)
+	t.rowsWidth = width
+	t.rowsRev = t.rev
+	t.rowsValid = true
+	return t.rows
+}
+
+// rowCount returns the number of visual rows in the current wrap layout (at
+// the box's current contentWidth) — the wrapping analogue of lineCount().
+func (t *TextBox) rowCount() int {
+	return len(t.visualRows(t.contentWidth()))
+}
+
+// rowStart and rowEnd are rowCol's inverse building blocks — the wrapping
+// analogues of lineStart/lineEnd — returning row idx's own [start,end)
+// rune-index range in the current wrap layout; an out-of-range idx (callers
+// always clamp first, but a defensive check costs nothing) returns
+// len(t.runes).
+func (t *TextBox) rowStart(idx int) int {
+	rows := t.visualRows(t.contentWidth())
+	if idx < 0 || idx >= len(rows) {
+		return len(t.runes)
+	}
+	return rows[idx].start
+}
+
+func (t *TextBox) rowEnd(idx int) int {
+	rows := t.visualRows(t.contentWidth())
+	if idx < 0 || idx >= len(rows) {
+		return len(t.runes)
+	}
+	return rows[idx].end
+}
+
+// indexOfRowCol is rowCol's inverse: the rune index of column col on visual
+// row idx, with col clamped to that row's own length — the wrapping
+// analogue of indexOfLineCol, used the same way by moveCaretVertical's
+// desiredCol logic and by caretIndexAtPos's click hit-testing.
+func (t *TextBox) indexOfRowCol(idx, col int) int {
+	start, end := t.rowStart(idx), t.rowEnd(idx)
+	return start + clampInt(col, 0, end-start)
+}
+
+// rowCol maps rune index i (0..len(runes)) to its 0-based (row, col) in the
+// current wrap layout — the wrapping analogue of lineCol. A caret exactly
+// at a row boundary (soft OR hard — computeVisualRows makes no distinction
+// once the rows exist) is reported at the END of the UPPER row, col ==
+// that row's own length: the same tie-break lineCol already applies at a
+// real '\n' (see its own doc comment, "just before the '\n': end of that
+// line"), kept consistent between hard and soft breaks so Up/Down/Home/End
+// behave identically at either kind.
+func (t *TextBox) rowCol(i int) (row, col int) {
+	rows := t.visualRows(t.contentWidth())
+	for idx := range rows {
+		if i <= rows[idx].end {
+			return idx, i - rows[idx].start
+		}
+	}
+	last := len(rows) - 1
+	return last, i - rows[last].start
+}
+
+// xOfInRow is xOfInLine's wrapping analogue: the x-offset (logical px, from
+// the start of row idx's own text) of column col within it.
+func (t *TextBox) xOfInRow(idx, col int) float32 {
+	if t.face == nil {
+		return 0
+	}
+	rows := t.visualRows(t.contentWidth())
+	if idx < 0 || idx >= len(rows) {
+		return 0
+	}
+	start := rows[idx].start
+	return t.face.Measure(string(t.runes[start : start+col])).W
+}
+
+// rowAtY is lineAtY's wrapping analogue: the 0-based visual row index
+// nearest window-space y, clamped to [0, rowCount()-1].
+func (t *TextBox) rowAtY(windowY float32) int {
+	lh := t.lineHeight()
+	if lh <= 0 {
+		return 0
+	}
+	row := int(t.localTextY(windowY) / lh)
+	return clampInt(row, 0, t.rowCount()-1)
+}
+
+// colAtXInRow is colAtX's wrapping analogue: the column within visual row
+// idx nearest local x-coordinate x, using the same "compare against each
+// boundary's midpoint" rule, bounded to idx's own rune count.
+func (t *TextBox) colAtXInRow(idx int, x float32) int {
+	n := t.rowEnd(idx) - t.rowStart(idx)
+	for i := 0; i < n; i++ {
+		mid := (t.xOfInRow(idx, i) + t.xOfInRow(idx, i+1)) / 2
+		if x < mid {
+			return i
+		}
+	}
+	return n
+}
+
 // xOfInLine returns the x-offset (logical px, from the start of line's own
 // text) of column col within line — the multi-line analogue of xOf, which
 // measures from the start of the WHOLE text: each line is drawn at its own
@@ -838,12 +1302,21 @@ func (t *TextBox) xOfInLine(line, col int) float32 {
 
 // caretX returns the caret's current x-offset in "local text" space: for a
 // single-line box this is exactly xOf(caret) (unchanged); in multi-line
-// mode it is xOfInLine of the caret's own (line, col), since multi-line
-// hscroll is keyed off the caret's line alone (see the SetMultiline doc
-// comment's horizontal-scroll simplification).
+// mode it is xOfInLine of the caret's own (line, col) — or, while wrapping
+// (see SetWordWrap), xOfInRow of its own (row, col) — since multi-line
+// hscroll is keyed off the caret's own line/row alone (see the SetMultiline
+// doc comment's horizontal-scroll simplification). Only reachable in
+// practice for the unwrapped path: updateHScroll, caretX's only caller,
+// pins hscroll at 0 and returns before ever calling this while wrapping —
+// the wrapping branch here exists so caretX stays correct (and safely
+// callable) even if that changes.
 func (t *TextBox) caretX() float32 {
 	if !t.multiline {
 		return t.xOf(t.caret)
+	}
+	if t.wrapping() {
+		row, col := t.rowCol(t.caret)
+		return t.xOfInRow(row, col)
 	}
 	line, col := t.lineCol(t.caret)
 	return t.xOfInLine(line, col)
@@ -881,6 +1354,29 @@ func (t *TextBox) caretLineWidth() float32 {
 // intervening horizontal move (typing, Left/Right, Home/End, a click)
 // still resets it on its own next SetCaret/Select call.
 func (t *TextBox) moveCaretVertical(delta int, extend bool) {
+	if t.wrapping() {
+		// Same desiredCol bookkeeping as below, but moving between VISUAL
+		// rows instead of logical lines — see rowCol/indexOfRowCol.
+		row, col := t.rowCol(t.caret)
+		dc := col
+		if t.desiredColValid {
+			dc = t.desiredCol
+		}
+
+		newRow := clampInt(row+delta, 0, t.rowCount()-1)
+		idx := t.indexOfRowCol(newRow, dc)
+
+		if extend {
+			t.Select(t.anchor, idx)
+		} else {
+			t.SetCaret(idx)
+		}
+
+		t.desiredCol = dc
+		t.desiredColValid = true
+		return
+	}
+
 	line, col := t.lineCol(t.caret)
 	dc := col
 	if t.desiredColValid {
@@ -943,10 +1439,18 @@ func (t *TextBox) colAtX(line int, x float32) int {
 // caretIndexAtPos resolves a pointer event's window-space position to a
 // rune index: in single-line mode this is exactly caretIndexAtX(localTextX(x))
 // (unchanged); in multi-line mode it also resolves the row via lineAtY, then
-// the column within that row via colAtX, combined through indexOfLineCol.
+// the column within that row via colAtX, combined through indexOfLineCol —
+// or, while wrapping (see SetWordWrap), the same shape but over VISUAL rows
+// (rowAtY/colAtXInRow/indexOfRowCol), so a click inside a wrapped line lands
+// the caret at the right buffer index.
 func (t *TextBox) caretIndexAtPos(x, y float32) int {
 	if !t.multiline {
 		return t.caretIndexAtX(t.localTextX(x))
+	}
+	if t.wrapping() {
+		row := t.rowAtY(y)
+		col := t.colAtXInRow(row, t.localTextX(x))
+		return t.indexOfRowCol(row, col)
 	}
 	line := t.lineAtY(y)
 	col := t.colAtX(line, t.localTextX(x))
@@ -1002,9 +1506,34 @@ const textBoxMultilineDefaultLines = 4
 // textBoxMultilineDefaultLines*lineHeight()+2*PaddingM in multi-line mode
 // (see SetMultiline). An explicit SetWidth/SetHeight overrides either
 // through core.MeasureWidget's normal explicit-size precedence, so
-// available is never consulted.
+// available is never consulted in either of those cases.
+//
+// While wrapping (see SetWordWrap), available IS consulted — this is the
+// one case where the box's desired size actually depends on it, WPF-style:
+// the content width to wrap against is resolved from available.W
+// (wrapMeasureWidth — already reflecting an explicit SetWidth, per
+// core.MeasureWidget's precedence, in the common case), the visual-rows
+// layout is computed (and cached — see visualRows) at that width, and the
+// reported height is exactly that row count times lineHeight() plus
+// padding, so a wrapped box measures as tall as its wrapped content
+// actually needs. ArrangeContent re-resolves the SAME layout against the
+// box's final arranged width (via contentWidth/visualRows sharing the
+// identical cache), so the two only disagree — leaving the wrapped content
+// taller than the assigned bounds, handled by vertical scrolling exactly
+// like any other over-long multi-line content — in the atypical case where
+// arrange assigns a different width than measure was given (e.g. a
+// Stretch-aligned box in a container that resizes between passes); no
+// second measure pass is triggered for that, by design (see ArrangeContent).
 func (t *TextBox) MeasureContent(available render.Size) render.Size {
 	lh := t.lineHeight()
+
+	if t.wrapping() {
+		width := t.wrapMeasureWidth(available.W)
+		rows := t.visualRows(width)
+		h := lh*float32(len(rows)) + 2*t.metrics.PaddingM
+		return render.Size{W: width + 2*t.metrics.PaddingM, H: h}
+	}
+
 	h := lh + 2*t.metrics.PaddingM
 	if t.multiline {
 		h = lh*textBoxMultilineDefaultLines + 2*t.metrics.PaddingM
@@ -1013,17 +1542,36 @@ func (t *TextBox) MeasureContent(available render.Size) render.Size {
 }
 
 // ArrangeContent is the single source of truth for hscroll/vscroll clamping
-// (the ScrollViewer clamp-in-arrange pattern applied to each scroll axis):
-// it recomputes the padding-inset inner width/height from the arranged
-// bounds and clamps hscroll (always) and vscroll (multi-line mode only —
-// updateVScroll is a no-op-to-zero in single-line mode) so the caret stays
-// visible within them.
+// (the ScrollViewer clamp-in-arrange pattern applied to each scroll axis)
+// AND for the vertical-scroll thumb's show/hide decision (computeShowVScroll,
+// cached into vScrollShown): it recomputes the padding-inset inner
+// width/height from the arranged bounds and clamps hscroll (always) and
+// vscroll (multi-line mode only — updateVScroll is a no-op-to-zero in
+// single-line mode) so the caret stays visible within them.
+//
+// vScrollShown is refreshed FIRST, before anything else runs, because
+// contentWidth() — which updateHScroll's width argument, and every
+// wrap-aware helper invoked for the rest of this pass, depend on — reduces
+// by the thumb's gutter exactly when vScrollShown is true. A non-overflowing
+// box (vScrollShown false) sees contentWidth() == fullContentWidth() (no
+// gutter reserved), so this whole mechanism is invisible to a box that never
+// needed to scroll — existing goldens with no vertical overflow render
+// byte-for-byte as before this feature.
+//
+// While wrapping (see SetWordWrap), this is also where the visual-rows
+// layout gets re-flowed against the FINAL arranged (and now possibly
+// gutter-reduced) width if it differs from whatever width MeasureContent
+// last wrapped against: updateVScroll (via rowCount/rowCol) calls
+// contentWidth(), which reads bounds.W straight from t.Bounds() — already
+// set to this exact bounds by core.ArrangeWidget before calling here — and
+// visualRows' own cache (keyed on that width) transparently recomputes on a
+// mismatch. No separate "re-wrap" step is needed beyond that cache lookup.
 func (t *TextBox) ArrangeContent(bounds render.Rect) {
-	innerW := bounds.W - 2*t.metrics.PaddingM
-	if innerW < 0 {
-		innerW = 0
-	}
-	t.updateHScroll(innerW)
+	// Refreshed first: contentWidth (used by updateHScroll below, and by
+	// every wrap-aware helper for the rest of this pass) depends on it.
+	t.vScrollShown = t.computeShowVScroll()
+
+	t.updateHScroll(t.contentWidth())
 
 	innerH := bounds.H - 2*t.metrics.PaddingM
 	if innerH < 0 {
@@ -1039,7 +1587,16 @@ func (t *TextBox) ArrangeContent(bounds render.Rect) {
 // caretX/caretLineWidth reduce to xOf(caret)/xOf(len(runes)) in single-line
 // mode (unchanged behavior); in multi-line mode they key off the caret's
 // own line only (see their doc comments and SetMultiline).
+//
+// While wrapping (see SetWordWrap), horizontal scrolling is disabled
+// outright: wrapped rows never exceed innerW by construction, so hscroll is
+// simply pinned at 0 rather than computed at all.
 func (t *TextBox) updateHScroll(innerW float32) {
+	if t.wrapping() {
+		t.hscroll = 0
+		return
+	}
+
 	caretX := t.caretX()
 
 	if caretX-t.hscroll < 0 {
@@ -1067,7 +1624,10 @@ func (t *TextBox) updateHScroll(innerW float32) {
 // consulted for one). In multi-line mode it clamps vscroll so the caret's
 // own line stays fully visible within [0, innerH] — never scrolling past
 // the point where the last line would leave a gap at the bottom (vscroll is
-// also capped at max(0, lineCount()*lineHeight()-innerH)).
+// also capped at max(0, lineCount()*lineHeight()-innerH)). While wrapping
+// (see SetWordWrap), "line" here means VISUAL row throughout — the caret's
+// own row (rowCol) and the total row count (rowCount), both at the box's
+// current contentWidth — rather than the logical-line equivalents.
 func (t *TextBox) updateVScroll(innerH float32) {
 	if !t.multiline {
 		t.vscroll = 0
@@ -1075,8 +1635,13 @@ func (t *TextBox) updateVScroll(innerH float32) {
 	}
 
 	lh := t.lineHeight()
-	line, _ := t.lineCol(t.caret)
-	caretY := float32(line) * lh
+	var row int
+	if t.wrapping() {
+		row, _ = t.rowCol(t.caret)
+	} else {
+		row, _ = t.lineCol(t.caret)
+	}
+	caretY := float32(row) * lh
 
 	if caretY-t.vscroll < 0 {
 		t.vscroll = caretY
@@ -1088,13 +1653,94 @@ func (t *TextBox) updateVScroll(innerH float32) {
 		t.vscroll = 0
 	}
 
-	maxScroll := float32(t.lineCount())*lh - innerH
+	maxScroll := t.totalContentHeight() - innerH
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
 	if t.vscroll > maxScroll {
 		t.vscroll = maxScroll
 	}
+}
+
+// --- Vertical scroll thumb (shown only while content overflows) ---
+
+// vScrollTrack returns the vertical thumb's track rect — a scrollGutter-wide
+// strip along the right inner edge, inset by PaddingM on all four sides like
+// the text itself (so the thumb sits comfortably inside the sunken well
+// rather than overlapping its bevel) — and ok==false whenever vScrollShown
+// is false (see computeShowVScroll/ArrangeContent) or the box has no usable
+// height to show a track in.
+func (t *TextBox) vScrollTrack() (render.Rect, bool) {
+	if !t.vScrollShown {
+		return render.Rect{}, false
+	}
+	bounds := t.Bounds()
+	pad := t.metrics.PaddingM
+	gutter := t.metrics.ScrollGutter
+	h := bounds.H - 2*pad
+	if h <= 0 {
+		return render.Rect{}, false
+	}
+	return render.Rect{
+		X: bounds.Right() - pad - gutter,
+		Y: bounds.Y + pad,
+		W: gutter,
+		H: h,
+	}, true
+}
+
+// vScrollThumbRect returns the thumb's current on-screen rect — track
+// position plus the offset proportional to the current vscroll — reusing
+// ScrollViewer's own shared thumb-sizing/positioning math (scrollThumbLength/
+// scrollThumbPos, scrollviewer.go) so it looks and behaves identically.
+// ok==false exactly when vScrollTrack is (nothing to scroll, so nothing to
+// draw or hit-test against).
+func (t *TextBox) vScrollThumbRect() (render.Rect, bool) {
+	track, ok := t.vScrollTrack()
+	if !ok {
+		return render.Rect{}, false
+	}
+	total := t.totalContentHeight()
+	thumbH := scrollThumbLength(track.H, total)
+	maxOffset := total - track.H
+	thumbY := scrollThumbPos(track.Y, track.H, thumbH, t.vscroll, maxOffset)
+	return render.Rect{X: track.X, Y: thumbY, W: track.W, H: thumbH}, true
+}
+
+// dragVScroll recomputes t.vscroll directly from a vertical-thumb drag's
+// current pointer y-position, via scrollDragOffset — the same drag math
+// ScrollViewer.dragTo and virtualizer.dragTo already share (scrollviewer.go),
+// keeping the pointer at the same relative grab point within the thumb
+// (vDragGrab) it was at when the drag began.
+//
+// Deliberately does NOT call InvalidateArrange, unlike every other
+// vscroll-affecting path in this file: updateVScroll's caret-follow clamp
+// (see its own doc comment) starts from whatever t.vscroll ALREADY is and
+// only adjusts it if the caret has scrolled out of view — so invalidating
+// arrange here would let the very next layout pass immediately snap the
+// drag right back to the caret's position, undoing it. fluo only re-runs
+// Measure/Arrange when NeedsLayout is dirty (see app.Surface.Frame) or the
+// window resizes, and no OTHER path in this file marks arrange dirty on a
+// pointer Move — so setting vscroll directly here is enough for it to take
+// effect on the very next Render call and simply persist, exactly like a
+// real editor's "manual scroll sticks until you type or move the caret
+// again": the next actual caret-moving mutation (SetCaret/Select/
+// replaceRange/SetText, all of which DO invalidate arrange) naturally
+// re-syncs the view via that same existing clamp.
+func (t *TextBox) dragVScroll(posY float32) {
+	track, ok := t.vScrollTrack()
+	if !ok {
+		return
+	}
+	thumb, ok := t.vScrollThumbRect()
+	if !ok {
+		return
+	}
+	maxOffset := t.totalContentHeight() - track.H
+	if maxOffset <= 0 {
+		return
+	}
+	t.vscroll = scrollDragOffset(track.Y, track.H, thumb.H, posY, t.vDragGrab, maxOffset)
 }
 
 // ClipRect implements core.ClipProvider, clipping to the textbox's own full
@@ -1249,6 +1895,20 @@ func (t *TextBox) renderComposing(r render.Renderer, textX, textY, lh float32) {
 // diverges from string(t.runes) — the placeholder — when t.runes is empty,
 // in which case Selection() is always (0,0) anyway, so the intersection math
 // is a no-op regardless). The caret is drawn once, at its own (line, col).
+//
+// While wrapping (see SetWordWrap) and t.runes is non-empty, this delegates
+// entirely to renderMultilineWrapped instead — the logical-line body below
+// never runs for that case. Two carve-outs from that dispatch, both
+// deliberate v0 simplifications: an EMPTY box (showing its placeholder, a
+// plain string with no wrap layout of its own — see visualRows, which is
+// always keyed off t.runes) always renders via the unwrapped body below,
+// same as if wrapping were off; and an ACTIVE IME composition always
+// renders via renderComposingMultiline's own logical-line body, regardless
+// of wrapping — a composition is transient and never contains a '\n' itself
+// (see OnComposition), so it temporarily shows unwrapped (with hscroll
+// re-enabled for that one frame's rendering, since updateHScroll's pin only
+// applies through the normal arrange pass) rather than reflowing rows
+// specifically for it.
 func (t *TextBox) renderMultiline(r render.Renderer, bounds render.Rect) {
 	c := t.colors
 	pad := t.metrics.PaddingM
@@ -1256,13 +1916,19 @@ func (t *TextBox) renderMultiline(r render.Renderer, bounds render.Rect) {
 	textX := bounds.X + pad - t.hscroll
 
 	s, color := t.displayText()
-	lines := strings.Split(s, "\n")
 
 	if t.composing {
+		lines := strings.Split(s, "\n")
 		t.renderComposingMultiline(r, bounds, textX, lh, lines, color)
 		return
 	}
 
+	if t.wrapping() && len(t.runes) > 0 {
+		t.renderMultilineWrapped(r, bounds, color)
+		return
+	}
+
+	lines := strings.Split(s, "\n")
 	start, end := t.Selection()
 
 	for i, line := range lines {
@@ -1291,6 +1957,53 @@ func (t *TextBox) renderMultiline(r render.Renderer, bounds render.Rect) {
 		line, col := t.lineCol(t.caret)
 		cx := textX + t.xOfInLine(line, col)
 		cy := bounds.Y + pad - t.vscroll + float32(line)*lh
+		r.FillRect(render.Rect{X: cx, Y: cy, W: caretWidth, H: lh}, c.WindowText)
+	}
+}
+
+// renderMultilineWrapped is renderMultiline's body while wrapping (see
+// SetWordWrap) with non-empty text: the same per-row draw/select/caret
+// shape as renderMultiline's own logical-line loop, but over the current
+// visual-rows layout (t.visualRows(t.contentWidth())) and reading each
+// row's text directly from t.runes (row.start:row.end) rather than from a
+// strings.Split slice — rows carry no '\n' of their own to split on, soft
+// breaks aren't in the buffer at all. hscroll is always 0 here (see
+// updateHScroll), so textX has no scroll term to subtract.
+func (t *TextBox) renderMultilineWrapped(r render.Renderer, bounds render.Rect, color render.Color) {
+	c := t.colors
+	pad := t.metrics.PaddingM
+	lh := t.lineHeight()
+	textX := bounds.X + pad
+
+	rows := t.visualRows(t.contentWidth())
+	start, end := t.Selection()
+
+	for i, row := range rows {
+		rowY := bounds.Y + pad - t.vscroll + float32(i)*lh
+		lo, hi := row.start, row.end
+
+		selStart, selEnd := clampInt(start, lo, hi), clampInt(end, lo, hi)
+		hasSel := selStart < selEnd
+
+		if hasSel {
+			x0 := textX + t.xOfInRow(i, selStart-lo)
+			x1 := textX + t.xOfInRow(i, selEnd-lo)
+			r.FillRect(render.Rect{X: x0, Y: rowY, W: x1 - x0, H: lh}, c.Highlight)
+		}
+
+		if line := string(t.runes[lo:hi]); t.face != nil && line != "" {
+			if hasSel {
+				t.drawLineWithSelection(r, []rune(line), selStart-lo, selEnd-lo, textX, rowY, color)
+			} else {
+				t.face.Draw(r, render.Point{X: textX, Y: rowY}, line, color)
+			}
+		}
+	}
+
+	if t.caretShown() {
+		row, col := t.rowCol(t.caret)
+		cx := textX + t.xOfInRow(row, col)
+		cy := bounds.Y + pad - t.vscroll + float32(row)*lh
 		r.FillRect(render.Rect{X: cx, Y: cy, W: caretWidth, H: lh}, c.WindowText)
 	}
 }
@@ -1364,15 +2077,26 @@ func (t *TextBox) drawLineWithSelection(r render.Renderer, runes []rune, start, 
 	}
 }
 
-// RenderOverlay is a deliberate no-op: classic Windows textboxes draw no
-// separate focus ring (unlike every other focusable control in this
-// package, per drawFocusRing's doc comment in clickable.go) — the caret and
-// the sunken well already read as "this is the focused field," and the box
-// has no raised/sunken chrome swap to signal focus with either (unlike
-// Button's press-sunken state). TextBox still implements OverlayRenderer so
-// core.RenderWidget's overlay dispatch (see core/widget.go) finds a stable
-// method here rather than silently falling through, but it paints nothing.
-func (t *TextBox) RenderOverlay(r render.Renderer) {}
+// RenderOverlay draws no separate focus ring: classic Windows textboxes
+// don't (unlike every other focusable control in this package, per
+// drawFocusRing's doc comment in clickable.go) — the caret and the sunken
+// well already read as "this is the focused field," and the box has no
+// raised/sunken chrome swap to signal focus with either (unlike Button's
+// press-sunken state).
+//
+// It DOES draw the vertical scroll thumb (drawScrollThumb, the same classic
+// track+raised-thumb chrome ScrollViewer and the ListView/DataGrid
+// virtualizer already share — see bevel.go) whenever vScrollTrack reports
+// one (i.e. vScrollShown is true — the content overflows the viewport
+// vertically; see computeShowVScroll). Drawn last, after core.RenderWidget's
+// own clip push/pop around this leaf's (empty) Children() list, so — like
+// every other OverlayRenderer in this package — it is never itself clipped.
+func (t *TextBox) RenderOverlay(r render.Renderer) {
+	if track, ok := t.vScrollTrack(); ok {
+		thumb, _ := t.vScrollThumbRect()
+		drawScrollThumb(r, track, thumb, t.colors)
+	}
+}
 
 // OnKey implements input.KeyHandler, the normative Task 6 keyboard map.
 // Ignored entirely (no mutation, Handled left false) while disabled or
@@ -1499,38 +2223,61 @@ func (t *TextBox) OnKey(e *input.KeyEvent) {
 // with it — a permanent wedge with no widget reachable by the pointer at
 // all, not merely this one ignoring input as intended.
 //
-// Press moves the caret to the nearest rune boundary to the click position
-// (via caretIndexAtPos — x only in single-line mode, x AND y in multi-line
-// mode, see its doc comment) — which also clears any existing selection and
-// sets the drag anchor, since SetCaret sets anchor==caret — and captures the
-// pointer so the drag survives leaving the TextBox's bounds. Move, only
-// while this TextBox holds the capture, extends the selection from that
-// same anchor to the new nearest boundary (Select(t.anchor, idx): t.anchor
-// is left untouched by Select's own reassignment since the same value is
-// passed back in, so it stays pinned at the press position across an entire
-// drag). Release, only while captured, ends the drag.
+// A Press landing inside the current vertical thumb rect (vScrollThumbRect,
+// only ever non-empty while vScrollShown — see computeShowVScroll) starts a
+// THUMB drag instead of the caret-drag-to-select described below: it
+// records the pointer's grab offset within the thumb (vDragGrab) and sets
+// vDragging, checked first (mirroring ScrollViewer.OnPointer's own
+// thumb-vs-content priority). Move, while captured with vDragging set,
+// scrolls via dragVScroll instead of extending the selection; Release clears
+// vDragging alongside releasing capture, matching the caret-drag path.
+//
+// Otherwise (no thumb, or the click missed it): Press moves the caret to
+// the nearest rune boundary to the click position (via caretIndexAtPos — x
+// only in single-line mode, x AND y in multi-line mode, see its doc
+// comment) — which also clears any existing selection and sets the drag
+// anchor, since SetCaret sets anchor==caret — and captures the pointer so
+// the drag survives leaving the TextBox's bounds. Move, only while this
+// TextBox holds the capture, extends the selection from that same anchor to
+// the new nearest boundary (Select(t.anchor, idx): t.anchor is left
+// untouched by Select's own reassignment since the same value is passed
+// back in, so it stays pinned at the press position across an entire drag).
+// Release, only while captured, ends the drag.
 func (t *TextBox) OnPointer(e *input.PointerEvent) {
 	if !t.enabled {
 		if e.Router != nil && e.Router.Captured() == t {
 			e.Router.Release()
+			t.vDragging = false
 		}
 		return
 	}
 	switch e.Action {
 	case input.Press:
+		if rect, ok := t.vScrollThumbRect(); ok && rect.Contains(e.Pos) {
+			t.vDragging = true
+			t.vDragGrab = e.Pos.Y - rect.Y
+			e.Router.Capture(t)
+			e.Handled = true
+			return
+		}
 		idx := t.caretIndexAtPos(e.Pos.X, e.Pos.Y)
 		t.SetCaret(idx)
 		e.Router.Capture(t)
 		e.Handled = true
 	case input.Move:
 		if e.Router.Captured() == t {
-			idx := t.caretIndexAtPos(e.Pos.X, e.Pos.Y)
-			t.Select(t.anchor, idx)
+			if t.vDragging {
+				t.dragVScroll(e.Pos.Y)
+			} else {
+				idx := t.caretIndexAtPos(e.Pos.X, e.Pos.Y)
+				t.Select(t.anchor, idx)
+			}
 			e.Handled = true
 		}
 	case input.Release:
 		if e.Router.Captured() == t {
 			e.Router.Release()
+			t.vDragging = false
 			e.Handled = true
 		}
 	}
