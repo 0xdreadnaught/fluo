@@ -81,6 +81,38 @@ func TestShadow(t *testing.T) {
 	})
 }
 
+// TestShapeAA2x is the HiDPI shape-edge golden: a rounded-rect fill, a
+// filled circle, a rounded-rect stroke, and a shadowed card — one shape per
+// shader mode (3, 3, 4, 5) — laid out in a 160x100 logical frame and
+// rendered into a 2x framebuffer (320x200) with Begin's scale set to 2
+// instead of 1. Nothing about the draw calls differs from a 1x scene at
+// the same logical coordinates; only the framebuffer size and scale do.
+// Proves the shape shader's fwidth-based AA band (see shader.go) tracks
+// the screen-space derivative rather than a fixed logical-unit width, so
+// edges stay a crisp ~1 device-pixel band at 2x instead of visibly
+// softening the way the old fixed band did.
+func TestShapeAA2x(t *testing.T) {
+	gltest.Run(t, 320, 200, func(fb *gltest.Framebuffer) {
+		r, err := glr.New()
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		gl.ClearColor(0.12, 0.12, 0.14, 1)
+		gl.Clear(gl.COLOR_BUFFER_BIT)
+		r.Begin(fb.W, fb.H, 2)
+
+		r.FillRoundedRect(render.Rect{X: 8, Y: 8, W: 60, H: 40}, 8, render.RGB(0, 120, 215))
+		r.FillRoundedRect(render.Rect{X: 96, Y: 8, W: 40, H: 40}, 20, render.RGB(255, 185, 0)) // circle
+		r.StrokeRoundedRect(render.Rect{X: 8, Y: 54, W: 60, H: 38}, 8, 2, render.RGB(255, 255, 255))
+		card := render.Rect{X: 92, Y: 54, W: 60, H: 38}
+		r.DrawShadow(card, 8, 10, render.RGBA(0, 0, 0, 140))
+		r.FillRoundedRect(card, 8, render.RGB(243, 243, 243))
+
+		r.End()
+		gltest.CheckGolden(t, "shape_aa_2x", fb.Image())
+	})
+}
+
 func TestTexture(t *testing.T) {
 	testFrame(t, "texture", 128, 96, func(r *glr.Renderer) {
 		px := make([]byte, 8*8*4)

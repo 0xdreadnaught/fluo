@@ -47,13 +47,27 @@ void main(){
         c.a *= texture(uTex, vUV).r;
     } else if (vMode >= 3) {
         float d = sdRoundBox(vPos - vRect.xy, vRect.zw, vExtra.x);
-        // TODO(hidpi): AA transition band is a fixed logical-unit width
-        // computed from unscaled vPos/vRect, so rounded-rect/stroke/shadow
-        // edges soften at scale>1 and alias at scale<1 (text uses fwidth
-        // and is correct).
-        if (vMode == 3) c.a *= clamp(0.5 - d, 0.0, 1.0);
-        else if (vMode == 4) { float w = vExtra.y; c.a *= clamp(0.5 - (abs(d + w*0.5) - w*0.5), 0.0, 1.0); }
-        else if (vMode == 5) c.a *= 1.0 - smoothstep(-vExtra.y, vExtra.y, d);
+        // AA band width is derived from the screen-space derivative of d
+        // (fwidth), the same principle mode 2's SDF text path uses, rather
+        // than a fixed logical-unit width — so rounded-rect/stroke/shadow
+        // edges stay ~1 device pixel wide at any scale (crisp at scale>1,
+        // no sub-pixel aliasing at scale<1).
+        float aa = fwidth(d);
+        if (vMode == 3) c.a *= clamp(0.5 - d/aa, 0.0, 1.0);
+        else if (vMode == 4) {
+            float w = vExtra.y;
+            float ds = abs(d + w*0.5) - w*0.5;
+            c.a *= clamp(0.5 - ds/fwidth(ds), 0.0, 1.0);
+        }
+        else if (vMode == 5) {
+            // Shadow's blur (vExtra.y) is an intentional, resolution-
+            // independent soft falloff and stays as the transition
+            // half-width; it's only floored at the screen-space AA width so
+            // a near-zero blur still antialiases instead of producing a
+            // hard, scale-dependent edge.
+            float halfWidth = max(vExtra.y, aa);
+            c.a *= 1.0 - smoothstep(-halfWidth, halfWidth, d);
+        }
         else {
             // Mode 6: backdrop-blur acrylic composite. uTex holds the
             // already-blurred backdrop snapshot; mix in the tint color by
@@ -61,7 +75,7 @@ void main(){
             // corners (the panel itself is opaque wherever it covers).
             vec4 tex = texture(uTex, vUV);
             c.rgb = mix(tex.rgb, vColor.rgb, vColor.a);
-            c.a = clamp(0.5 - d, 0.0, 1.0);
+            c.a = clamp(0.5 - d/aa, 0.0, 1.0);
         }
     }
     if (c.a <= 0.001) discard;
