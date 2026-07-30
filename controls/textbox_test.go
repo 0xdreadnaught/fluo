@@ -1,6 +1,7 @@
 package controls
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -1543,5 +1544,443 @@ func TestTextBoxKeyDownStillWorksWhenNotComposing(t *testing.T) {
 	}
 	if got := tb.Text(); got != "hey" {
 		t.Fatalf("Text() = %q, want %q", got, "hey")
+	}
+}
+
+// --- Word wrap (opt-in; see SetWordWrap) ---
+
+// TestTextBoxSetWordWrapGetterAndSingleLineNoop locks the basic API shape:
+// false by default, chainable/settable, and — per SetWordWrap's own doc
+// comment — a no-op flag (wrapping() stays false) until Multiline() is also
+// true.
+func TestTextBoxSetWordWrapGetterAndSingleLineNoop(t *testing.T) {
+	tb := NewTextBox(nil)
+	if tb.WordWrap() {
+		t.Fatal("WordWrap() = true for a fresh TextBox, want false (default)")
+	}
+
+	tb.SetWordWrap(true)
+	if !tb.WordWrap() {
+		t.Fatal("WordWrap() = false after SetWordWrap(true), want true")
+	}
+	if tb.wrapping() {
+		t.Fatal("wrapping() = true while Multiline() is false, want false (word-wrap is only meaningful in multiline mode)")
+	}
+
+	tb.SetMultiline(true)
+	if !tb.wrapping() {
+		t.Fatal("wrapping() = false once multiline is also on, want true")
+	}
+}
+
+// TestTextBoxWordWrapOffKeepsUnwrappedHorizontalScrollBehavior is the
+// invariant lock for "wrap OFF (default) ... byte-for-byte unchanged": a
+// long single line in a narrow multi-line box, with SetWordWrap left at its
+// default false, must still scroll horizontally exactly like an unwrapped
+// multi-line box always has (see TestTextBoxHScrollKeepsCaretVisible, its
+// single-line counterpart) rather than wrapping.
+func TestTextBoxWordWrapOffKeepsUnwrappedHorizontalScrollBehavior(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true) // WordWrap left at its default (false)
+	tb.SetText("this is a much longer single line of text than the box is wide")
+	tb.SetWidth(80)
+	tb.SetHeight(60)
+
+	core.MeasureWidget(tb, render.Size{W: 80, H: 60})
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 80, H: 60})
+
+	if tb.hscroll <= 0 {
+		t.Fatalf("hscroll = %v, want > 0 (wrap off: a long line must still scroll horizontally, unchanged)", tb.hscroll)
+	}
+}
+
+// --- computeVisualRows / wrapLogicalLine: pure layout tests ---
+
+// TestComputeVisualRowsDeterministicThreeRowFixture is the shared fixture
+// every TextBox-level wrap test below builds on: six repeated "aa" words
+// ("aa aa aa aa aa aa", 17 runes) wrapped at a content width sized to fit
+// exactly two words — face.Measure("aa aa").W — so every row boundary is
+// fully predictable ahead of time (identical glyphs throughout means no
+// per-letter width ambiguity): three rows, each "aa aa" (5 runes), with the
+// separating space at indices 5 and 11 dropped from display (the "eat the
+// wrap-point space" rule — see wrapLogicalLine's case 2) and nothing left
+// over at the buffer's own end. Proves N-rows-at-a-width and
+// breaking-at-spaces together in one deterministic case.
+func TestComputeVisualRowsDeterministicThreeRowFixture(t *testing.T) {
+	face := buttonFace(t)
+	width := face.Measure("aa aa").W
+	runes := []rune(wordWrapFixtureText)
+
+	rows := computeVisualRows(runes, face, width)
+
+	want := []visualRow{{start: 0, end: 5}, {start: 6, end: 11}, {start: 12, end: 17}}
+	if len(rows) != len(want) {
+		t.Fatalf("computeVisualRows rows = %+v, want %+v", rows, want)
+	}
+	for i := range want {
+		if rows[i] != want[i] {
+			t.Fatalf("rows[%d] = %+v, want %+v (full: %+v)", i, rows[i], want[i], rows)
+		}
+	}
+}
+
+// wordWrapFixtureText is the six-repeated-"aa"-words buffer the
+// deterministic 3-row fixture above (and every TextBox-level test that
+// builds on it below) shares.
+const wordWrapFixtureText = "aa aa aa aa aa aa"
+
+// TestComputeVisualRowsCharBreaksOverlongWord covers the "a single word
+// wider than the content width gets character-broken" case: a run of
+// identical runes with no spaces at all to word-break on, so every boundary
+// must be a character break. Checked as general invariants (contiguous
+// coverage, each row measuring within width) rather than exact boundaries,
+// since the precise split only needs to be SOME valid character break, not
+// a specific one.
+func TestComputeVisualRowsCharBreaksOverlongWord(t *testing.T) {
+	face := buttonFace(t)
+	runes := []rune("aaaaaaaaaa") // 10 a's, no spaces anywhere
+	width := face.Measure("aaa").W
+
+	rows := computeVisualRows(runes, face, width)
+
+	if len(rows) < 2 {
+		t.Fatalf("len(rows) = %d, want > 1 (must actually wrap)", len(rows))
+	}
+	pos := 0
+	for i, row := range rows {
+		if row.start != pos {
+			t.Fatalf("row %d starts at %d, want %d (contiguous: no spaces exist to drop)", i, row.start, pos)
+		}
+		if w := face.Measure(string(runes[row.start:row.end])).W; w > width+0.01 {
+			t.Fatalf("row %d %q measures %v, want <= width %v", i, string(runes[row.start:row.end]), w, width)
+		}
+		pos = row.end
+	}
+	if pos != len(runes) {
+		t.Fatalf("rows end at %d, want %d (full coverage of the buffer)", pos, len(runes))
+	}
+}
+
+// TestComputeVisualRowsRealNewlineAlwaysBreaksRegardlessOfWidth proves a
+// real '\n' is always a row boundary, even at a width so wide the two
+// logical lines would otherwise happily share a single row.
+func TestComputeVisualRowsRealNewlineAlwaysBreaksRegardlessOfWidth(t *testing.T) {
+	face := buttonFace(t)
+	runes := []rune("ab\ncd")
+	const width = 100000 // absurdly wide: no soft wrap would ever trigger
+
+	rows := computeVisualRows(runes, face, width)
+
+	want := []visualRow{{start: 0, end: 2}, {start: 3, end: 5}}
+	if len(rows) != len(want) || rows[0] != want[0] || rows[1] != want[1] {
+		t.Fatalf("computeVisualRows(%q) = %+v, want %+v (the '\\n' at index 2 must still force a row boundary)", string(runes), rows, want)
+	}
+}
+
+// TestComputeVisualRowsRowCountShrinksAsWidthGrows checks the monotonic
+// shape of the layout across widths without hardcoding exact per-width
+// boundaries (font-metric-sensitive): fitting the whole line at its own
+// full measured width always yields exactly one row, and a narrower width
+// always yields strictly more rows, with a middle width falling in between.
+func TestComputeVisualRowsRowCountShrinksAsWidthGrows(t *testing.T) {
+	face := buttonFace(t)
+	text := "the quick brown fox jumps over the lazy dog"
+	runes := []rune(text)
+	full := face.Measure(text).W
+
+	wide := computeVisualRows(runes, face, full)
+	if len(wide) != 1 {
+		t.Fatalf("rows at the text's own full width = %+v, want exactly 1 row", wide)
+	}
+
+	narrow := computeVisualRows(runes, face, full/4)
+	if len(narrow) <= len(wide) {
+		t.Fatalf("rows at width/4 = %d, want > %d (must wrap more at a narrower width)", len(narrow), len(wide))
+	}
+
+	mid := computeVisualRows(runes, face, full/2)
+	if len(mid) < len(wide) || len(mid) > len(narrow) {
+		t.Fatalf("rows at width/2 = %d, want between %d (full width) and %d (width/4)", len(mid), len(wide), len(narrow))
+	}
+}
+
+// --- TextBox-level wrap tests: caret, selection, hit-test, height ---
+
+// newFocusedWordWrapFixture builds a focused, multi-line, word-wrapped
+// TextBox around wordWrapFixtureText at exactly the content width the
+// deterministic 3-row fixture above assumes (face.Measure("aa aa").W, plus
+// padding for the box's own explicit width) — row0=[0,5), row1=[6,11),
+// row2=[12,17), each "aa aa". Height is generous (200) so no vertical
+// scrolling comes into play, keeping buffer index and row index in lockstep
+// for every test built on this fixture.
+func newFocusedWordWrapFixture(t *testing.T) (*TextBox, *input.Router) {
+	t.Helper()
+	face := buttonFace(t)
+	tb := NewTextBox(face).SetMultiline(true).SetWordWrap(true)
+	boxWidth := face.Measure("aa aa").W + 2*tb.metrics.PaddingM
+	const boxHeight = 200
+	tb.SetWidth(boxWidth)
+	tb.SetHeight(boxHeight)
+	tb.SetText(wordWrapFixtureText)
+
+	r := input.NewRouter()
+	r.SetRoot(tb)
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: boxWidth, H: boxHeight})
+	r.Focus(tb)
+	return tb, r
+}
+
+// TestTextBoxWordWrapRowColAndIndexRoundTrip locks rowCol/indexOfRowCol as
+// exact inverses against the fixture's three rows, including the boundary
+// indices at each soft break (5/6 and 11/12) — proving the "a caret exactly
+// at a row boundary sits at the END of the upper row" tie-break rule (see
+// rowCol's own doc comment) the same way TestTextBoxLineColMapping locks it
+// for real newlines.
+func TestTextBoxWordWrapRowColAndIndexRoundTrip(t *testing.T) {
+	tb, _ := newFocusedWordWrapFixture(t)
+
+	cases := []struct {
+		idx      int
+		row, col int
+	}{
+		{0, 0, 0},
+		{4, 0, 4},
+		{5, 0, 5}, // right before the dropped space: end of row0
+		{6, 1, 0}, // right after the dropped space: start of row1
+		{10, 1, 4},
+		{11, 1, 5}, // end of row1
+		{12, 2, 0}, // start of row2
+		{16, 2, 4},
+		{17, 2, 5}, // end of the whole text
+	}
+	for _, c := range cases {
+		if row, col := tb.rowCol(c.idx); row != c.row || col != c.col {
+			t.Fatalf("rowCol(%d) = (%d,%d), want (%d,%d)", c.idx, row, col, c.row, c.col)
+		}
+		if idx := tb.indexOfRowCol(c.row, c.col); idx != c.idx {
+			t.Fatalf("indexOfRowCol(%d,%d) = %d, want %d", c.row, c.col, idx, c.idx)
+		}
+	}
+}
+
+// TestTextBoxWordWrapUpDownMoveByVisualRow is TestTextBoxUpDownPreservesDesiredColumn's
+// wrapping analogue: Up/Down must move between VISUAL rows (not logical
+// lines — there is only one logical line in the whole fixture) preserving
+// the desired column across the moves.
+func TestTextBoxWordWrapUpDownMoveByVisualRow(t *testing.T) {
+	tb, r := newFocusedWordWrapFixture(t)
+	tb.SetCaret(14) // row2, col2
+
+	r.KeyDown(input.KeyUp, 0, 0)
+	if row, col := tb.rowCol(tb.Caret()); row != 1 || col != 2 {
+		t.Fatalf("after Up: rowCol = (%d,%d), want (1,2)", row, col)
+	}
+	if c := tb.Caret(); c != 8 {
+		t.Fatalf("after Up: Caret() = %d, want 8 (row1 col2)", c)
+	}
+
+	r.KeyDown(input.KeyUp, 0, 0)
+	if c := tb.Caret(); c != 2 {
+		t.Fatalf("after 2nd Up: Caret() = %d, want 2 (row0 col2)", c)
+	}
+
+	r.KeyDown(input.KeyDown, 0, 0)
+	r.KeyDown(input.KeyDown, 0, 0)
+	if c := tb.Caret(); c != 14 {
+		t.Fatalf("after 2x Down back: Caret() = %d, want 14 (desired col 2 restored)", c)
+	}
+}
+
+// TestTextBoxWordWrapHomeEndHitVisualRowBounds is
+// TestTextBoxHomeEndPerLineInMultiline's wrapping analogue: Home/End must
+// target the caret's own VISUAL row, not the (single, whole-buffer) logical
+// line.
+func TestTextBoxWordWrapHomeEndHitVisualRowBounds(t *testing.T) {
+	tb, r := newFocusedWordWrapFixture(t)
+	tb.SetCaret(8) // row1, col2
+
+	r.KeyDown(input.KeyHome, 0, 0)
+	if c := tb.Caret(); c != 6 {
+		t.Fatalf("Home: Caret() = %d, want 6 (start of row1, not the whole text)", c)
+	}
+
+	tb.SetCaret(8)
+	r.KeyDown(input.KeyEnd, 0, 0)
+	if c := tb.Caret(); c != 11 {
+		t.Fatalf("End: Caret() = %d, want 11 (end of row1)", c)
+	}
+}
+
+// TestTextBoxWordWrapLeftRightCrossSoftBreaksWithoutTouchingBuffer proves
+// Left/Right stay purely index-based across a soft break — no buffer
+// mutation, unlike Enter's hard-'\n' insertion — exactly as they already do
+// across a real '\n' (see TestTextBoxLeftRightCrossLineBoundaries).
+func TestTextBoxWordWrapLeftRightCrossSoftBreaksWithoutTouchingBuffer(t *testing.T) {
+	tb, r := newFocusedWordWrapFixture(t)
+	before := tb.Text()
+	tb.SetCaret(5) // end of row0, right before the dropped space
+
+	r.KeyDown(input.KeyRight, 0, 0)
+	if c := tb.Caret(); c != 6 {
+		t.Fatalf("Right over the soft break: Caret() = %d, want 6", c)
+	}
+	if row, col := tb.rowCol(tb.Caret()); row != 1 || col != 0 {
+		t.Fatalf("after Right: rowCol = (%d,%d), want (1,0)", row, col)
+	}
+
+	r.KeyDown(input.KeyLeft, 0, 0)
+	if c := tb.Caret(); c != 5 {
+		t.Fatalf("Left back over the soft break: Caret() = %d, want 5", c)
+	}
+	if tb.Text() != before {
+		t.Fatalf("Text() changed to %q, want unchanged %q (soft wrap never edits the buffer)", tb.Text(), before)
+	}
+}
+
+// TestTextBoxWordWrapSelectionSpanningSoftBreakPerRow exercises the exact
+// per-row intersection formula renderMultilineWrapped draws selection
+// highlight with (clampInt(start,lo,hi), clampInt(end,lo,hi)) against each
+// row's own [start,end) — the wrapping analogue of
+// TestTextBoxMultiline's hard-newline-spanning selection golden, proven
+// here numerically rather than pixel-for-pixel.
+func TestTextBoxWordWrapSelectionSpanningSoftBreakPerRow(t *testing.T) {
+	tb, _ := newFocusedWordWrapFixture(t)
+	tb.Select(3, 8) // spans row0's tail (cols 3-5) and row1's head (cols 0-2)
+
+	rows := tb.visualRows(tb.contentWidth())
+	if len(rows) != 3 {
+		t.Fatalf("test setup: len(rows) = %d, want 3", len(rows))
+	}
+	start, end := tb.Selection()
+
+	if s, e := clampInt(start, rows[0].start, rows[0].end), clampInt(end, rows[0].start, rows[0].end); s != 3 || e != 5 {
+		t.Fatalf("row0 selection intersection = (%d,%d), want (3,5)", s, e)
+	}
+	if s, e := clampInt(start, rows[1].start, rows[1].end), clampInt(end, rows[1].start, rows[1].end); s != 6 || e != 8 {
+		t.Fatalf("row1 selection intersection = (%d,%d), want (6,8)", s, e)
+	}
+	if s, e := clampInt(start, rows[2].start, rows[2].end), clampInt(end, rows[2].start, rows[2].end); s != e {
+		t.Fatalf("row2 selection intersection = (%d,%d), want empty (selection doesn't reach row2)", s, e)
+	}
+}
+
+// TestTextBoxWordWrapClickHitTestLandsInWrappedRow proves a click resolves
+// to the right buffer index within a wrapped row: targets row1 ("aa aa",
+// rowStart=6) at column 2 (buffer index 8), using the same
+// "just right of the (i,i+1) midpoint lands on i+1" convention
+// TestTextBoxPressSetsCaretAtNearestGlyphBoundary already locks for the
+// unwrapped case.
+func TestTextBoxWordWrapClickHitTestLandsInWrappedRow(t *testing.T) {
+	tb, r := newFocusedWordWrapFixture(t)
+	bounds := tb.Bounds()
+	pad := tb.metrics.PaddingM
+	lh := tb.lineHeight()
+
+	y := bounds.Y + pad + 1*lh + lh/2 // vertically centered within row1
+	mid := (tb.xOfInRow(1, 1) + tb.xOfInRow(1, 2)) / 2
+	x := bounds.X + pad + mid + 0.05 // just right of the col1/col2 midpoint
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: x, Y: y}, 0)
+
+	if c := tb.Caret(); c != 8 {
+		t.Fatalf("click at row1 col2: Caret() = %d, want 8", c)
+	}
+	if row, col := tb.rowCol(tb.Caret()); row != 1 || col != 2 {
+		t.Fatalf("click: rowCol = (%d,%d), want (1,2)", row, col)
+	}
+}
+
+// TestTextBoxWordWrapVerticalScrollCountsVisualRows is
+// TestTextBoxVerticalScrollKeepsCaretVisible's wrapping analogue: a box
+// short enough for only ~1 visual row must scroll vscroll so the caret's
+// own ROW (not logical line — there is only one) stays visible, counting
+// visual rows via rowCount/rowCol rather than lineCount/lineCol.
+func TestTextBoxWordWrapVerticalScrollCountsVisualRows(t *testing.T) {
+	face := buttonFace(t)
+	tb := NewTextBox(face).SetMultiline(true).SetWordWrap(true)
+	boxWidth := face.Measure("aa aa").W + 2*tb.metrics.PaddingM
+	tb.SetWidth(boxWidth)
+	tb.SetText(wordWrapFixtureText) // 3 visual rows
+	tb.SetCaret(17)                 // end of text, row2 (the last row)
+
+	lh := face.LineHeight()
+	boxHeight := lh*1.5 + 2*tb.metrics.PaddingM // room for barely more than 1 row
+
+	core.MeasureWidget(tb, render.Size{W: boxWidth, H: boxHeight})
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: boxWidth, H: boxHeight})
+
+	if tb.vscroll <= 0 {
+		t.Fatalf("vscroll = %v, want > 0 (short box, caret on the last of 3 visual rows)", tb.vscroll)
+	}
+
+	pad := tb.metrics.PaddingM
+	innerH := tb.Bounds().H - 2*pad
+	row, _ := tb.rowCol(tb.Caret())
+	caretY := float32(row)*lh - tb.vscroll
+	const eps = 0.01
+	if caretY < -eps || caretY > innerH-lh+eps {
+		t.Fatalf("caret row display y = %v, want within [0, %v]", caretY, innerH-lh)
+	}
+}
+
+// TestTextBoxWordWrapMeasureContentHeightReflectsRowCount is the height
+// half of the wrap feature (see MeasureContent): the desired height must be
+// exactly the wrapped row count times lineHeight, plus padding — not the
+// fixed textBoxMultilineDefaultLines default an unwrapped multi-line box
+// reports (see TestTextBoxMultilineDesiredHeightIsTaller).
+func TestTextBoxWordWrapMeasureContentHeightReflectsRowCount(t *testing.T) {
+	face := buttonFace(t)
+	tb := NewTextBox(face).SetMultiline(true).SetWordWrap(true)
+	boxWidth := face.Measure("aa aa").W + 2*tb.metrics.PaddingM
+	tb.SetWidth(boxWidth)
+	tb.SetText(wordWrapFixtureText) // wraps into exactly 3 rows at this width
+
+	core.MeasureWidget(tb, render.Size{W: 1000, H: 1000}) // available is irrelevant: explicit width wins
+	d := core.DesiredSizeOf(tb)
+
+	wantH := face.LineHeight()*3 + 2*tb.metrics.PaddingM
+	if d.H != wantH {
+		t.Fatalf("DesiredSize().H = %v, want %v (3 wrapped rows + padding)", d.H, wantH)
+	}
+	if d.W != boxWidth {
+		t.Fatalf("DesiredSize().W = %v, want %v (explicit SetWidth still honored)", d.W, boxWidth)
+	}
+}
+
+// TestTextBoxWordWrapMeasureContentUsesAvailableWidthWithoutExplicitSetWidth
+// proves MeasureContent actually consults `available` while wrapping (the
+// one case where it does — see its own doc comment) when there is no
+// explicit SetWidth to override it: the wrap width comes straight from
+// available.W.
+func TestTextBoxWordWrapMeasureContentUsesAvailableWidthWithoutExplicitSetWidth(t *testing.T) {
+	face := buttonFace(t)
+	tb := NewTextBox(face).SetMultiline(true).SetWordWrap(true)
+	tb.SetText(wordWrapFixtureText)
+
+	contentW := face.Measure("aa aa").W
+	available := render.Size{W: contentW + 2*tb.metrics.PaddingM, H: 1000}
+
+	core.MeasureWidget(tb, available)
+	d := core.DesiredSizeOf(tb)
+
+	wantH := face.LineHeight()*3 + 2*tb.metrics.PaddingM
+	if d.H != wantH {
+		t.Fatalf("DesiredSize().H = %v, want %v (wraps against the AVAILABLE width)", d.H, wantH)
+	}
+}
+
+// TestTextBoxWordWrapMeasureContentFallsBackOnInfiniteAvailableWidth is the
+// Inf-safety regression for wrapMeasureWidth: an unconstrained (+Inf)
+// available.W (e.g. a container offering infinite cross-axis space) must
+// still produce a finite desired size rather than wrapping against
+// infinity.
+func TestTextBoxWordWrapMeasureContentFallsBackOnInfiniteAvailableWidth(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true).SetWordWrap(true)
+	tb.SetText("hello")
+
+	core.MeasureWidget(tb, render.Size{W: float32(math.Inf(1)), H: 1000})
+	d := core.DesiredSizeOf(tb)
+
+	if math.IsInf(float64(d.W), 1) || math.IsInf(float64(d.H), 1) {
+		t.Fatalf("DesiredSize() = %+v, want finite (Inf-safe fallback to textBoxDefaultWidth)", d)
 	}
 }

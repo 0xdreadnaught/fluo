@@ -618,6 +618,50 @@ func TestTextBoxMultiline(t *testing.T) {
 	})
 }
 
+// TestTextBoxWordWrap is the opt-in word-wrap golden (see
+// TextBox.SetWordWrap): a focused, multi-line, word-wrapped TextBox holding
+// one long logical line (no '\n' anywhere in it) that overflows a narrow
+// 180px frame width and must re-flow into several visual rows — proving
+// computeVisualRows' word-boundary breaking end-to-end, not just a single
+// long unwrapped scrolling line. The selection spans a wide middle chunk of
+// the text, crossing at least one soft wrap point, so the highlight band is
+// visibly split across rows exactly like TestTextBoxMultiline's
+// hard-newline-spanning selection is split across lines (see
+// TextBox.renderMultilineWrapped) — the wrapping analogue of that same
+// per-line intersection. The caret (solid — no timers.Queue wired) sits at
+// the selection's far end. No explicit SetWidth/SetHeight: the box
+// Stretch-fills the frame (matching every other golden here), so the
+// frame's own width is what the text wraps against, and the frame's height
+// is generously larger than the wrapped content needs (so no vertical
+// scrolling is in play — the whole wrapped paragraph is visible).
+func TestTextBoxWordWrap(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "textbox_wordwrap", 180, 140, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tb := controls.NewTextBox(face).SetMultiline(true).SetWordWrap(true)
+		content := "The quick brown fox jumps over the lazy dog and then jumps again near the old fence"
+		tb.SetText(content)
+		n := len([]rune(content))
+		tb.Select(20, n-20) // a wide middle chunk, crossing at least one soft wrap
+		tb.OnFocusChanged(true)
+
+		frame := render.Rect{X: 0, Y: 0, W: 180, H: 140}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(tb, frame)
+		core.RenderWidget(tb, r)
+	})
+}
+
 // TestSliderProgress is the Phase 5 Task 7 golden: a Slider at 0.6 (over the
 // default [0,1] range) stacked above a ProgressBar at 0.3, in a vertical
 // StackPanel gapped by PaddingM, filling a 200x60 frame.
