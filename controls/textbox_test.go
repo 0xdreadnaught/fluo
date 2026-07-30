@@ -1083,6 +1083,94 @@ func TestTextBoxSingleLineEnterUnhandled(t *testing.T) {
 	}
 }
 
+// --- OnSubmit (Enter, single-line only) ---
+
+// TestTextBoxOnSubmitFiresOnSingleLineEnter locks OnSubmit's core contract:
+// pressing Enter in single-line mode with an OnSubmit callback set fires it
+// with the CURRENT text, marks the key handled (so it doesn't bubble, like
+// every other key this control owns — see OnKey's own doc comment), and
+// mutates nothing (no insertion, no OnChanged) — Enter here is purely a
+// notification, not an edit.
+func TestTextBoxOnSubmitFiresOnSingleLineEnter(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "ab")
+
+	var submitted []string
+	tb.OnSubmit(func(s string) { submitted = append(submitted, s) })
+	var changed int
+	tb.OnChanged(func(string) { changed++ })
+
+	handled := r.KeyDown(input.KeyEnter, 0, 0)
+
+	if !handled {
+		t.Fatal("KeyDown(Enter) consumed = false, want true (handled)")
+	}
+	if len(submitted) != 1 || submitted[0] != "ab" {
+		t.Fatalf("OnSubmit calls = %v, want [%q]", submitted, "ab")
+	}
+	if tb.Text() != "ab" {
+		t.Fatalf("Text() = %q, want unchanged %q", tb.Text(), "ab")
+	}
+	if changed != 0 {
+		t.Fatalf("OnChanged calls = %d, want 0 (OnSubmit fires instead, not an edit)", changed)
+	}
+}
+
+// TestTextBoxOnSubmitNoneSetIsNoOp is TestTextBoxSingleLineEnterUnhandled's
+// OnSubmit-aware counterpart: with no OnSubmit set (the zero value), Enter in
+// single-line mode is still a harmless no-op — unhandled, no mutation —
+// exactly as it was before OnSubmit existed.
+func TestTextBoxOnSubmitNoneSetIsNoOp(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "ab")
+
+	handled := r.KeyDown(input.KeyEnter, 0, 0)
+
+	if handled {
+		t.Fatal("KeyDown(Enter) consumed = true with no OnSubmit set, want false (unchanged no-op)")
+	}
+	if tb.Text() != "ab" {
+		t.Fatalf("Text() = %q, want unchanged %q", tb.Text(), "ab")
+	}
+}
+
+// TestTextBoxOnSubmitNotFiredInMultiline locks the "multiline is UNCHANGED"
+// requirement: with OnSubmit set on a multiline box, Enter still inserts a
+// '\n' exactly as TestTextBoxMultilineEnterInsertsNewline already checks,
+// and OnSubmit is never called — multiline Enter has its own, unrelated
+// meaning (see SetMultiline).
+func TestTextBoxOnSubmitNotFiredInMultiline(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "ab")
+	tb.SetCaret(1)
+
+	var submitted []string
+	tb.OnSubmit(func(s string) { submitted = append(submitted, s) })
+
+	r.KeyDown(input.KeyEnter, 0, 0)
+
+	if tb.Text() != "a\nb" {
+		t.Fatalf("Text() = %q, want %q (newline still inserted)", tb.Text(), "a\nb")
+	}
+	if len(submitted) != 0 {
+		t.Fatalf("OnSubmit calls = %v, want none (multiline Enter never submits)", submitted)
+	}
+}
+
+// TestTextBoxOnSubmitNotFiredBySetText locks fluo's uniform setter
+// convention (programmatic setters are silent) for OnSubmit too: a
+// programmatic SetText must never fire it, only a real user Enter keypress
+// does (see TestTextBoxOnSubmitFiresOnSingleLineEnter).
+func TestTextBoxOnSubmitNotFiredBySetText(t *testing.T) {
+	tb := NewTextBox(buttonFace(t))
+
+	var submitted []string
+	tb.OnSubmit(func(s string) { submitted = append(submitted, s) })
+
+	tb.SetText("hello")
+
+	if len(submitted) != 0 {
+		t.Fatalf("OnSubmit calls after SetText = %v, want none (silent programmatic setter)", submitted)
+	}
+}
+
 // TestTextBoxSingleLineUpDownUnhandled is Enter's counterpart for Up/Down:
 // neither was ever part of the single-line keyboard map, so both must stay
 // unhandled (and leave the caret untouched) in single-line mode.

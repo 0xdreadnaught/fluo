@@ -159,6 +159,7 @@ type TextBox struct {
 	caretVisible bool
 
 	onChanged func(string)
+	onSubmit  func(string)
 
 	// preedit is the active IME composition's provisional (uncommitted)
 	// string, spliced in for display at t.caret while composing is true
@@ -331,6 +332,20 @@ func (t *TextBox) SetEnabled(v bool) *TextBox {
 // valid, silent no-op.
 func (t *TextBox) OnChanged(fn func(string)) *TextBox {
 	t.onChanged = fn
+	return t
+}
+
+// OnSubmit sets the callback fired with the current text when the user
+// presses Enter in SINGLE-LINE mode (see OnKey). Multi-line mode is
+// unaffected — Enter there always inserts a '\n' (see SetMultiline) and
+// never calls this callback, regardless of whether one is set. Like
+// OnChanged, this only ever fires from a user keypress, never from a
+// programmatic SetText — fluo's uniform setter convention (programmatic
+// setters are silent). Replaces any previously set callback; a nil fn is a
+// valid, silent no-op (Enter is then simply unhandled in single-line mode,
+// matching the pre-OnSubmit behavior).
+func (t *TextBox) OnSubmit(fn func(string)) *TextBox {
+	t.onSubmit = fn
 	return t
 }
 
@@ -2112,13 +2127,15 @@ func (t *TextBox) RenderOverlay(r render.Renderer) {
 // (e.g. into a Router.KeyDown Tab-navigation-style fallback) just because
 // there happened to be nothing to do.
 //
-// Enter/Up/Down are multi-line-only (see SetMultiline): in single-line mode
-// they fall through unhandled exactly as before multi-line mode existed —
-// Enter does not commit/submit anything here (TextBox has no such concept;
-// a host wanting that behavior sees the unhandled KeyEnter bubble past it),
-// and Up/Down are simply not part of the single-line keyboard map. Home/End
-// are handled in both modes, but target the whole text in single-line mode
-// and the caret's own line in multi-line mode (homeTarget/endTarget).
+// Up/Down are multi-line-only (see SetMultiline): in single-line mode they
+// fall through unhandled exactly as before multi-line mode existed, simply
+// not part of the single-line keyboard map. Enter is multi-line-only too in
+// the sense that it never inserts text in single-line mode — but there it
+// instead fires OnSubmit (if one is set) with the current text; with no
+// OnSubmit set, it falls through unhandled exactly as before OnSubmit
+// existed. Home/End are handled in both modes, but target the whole text in
+// single-line mode and the caret's own line in multi-line mode
+// (homeTarget/endTarget).
 func (t *TextBox) OnKey(e *input.KeyEvent) {
 	if !t.enabled || !t.focused || e.Action != input.Press {
 		return
@@ -2197,6 +2214,11 @@ func (t *TextBox) OnKey(e *input.KeyEvent) {
 	case input.KeyEnter:
 		if t.multiline {
 			t.insertText("\n")
+			e.Handled = true
+			return
+		}
+		if t.onSubmit != nil {
+			t.onSubmit(string(t.runes))
 			e.Handled = true
 			return
 		}
