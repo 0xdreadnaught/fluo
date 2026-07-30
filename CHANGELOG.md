@@ -8,6 +8,17 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-30
+
+### Fixed
+
+- **Resolution-independent antialiasing for shape edges.** Rounded-rect, stroke,
+  shadow, and acrylic-corner edges now derive their antialias band from the
+  screen-space derivative of the signed distance (`fwidth`), the same way text
+  already does, instead of a fixed logical-unit width. Shape edges stay crisp at
+  display scale > 1 (HiDPI / 2x) and no longer alias at scale < 1. Text is
+  unaffected. Shape golden images were regenerated for the sharper edges.
+
 ## [0.6.0] - 2026-07-30
 
 ### Changed
