@@ -6,6 +6,7 @@ import (
 	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/input"
 	"github.com/0xdreadnaught/fluo/render"
+	"github.com/0xdreadnaught/fluo/theme"
 )
 
 // newTestMenuBar returns a MenuBar with two top-level entries — "File"
@@ -400,5 +401,99 @@ func TestOverlayHostCloseAllPopups(t *testing.T) {
 		if dismissed[i] != want[i] {
 			t.Fatalf("dismissed = %v, want %v", dismissed, want)
 		}
+	}
+}
+
+// TestMenuDisabledItemRendersGrayText constructs a disabled menuItemRow
+// directly (white-box, via newMenuItemRow) and asserts Render leaves its
+// label colored GrayText — regardless of hover, which a disabled row can
+// never actually be in via real pointer input (see the hover test below),
+// but Render's own guard is unconditional either way (see its doc comment).
+func TestMenuDisabledItemRendersGrayText(t *testing.T) {
+	face := buttonFace(t)
+	th := theme.Active()
+
+	row := newMenuItemRow(face, "Paste", false, th.Color, th.Metric, nil)
+	row.Render(nil) // the disabled branch never touches the renderer
+
+	if got := row.label.Color(); got != th.Color.GrayText {
+		t.Fatalf("disabled row label color = %v, want GrayText %v", got, th.Color.GrayText)
+	}
+}
+
+// TestMenuDisabledItemInertAndSiblingUnaffected exercises a real menu with
+// one disabled row ("Paste", via AddDisabled) next to an enabled one
+// ("Cut"), driven entirely through the live router (matching
+// TestMenuItemClickFiresAndClosesAll's own approach): a genuine
+// router.PointerMove over the disabled row never lights up its hover (see
+// menuItemRow.OnPointer's disabled guard), and a click on it neither fires
+// its callback nor closes the menu — while the very same pointer path over
+// its enabled sibling still hovers, fires, and closes the menu exactly as
+// before AddDisabled existed.
+func TestMenuDisabledItemInertAndSiblingUnaffected(t *testing.T) {
+	face := buttonFace(t)
+
+	var pasteFired, cutFired bool
+	bar := NewMenuBar(face)
+	bar.AddMenu("Edit").
+		AddDisabled("Paste", func() { pasteFired = true }).
+		Add("Cut", func() { cutFired = true })
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(bar)
+	r.SetRoot(host)
+	layoutOverlay(host, 300, 300)
+
+	clickAt(r, rectCenter(bar.cellRect(0))) // opens Edit
+	layoutOverlay(host, 300, 300)           // arrange the popup + its rows
+
+	rows := menuPopupStackRows(t, bar.popup)
+	if len(rows) != 2 {
+		t.Fatalf("len(rows) = %d, want 2", len(rows))
+	}
+	pasteRow, ok := rows[0].(*menuItemRow)
+	if !ok {
+		t.Fatalf("rows[0] type = %T, want *menuItemRow", rows[0])
+	}
+	cutRow, ok := rows[1].(*menuItemRow)
+	if !ok {
+		t.Fatalf("rows[1] type = %T, want *menuItemRow", rows[1])
+	}
+
+	if pasteRow.enabled {
+		t.Fatal("pasteRow.enabled = true, want false (AddDisabled)")
+	}
+	if !cutRow.enabled {
+		t.Fatal("cutRow.enabled = false, want true (Add)")
+	}
+
+	// Disabled row: no hover, no fire, menu stays open.
+	r.PointerMove(rectCenter(core.BoundsOf(pasteRow)), 0)
+	if pasteRow.click.Hover() {
+		t.Fatal("pasteRow.click.Hover() = true after a live Move over a disabled row, want false")
+	}
+
+	clickAt(r, rectCenter(core.BoundsOf(pasteRow)))
+	if pasteFired {
+		t.Fatal("disabled Paste row's callback fired, want inert")
+	}
+	if host.PopupCount() != 1 {
+		t.Fatalf("PopupCount after clicking a disabled row = %d, want 1 (menu stays open)", host.PopupCount())
+	}
+
+	// Enabled sibling: hover, fire, and close, completely unaffected.
+	r.PointerMove(rectCenter(core.BoundsOf(cutRow)), 0)
+	if !cutRow.click.Hover() {
+		t.Fatal("cutRow.click.Hover() = false after a live Move over an enabled row, want true")
+	}
+
+	clickAt(r, rectCenter(core.BoundsOf(cutRow)))
+	if !cutFired {
+		t.Fatal("enabled Cut row's callback did not fire")
+	}
+	if host.PopupCount() != 0 {
+		t.Fatalf("PopupCount after enabled item click = %d, want 0 (closed)", host.PopupCount())
 	}
 }

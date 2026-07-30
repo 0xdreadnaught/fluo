@@ -36,17 +36,22 @@ const (
 )
 
 // menuEntry is one entry recorded by a MenuItems builder: a clickable item
-// (label + onClick), an inert separator (label/onClick/sub all unused), or a
-// submenu trigger (label + its own nested MenuItems builder, sub). Built up
-// by MenuItems.Add/AddSeparator/AddSub and read back only when a popup is
-// actually shown (buildMenuPopup) — the same "data now, widgets built fresh
-// on every open" split ComboBox uses for its own items (see
-// ComboBox.buildPopup's doc comment), so editing a MenuItems after it was
-// last shown is always reflected the next time it opens.
+// (label + onClick + enabled), an inert separator (label/onClick/sub/enabled
+// all unused), or a submenu trigger (label + its own nested MenuItems
+// builder, sub). Built up by MenuItems.Add/AddDisabled/AddSeparator/AddSub
+// and read back only when a popup is actually shown (buildMenuPopup) — the
+// same "data now, widgets built fresh on every open" split ComboBox uses for
+// its own items (see ComboBox.buildPopup's doc comment), so editing a
+// MenuItems after it was last shown is always reflected the next time it
+// opens. enabled is only meaningful for a menuEntryItem (see
+// MenuItems.Add/AddDisabled): it is baked in at Add time rather than
+// toggleable afterward, matching the fact that nothing else about an entry
+// (label, onClick) is mutable post-Add either.
 type menuEntry struct {
 	kind    menuEntryKind
 	label   string
 	onClick func()
+	enabled bool
 	sub     *MenuItems
 }
 
@@ -70,13 +75,28 @@ func newMenuItems(face *text.Face, colors theme.ColorTokens, metrics theme.Metri
 	return &MenuItems{face: face, colors: colors, metrics: metrics}
 }
 
-// Add appends a clickable item with the given label, firing onClick (may be
-// nil) when the user clicks its row — which ALSO closes every open menu
-// popup, per the package's normative "item click fires + closes ALL menus"
-// rule (see buildMenuPopup). Returns mi for chaining further Add/
-// AddSeparator/AddSub calls onto the SAME menu.
+// Add appends a clickable, ENABLED item with the given label, firing onClick
+// (may be nil) when the user clicks its row — which ALSO closes every open
+// menu popup, per the package's normative "item click fires + closes ALL
+// menus" rule (see buildMenuPopup). Returns mi for chaining further Add/
+// AddDisabled/AddSeparator/AddSub calls onto the SAME menu.
 func (mi *MenuItems) Add(label string, onClick func()) *MenuItems {
-	mi.entries = append(mi.entries, &menuEntry{kind: menuEntryItem, label: label, onClick: onClick})
+	mi.entries = append(mi.entries, &menuEntry{kind: menuEntryItem, label: label, onClick: onClick, enabled: true})
+	return mi
+}
+
+// AddDisabled appends a clickable item exactly like Add, except its row
+// starts out DISABLED: rendered with a greyed (GrayText) label, never
+// highlights on hover, and never fires onClick (nor closes the menu) on
+// click or any other activation — inert, but still visible in the menu,
+// exactly like a disabled Button or CheckBox elsewhere in this package (see
+// menuItemRow.Render/OnPointer). onClick is still recorded (may be nil) but
+// is unreachable while the row stays disabled; there is no way to
+// re-enable an entry already added — like every other menuEntry field, its
+// enabled state is fixed at Add time (see menuEntry's own doc comment).
+// Returns mi for chaining, matching Add.
+func (mi *MenuItems) AddDisabled(label string, onClick func()) *MenuItems {
+	mi.entries = append(mi.entries, &menuEntry{kind: menuEntryItem, label: label, onClick: onClick, enabled: false})
 	return mi
 }
 
@@ -120,7 +140,7 @@ func buildMenuPopup(items *MenuItems, closeAll func()) *menuPopupCard {
 		switch e.kind {
 		case menuEntryItem:
 			onClick := e.onClick
-			row := newMenuItemRow(items.face, e.label, items.colors, items.metrics, func() {
+			row := newMenuItemRow(items.face, e.label, e.enabled, items.colors, items.metrics, func() {
 				if onClick != nil {
 					onClick()
 				}
@@ -283,21 +303,28 @@ func (card *menuPopupCard) openSub(row *menuSubRow, sub *MenuItems, closeAll fun
 // menuItemRow is one clickable item row inside an open menu popup: a
 // left-aligned TextBlock, filled the classic navy Highlight on hover, firing
 // onClick (which, per buildMenuPopup, both runs the entry's own callback and
-// closes every open menu popup) on a release-inside click.
+// closes every open menu popup) on a release-inside click. A DISABLED row
+// (enabled false, see MenuItems.AddDisabled) is inert: OnPointer skips the
+// embedded ClickBehavior entirely (so it never hovers, never fires onClick,
+// and the pointer event is left unhandled to keep bubbling — matching
+// Button's own disabled convention, see Button.OnPointer) and Render always
+// shows the label in GrayText, regardless of hover.
 type menuItemRow struct {
 	core.Element
 
-	click ClickBehavior
-	label *TextBlock
+	click   ClickBehavior
+	label   *TextBlock
+	enabled bool
 
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
 }
 
 // newMenuItemRow returns a menuItemRow showing label in face (face may be
-// nil, per TextBlock). onClick (may be nil) fires on a successful click.
-func newMenuItemRow(face *text.Face, label string, colors theme.ColorTokens, metrics theme.MetricTokens, onClick func()) *menuItemRow {
-	row := &menuItemRow{colors: colors, metrics: metrics}
+// nil, per TextBlock). onClick (may be nil) fires on a successful click,
+// only while enabled is true.
+func newMenuItemRow(face *text.Face, label string, enabled bool, colors theme.ColorTokens, metrics theme.MetricTokens, onClick func()) *menuItemRow {
+	row := &menuItemRow{enabled: enabled, colors: colors, metrics: metrics}
 	row.label = NewTextBlock(face, label)
 	row.label.SetColor(colors.WindowText)
 	core.SetParent(row.label, row)
@@ -352,8 +379,16 @@ func (row *menuItemRow) Children() []core.Widget {
 // recolors the label HighlightText) while hovered, else leaves it
 // transparent (showing the popup card's own raised ButtonFace through) with
 // WindowText label color — items never show a persistent "selected" fill
-// (contrast comboRow): a menu item is a one-shot action, not a selection.
+// (contrast comboRow): a menu item is a one-shot action, not a selection. A
+// disabled row (see MenuItems.AddDisabled) always shows GrayText instead,
+// regardless of hover — matching Button's own disabled label color (see
+// Button.Render) — and never fills Highlight, since OnPointer never lets it
+// hover in the first place.
 func (row *menuItemRow) Render(r render.Renderer) {
+	if !row.enabled {
+		row.label.SetColor(row.colors.GrayText)
+		return
+	}
 	if row.click.Hover() {
 		r.FillRect(row.Bounds(), row.colors.Highlight)
 		row.label.SetColor(row.colors.HighlightText)
@@ -363,8 +398,14 @@ func (row *menuItemRow) Render(r render.Renderer) {
 }
 
 // OnPointer implements input.PointerHandler, delegating the entire
-// press/release/hover state machine to the embedded ClickBehavior.
+// press/release/hover state machine to the embedded ClickBehavior while
+// enabled (ignoring pointer input outright while disabled, not merely
+// failing to fire — e.Handled is left false so the event keeps bubbling,
+// matching Button.OnPointer's own disabled convention).
 func (row *menuItemRow) OnPointer(e *input.PointerEvent) {
+	if !row.enabled {
+		return
+	}
 	row.click.HandlePointer(e, row)
 }
 

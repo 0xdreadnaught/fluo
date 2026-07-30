@@ -1109,6 +1109,57 @@ func TestMenuOpen(t *testing.T) {
 	})
 }
 
+// TestMenuDisabledItem is the disabled-menu-row golden: an "Edit" menu
+// ("Copy", a disabled "Paste" via AddDisabled, "Cut") opened through the
+// real router-driven input path (matching TestMenuOpen's own approach),
+// showing the disabled "Paste" row's label rendered greyed (GrayText)
+// between its two normal WindowText siblings, inside a 160x140 frame.
+func TestMenuDisabledItem(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "menu_disabled", 160, 140, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		bar := controls.NewMenuBar(face)
+		bar.AddMenu("Edit").
+			Add("Copy", nil).
+			AddDisabled("Paste", nil).
+			Add("Cut", nil)
+		bar.SetAlign(core.Start, core.Start) // top-left; never stretched
+
+		host := controls.NewOverlayHost()
+		router := input.NewRouter()
+		host.SetRouter(router)
+		host.SetContent(bar)
+		router.SetRoot(host)
+
+		frame := render.Rect{X: 0, Y: 0, W: 160, H: 140}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		// First layout pass: gives the bar real arranged bounds, so the click
+		// point below is correct.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		barBounds := core.BoundsOf(bar)
+		editClick := render.Point{X: barBounds.X + 5, Y: barBounds.Y + barBounds.H/2}
+		router.PointerButton(input.ButtonLeft, true, editClick, 0)
+		router.PointerButton(input.ButtonLeft, false, editClick, 0)
+
+		// Second layout pass: arranges the now-open Edit popup's rows.
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		core.RenderWidget(host, r)
+	})
+}
+
 // TestDataGridHScroll is the control-variants Task 4 golden for the shared
 // virtualizer's horizontal scroll: a DataGrid with 3 wide Px columns ("Name"
 // 140, "Email" 160, "Age" 140 — 440 total, exceeding the grid's own 260px
