@@ -351,6 +351,16 @@ func (t *TextBox) wrapping() bool {
 // remove (a no-op edit, the same convention Backspace-at-position-0 already
 // follows), so Shift+Tab never leaks through to focus-nav while this flag is
 // on either. No literal '\t' is ever inserted (see tabInsertSpaces).
+//
+// The single-line-selection behavior above only holds when the CURRENT
+// selection is contained within one logical line (or there is none). When
+// the selection spans more than one logical line (see blockSelection), Tab
+// and Shift+Tab instead indent/outdent every touched line in place
+// (indentSelectedLines/outdentSelectedLines) — the "select several lines,
+// press Tab to indent the block" editor convention — rather than deleting
+// the selected text, which the plain insertText/single-line path would
+// otherwise do. The selection is restored afterward to span the same
+// block, so repeated Tab presses keep indenting further.
 func (t *TextBox) SetTabInserts(v bool) *TextBox {
 	t.tabInserts = v
 	return t
@@ -1027,6 +1037,92 @@ func (t *TextBox) unindentCurrentLine() bool {
 		t.SetCaret(newCaret)
 	}
 	return true
+}
+
+// blockSelection reports whether the range [start,end) — already normalized
+// by Selection() — is a MULTI-LINE selection: start != end, and start/end
+// fall on different logical lines (equivalently, the selected text contains
+// at least one '\n'). OnKey's KeyTab case checks this to decide whether Tab/
+// Shift+Tab should indent/outdent every touched line in place
+// (indentSelectedLines/outdentSelectedLines) rather than run the original
+// single-line behavior (insertText's selection-replace, or
+// unindentCurrentLine) — a selection collapsed to a caret, or contained
+// within one logical line, is never a block selection and keeps that
+// original behavior unchanged.
+func (t *TextBox) blockSelection(start, end int) bool {
+	if start == end {
+		return false
+	}
+	startLine, _ := t.lineCol(start)
+	endLine, _ := t.lineCol(end)
+	return startLine != endLine
+}
+
+// touchedLines returns the [first,last] (inclusive, 0-based) logical lines a
+// block selection [start,end) (see blockSelection) touches for indent/
+// outdent purposes: every logical line the range enters, EXCEPT the range's
+// own last line when end sits exactly at THAT line's own column 0 — i.e. the
+// selection runs through the previous line's newline into the very start of
+// the next line without selecting any of the next line's own text. That
+// trailing line is excluded in that case, the standard editor convention
+// that selecting up to (but not into) a line leaves it untouched by
+// block-indent — e.g. selecting one whole line plus its trailing newline
+// indents only that one line, never the line after it too. Only meaningful
+// when blockSelection(start, end) is true.
+func (t *TextBox) touchedLines(start, end int) (first, last int) {
+	first, _ = t.lineCol(start)
+	var endCol int
+	last, endCol = t.lineCol(end)
+	if endCol == 0 && last > first {
+		last--
+	}
+	return first, last
+}
+
+// indentSelectedLines implements Tab's block-indent step for a multi-line
+// selection (see blockSelection): inserts tabInsertSpaces spaces at the
+// start of every touched line (touchedLines), leaving all existing text
+// intact — unlike insertText's single-line selection-replace, no selected
+// text is ever deleted. Mutates from the LAST touched line back to the
+// FIRST so an earlier insertion never shifts a later line's already-
+// computed lineStart out from under it. Restores the selection afterward to
+// span the whole touched block (including the newly-inserted indentation),
+// so a repeated Tab press keeps indenting further.
+func (t *TextBox) indentSelectedLines() {
+	start, end := t.Selection()
+	first, last := t.touchedLines(start, end)
+	pad := strings.Repeat(" ", tabInsertSpaces)
+	for line := last; line >= first; line-- {
+		at := t.lineStart(line)
+		t.replaceRange(at, at, pad)
+	}
+	t.Select(t.lineStart(first), t.lineEnd(last))
+}
+
+// outdentSelectedLines implements Shift+Tab's block-outdent step for a
+// multi-line selection (see blockSelection): removes up to tabInsertSpaces
+// leading space runes from the start of every touched line (touchedLines) —
+// unindentCurrentLine's own leading-run removal, just applied to every
+// touched line instead of only the caret's own. A line with fewer than
+// tabInsertSpaces leading spaces loses only what it has; a line with none is
+// left untouched (no-op for that line, mirroring unindentCurrentLine's own
+// no-op convention). Mutates from the LAST touched line back to the FIRST so
+// an earlier removal never shifts a later line's already-computed indices,
+// and restores the selection afterward to span the whole touched block.
+func (t *TextBox) outdentSelectedLines() {
+	start, end := t.Selection()
+	first, last := t.touchedLines(start, end)
+	for line := last; line >= first; line-- {
+		lineStart := t.lineStart(line)
+		removeEnd := lineStart
+		for removeEnd < len(t.runes) && removeEnd-lineStart < tabInsertSpaces && t.runes[removeEnd] == ' ' {
+			removeEnd++
+		}
+		if removeEnd > lineStart {
+			t.replaceRange(lineStart, removeEnd, "")
+		}
+	}
+	t.Select(t.lineStart(first), t.lineEnd(last))
 }
 
 // --- Word wrap (opt-in; see SetWordWrap) ---
@@ -2284,9 +2380,16 @@ func (t *TextBox) OnKey(e *input.KeyEvent) {
 		return
 	case input.KeyTab:
 		if t.multiline && t.tabInserts {
-			if shift {
+			start, end := t.Selection()
+			block := t.blockSelection(start, end)
+			switch {
+			case shift && block:
+				t.outdentSelectedLines()
+			case shift:
 				t.unindentCurrentLine()
-			} else {
+			case block:
+				t.indentSelectedLines()
+			default:
 				t.insertText(strings.Repeat(" ", tabInsertSpaces))
 			}
 			e.Handled = true

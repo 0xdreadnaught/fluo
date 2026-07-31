@@ -2449,3 +2449,108 @@ func TestTextBoxTabInsertsDoesNotAffectSetText(t *testing.T) {
 		t.Fatalf("Caret() after SetText = %d, want %d (end)", c, want)
 	}
 }
+
+// --- Tab block-indent/outdent for a multi-line selection ---
+//
+// A selection spanning more than one logical line is a "block selection"
+// (see blockSelection): Tab/Shift+Tab indent/outdent every touched line in
+// place (indentSelectedLines/outdentSelectedLines) instead of running the
+// single-line path (insertText's selection-replace, which would otherwise
+// delete the whole selected block) or unindentCurrentLine (which would only
+// touch the caret's own line).
+
+// TestTextBoxTabBlockIndentsEveryTouchedLine locks the core block-indent
+// contract: a selection spanning three logical lines gains tabInsertSpaces
+// leading spaces on EVERY touched line, no existing text is deleted, and the
+// selection is restored to still span the whole block (so a second Tab press
+// keeps indenting further).
+func TestTextBoxTabBlockIndentsEveryTouchedLine(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "aaa\nbbb\nccc")
+	tb.SetTabInserts(true)
+	tb.Select(1, 9) // spans all three lines without covering any of them fully
+
+	if consumed := r.KeyDown(input.KeyTab, 0, 0); !consumed {
+		t.Fatal("KeyDown(Tab) consumed = false with a multi-line selection, want true")
+	}
+	want := "    aaa\n    bbb\n    ccc"
+	if got := tb.Text(); got != want {
+		t.Fatalf("Text() after block Tab = %q, want %q (every line indented, nothing deleted)", got, want)
+	}
+	wantRunes := len([]rune(want))
+	if s, e := tb.Selection(); s != 0 || e != wantRunes {
+		t.Fatalf("Selection() after block Tab = (%d,%d), want (0,%d) (whole block reselected)", s, e, wantRunes)
+	}
+
+	// A second Tab press keeps indenting: the restored selection still spans
+	// all three lines, so it is routed through the block path again.
+	r.KeyDown(input.KeyTab, 0, 0)
+	want2 := "        aaa\n        bbb\n        ccc"
+	if got := tb.Text(); got != want2 {
+		t.Fatalf("Text() after second block Tab = %q, want %q", got, want2)
+	}
+}
+
+// TestTextBoxShiftTabBlockOutdentsMixedIndentation locks the block-outdent
+// contract with three differently-indented lines: a full tabInsertSpaces
+// run, a shorter run, and no leading spaces at all — each loses only what it
+// actually has, ending at zero for all three, with no crash on the
+// already-unindented line.
+func TestTextBoxShiftTabBlockOutdentsMixedIndentation(t *testing.T) {
+	indent := strings.Repeat(" ", tabInsertSpaces)
+	tb, r := newFocusedMultilineTextBox(t, indent+"aaa\n  bbb\nccc")
+	tb.SetTabInserts(true)
+	tb.Select(0, len([]rune(indent+"aaa\n  bbb\nccc")))
+
+	if consumed := r.KeyDown(input.KeyTab, 0, input.ModShift); !consumed {
+		t.Fatal("KeyDown(Shift+Tab) consumed = false with a multi-line selection, want true")
+	}
+	want := "aaa\nbbb\nccc"
+	if got := tb.Text(); got != want {
+		t.Fatalf("Text() after block Shift+Tab = %q, want %q", got, want)
+	}
+	wantRunes := len([]rune(want))
+	if s, e := tb.Selection(); s != 0 || e != wantRunes {
+		t.Fatalf("Selection() after block Shift+Tab = (%d,%d), want (0,%d) (whole block reselected)", s, e, wantRunes)
+	}
+}
+
+// TestTextBoxTabBlockSelectionEndAtLineStartExcludesTrailingLine documents
+// the touchedLines convention: when the selection's END sits exactly at the
+// start (column 0) of a line — i.e. it runs through the previous line's
+// newline without selecting any of THIS line's own text — that trailing
+// line is excluded from the block indent, even though the selection is
+// still a two-line block selection (it spans a '\n').
+func TestTextBoxTabBlockSelectionEndAtLineStartExcludesTrailingLine(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "aaa\nbbb\nccc")
+	tb.SetTabInserts(true)
+	tb.Select(0, len([]rune("aaa\n"))) // through line 0's newline, into col 0 of line 1
+
+	r.KeyDown(input.KeyTab, 0, 0)
+
+	want := "    aaa\nbbb\nccc"
+	if got := tb.Text(); got != want {
+		t.Fatalf("Text() = %q, want %q (only line 0 indented, line 1 untouched)", got, want)
+	}
+	wantRunes := len([]rune("    aaa"))
+	if s, e := tb.Selection(); s != 0 || e != wantRunes {
+		t.Fatalf("Selection() = (%d,%d), want (0,%d) (reselects only the touched line)", s, e, wantRunes)
+	}
+}
+
+// TestTextBoxTabSingleLineSelectionInMultiLineBufferStillReplaces locks that
+// a selection confined to ONE logical line — even inside a buffer that has
+// other lines — is NOT a block selection: Tab still replaces the selected
+// text with spaces exactly as TestTextBoxTabInsertsReplacesSelection checks
+// for a buffer with no newlines at all.
+func TestTextBoxTabSingleLineSelectionInMultiLineBufferStillReplaces(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "aaa\nbbb\nccc")
+	tb.SetTabInserts(true)
+	tb.Select(4, 7) // "bbb", entirely within line 1
+
+	r.KeyDown(input.KeyTab, 0, 0)
+
+	want := "aaa\n" + strings.Repeat(" ", tabInsertSpaces) + "\nccc"
+	if got := tb.Text(); got != want {
+		t.Fatalf("Text() = %q, want %q (single-line selection replaced, not block-indented)", got, want)
+	}
+}
