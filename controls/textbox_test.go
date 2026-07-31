@@ -2,6 +2,7 @@ package controls
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -2265,5 +2266,186 @@ func TestTextBoxVScrollSingleLineNeverShowsThumb(t *testing.T) {
 	}
 	if _, ok := tb.vScrollTrack(); ok {
 		t.Fatal("vScrollTrack ok = true for a single-line TextBox, want false")
+	}
+}
+
+// --- Tab-inserts-indent (opt-in, multi-line only; see SetTabInserts) ---
+
+// TestTextBoxTabInsertsDefaultFalseAndSetter locks SetTabInserts/TabInserts'
+// own getter/setter contract, mirroring TestTextBoxMultilineDefaultFalseAndSetter.
+func TestTextBoxTabInsertsDefaultFalseAndSetter(t *testing.T) {
+	tb := NewTextBox(nil)
+	if tb.TabInserts() {
+		t.Fatal("TabInserts() = true for a fresh TextBox, want false (default)")
+	}
+	tb.SetTabInserts(true)
+	if !tb.TabInserts() {
+		t.Fatal("TabInserts() = false after SetTabInserts(true), want true")
+	}
+}
+
+// TestTextBoxTabDefaultBubblesToFocusNav locks the unchanged-by-default
+// requirement: with SetTabInserts never called, Tab on a focused multiline
+// TextBox is NOT consumed by the box itself (dispatchKey sees e.Handled still
+// false) and inserts nothing — it bubbles to the Router's own Tab
+// focus-cycling bookkeeping exactly as it did before this feature existed
+// (see TestKeyDownConsumedTabBookkeeping's matching "consumed = false"
+// convention).
+func TestTextBoxTabDefaultBubblesToFocusNav(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "ab")
+	tb.SetCaret(1)
+
+	var calls int
+	tb.OnChanged(func(string) { calls++ })
+
+	if consumed := r.KeyDown(input.KeyTab, 0, 0); consumed {
+		t.Fatal("KeyDown(Tab) consumed = true with SetTabInserts never called, want false (unchanged)")
+	}
+	if tb.Text() != "ab" {
+		t.Fatalf("Text() = %q, want unchanged %q", tb.Text(), "ab")
+	}
+	if c := tb.Caret(); c != 1 {
+		t.Fatalf("Caret() = %d, want unchanged 1", c)
+	}
+	if calls != 0 {
+		t.Fatalf("OnChanged calls = %d, want 0", calls)
+	}
+}
+
+// TestTextBoxTabInsertsSpacesWhenEnabled locks the core Tab-inserts-indent
+// contract: enabled, multiline, and focused, Tab inserts exactly
+// tabInsertSpaces spaces at the caret via the same path plain typing uses
+// (advancing the caret, firing OnChanged), and is CONSUMED so it never
+// reaches the Router's focus-cycling. A second Tab press keeps inserting.
+func TestTextBoxTabInsertsSpacesWhenEnabled(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "ab")
+	tb.SetTabInserts(true)
+	tb.SetCaret(1) // between 'a' and 'b'
+
+	var got []string
+	tb.OnChanged(func(s string) { got = append(got, s) })
+
+	if consumed := r.KeyDown(input.KeyTab, 0, 0); !consumed {
+		t.Fatal("KeyDown(Tab) consumed = false with SetTabInserts(true), want true")
+	}
+	want := "a" + strings.Repeat(" ", tabInsertSpaces) + "b"
+	if tb.Text() != want {
+		t.Fatalf("Text() after one Tab = %q, want %q", tb.Text(), want)
+	}
+	if c := tb.Caret(); c != 1+tabInsertSpaces {
+		t.Fatalf("Caret() after one Tab = %d, want %d", c, 1+tabInsertSpaces)
+	}
+
+	// A second Tab press keeps inserting at the (now advanced) caret.
+	r.KeyDown(input.KeyTab, 0, 0)
+	want2 := "a" + strings.Repeat(" ", 2*tabInsertSpaces) + "b"
+	if tb.Text() != want2 {
+		t.Fatalf("Text() after two Tabs = %q, want %q", tb.Text(), want2)
+	}
+	if len(got) != 2 {
+		t.Fatalf("OnChanged calls = %d, want 2 (one per Tab press)", len(got))
+	}
+}
+
+// TestTextBoxTabInsertsReplacesSelection locks the "replace an active
+// selection like typing would" requirement, mirroring
+// TestTextBoxTypingWithSelectionReplaces.
+func TestTextBoxTabInsertsReplacesSelection(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "hello")
+	tb.SetTabInserts(true)
+	tb.Select(1, 4) // "ell" selected
+
+	r.KeyDown(input.KeyTab, 0, 0)
+
+	want := "h" + strings.Repeat(" ", tabInsertSpaces) + "o"
+	if tb.Text() != want {
+		t.Fatalf("Text() = %q, want %q (selection replaced by Tab's inserted spaces)", tb.Text(), want)
+	}
+	if c := tb.Caret(); c != 1+tabInsertSpaces {
+		t.Fatalf("Caret() = %d, want %d (just after the replacement)", c, 1+tabInsertSpaces)
+	}
+	if s, e := tb.Selection(); s != e {
+		t.Fatalf("Selection() = (%d,%d), want collapsed after replace", s, e)
+	}
+}
+
+// TestTextBoxTabInsertsSingleLineStillBubbles locks the multiline-only
+// gating: SetTabInserts(true) on a SINGLE-LINE box must leave Tab exactly as
+// unhandled as the default case (Tab remains the Router's focus-nav key for
+// a single-line input, since indenting one has no sensible meaning).
+func TestTextBoxTabInsertsSingleLineStillBubbles(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "ab")
+	tb.SetTabInserts(true)
+	tb.SetCaret(1)
+
+	if consumed := r.KeyDown(input.KeyTab, 0, 0); consumed {
+		t.Fatal("KeyDown(Tab) consumed = true on a single-line TextBox with SetTabInserts(true), want false")
+	}
+	if tb.Text() != "ab" {
+		t.Fatalf("Text() = %q, want unchanged %q", tb.Text(), "ab")
+	}
+}
+
+// TestTextBoxShiftTabUnindentsLeadingSpaces locks the Shift+Tab unindent
+// step: it removes up to tabInsertSpaces leading spaces from the caret's
+// current line, is a no-op mutation (but still handled — see OnKey's own
+// "recognized combos are always handled, even as a no-op" convention) when
+// there are none, and only ever removes a SHORTER leading run when the line
+// has fewer than tabInsertSpaces leading spaces.
+func TestTextBoxShiftTabUnindentsLeadingSpaces(t *testing.T) {
+	indent := strings.Repeat(" ", tabInsertSpaces)
+	tb, r := newFocusedMultilineTextBox(t, indent+"line one\n"+"ab\n"+"  c")
+	tb.SetTabInserts(true)
+
+	// Caret at the end of the fully-indented first line: removes the whole
+	// leading run and walks the caret back by exactly that many runes.
+	tb.SetCaret(len(indent) + len("line one"))
+	if consumed := r.KeyDown(input.KeyTab, 0, input.ModShift); !consumed {
+		t.Fatal("KeyDown(Shift+Tab) consumed = false with a full leading indent present, want true")
+	}
+	if got, want := tb.Text(), "line one\nab\n  c"; got != want {
+		t.Fatalf("Text() after Shift+Tab = %q, want %q", got, want)
+	}
+	if c := tb.Caret(); c != len("line one") {
+		t.Fatalf("Caret() after Shift+Tab = %d, want %d", c, len("line one"))
+	}
+
+	// Second line ("ab") has no leading spaces at all: a no-op mutation, but
+	// still marked handled (never leaks through to focus-nav).
+	tb.SetCaret(len("line one\n") + 1) // inside "ab"
+	if consumed := r.KeyDown(input.KeyTab, 0, input.ModShift); !consumed {
+		t.Fatal("KeyDown(Shift+Tab) consumed = false on a line with no leading spaces, want true (recognized no-op)")
+	}
+	if got, want := tb.Text(), "line one\nab\n  c"; got != want {
+		t.Fatalf("Text() after no-op Shift+Tab = %q, want unchanged %q", got, want)
+	}
+
+	// Third line ("  c") has fewer than tabInsertSpaces (2 < 4) leading
+	// spaces: only that shorter run is removed.
+	third := len("line one\n") + len("ab\n")
+	tb.SetCaret(third + 2) // just after the two leading spaces, before 'c'
+	r.KeyDown(input.KeyTab, 0, input.ModShift)
+	if got, want := tb.Text(), "line one\nab\nc"; got != want {
+		t.Fatalf("Text() after Shift+Tab on a short indent = %q, want %q", got, want)
+	}
+	if c := tb.Caret(); c != third {
+		t.Fatalf("Caret() after Shift+Tab on a short indent = %d, want %d (line start)", c, third)
+	}
+}
+
+// TestTextBoxTabInsertsDoesNotAffectSetText locks the "programmatic
+// mutation unaffected" requirement: SetText's caret/selection reset happens
+// exactly as it always has, regardless of SetTabInserts.
+func TestTextBoxTabInsertsDoesNotAffectSetText(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true)
+	tb.SetTabInserts(true)
+
+	tb.SetText("x\ny")
+	if got := tb.Text(); got != "x\ny" {
+		t.Fatalf("Text() = %q, want %q", got, "x\ny")
+	}
+	want := len([]rune("x\ny"))
+	if c := tb.Caret(); c != want {
+		t.Fatalf("Caret() after SetText = %d, want %d (end)", c, want)
 	}
 }
