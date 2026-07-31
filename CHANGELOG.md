@@ -8,6 +8,16 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-07-31
+
+### Fixed
+
+- **`SetTabInserts`: Tab no longer destroys a multi-line selection.** Pressing
+  Tab (or Shift+Tab) with a selection spanning multiple lines now block-indents
+  (or block-outdents) every selected line and keeps the selection, instead of
+  replacing the whole selection with spaces. Single-line and no-selection
+  behavior is unchanged.
+
 ## [0.10.0] - 2026-07-31
 
 ### Added
