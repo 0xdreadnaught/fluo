@@ -343,7 +343,7 @@ func TestClassicButton(t *testing.T) {
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
-	testFrame(t, "fluent_button", 200, 80, func(r *glr.Renderer) {
+	testFrame(t, "classic_button", 200, 80, func(r *glr.Renderer) {
 		f, err := text.Load(goregular.TTF)
 		if err != nil {
 			t.Fatal(err)

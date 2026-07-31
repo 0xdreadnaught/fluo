@@ -95,9 +95,9 @@ type ColorTokens struct {
 	// deprecated: migrating to classic tokens; removed after control restyle
 	SelectionForeground, ScrimBackground render.Color
 	// AcrylicTint is the translucent tint composited over a backdrop-blur
-	// acrylic/mica surface (see controls.AcrylicSurface).
-	//
-	// deprecated: migrating to classic tokens; removed after control restyle
+	// acrylic/mica surface (see controls.AcrylicSurface). This is a live token
+	// read by AcrylicSurface — the classic themes keep it even though they
+	// don't use translucency elsewhere.
 	AcrylicTint render.Color
 }
 

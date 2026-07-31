@@ -102,15 +102,13 @@ binding, theming, and the renderer — live in [`docs/wiki`](docs/wiki.md).
 
 ## Status
 
-v0.2. Every layer is implemented, tested (headless layout and binding tests
+v0.13. Every layer is implemented, tested (headless layout and binding tests
 plus GL golden images that auto-skip without a GPU), and exercised together by
 the gallery. Known gaps:
 
-- Shape anti-aliasing softens above 1x scale; text stays crisp at any scale.
-  This is moot for the square classic themes but shows on stroked edges.
 - The custom title bar covers Windows and Linux. There's no native macOS
   integration.
-- No IME or accessibility hooks yet.
+- No accessibility (screen-reader) hooks yet.
 
 See [CHANGELOG.md](CHANGELOG.md) and [ROADMAP.md](ROADMAP.md) for the full
 history.
