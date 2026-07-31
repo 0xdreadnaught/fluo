@@ -2917,3 +2917,356 @@ func TestTextBoxShiftTabBlockOutdentNoLeadingSpacesIsNoop(t *testing.T) {
 		t.Fatalf("Selection() = (%d,%d), want (0,%d) (still restored to the touched block)", s, e, wantRunes)
 	}
 }
+
+// --- Line-number gutter (opt-in; see TextBox.SetLineNumbers) ---
+
+// newGutterTextBox returns a multi-line TextBox holding s, laid out at a
+// fixed 200x120 rect (tall and wide enough that the sample strings below
+// neither overflow vertically — no vScroll gutter competing for width — nor
+// scroll horizontally), focused so the caret is actually drawn, with the
+// line-number gutter set per lineNumbers. The shared fixture for every
+// gutter test below.
+func newGutterTextBox(t *testing.T, s string, lineNumbers bool) *TextBox {
+	t.Helper()
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true).SetLineNumbers(lineNumbers)
+	tb.SetText(s)
+	tb.SetWidth(200)
+	tb.SetHeight(120)
+	tb.OnFocusChanged(true)
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: 200, H: 120})
+	return tb
+}
+
+// caretRectFromRender renders tb into a recording renderer and returns the
+// caret bar's own FillRect — identified by caretWidth in WindowText, which
+// nothing else this control draws matches (the selection band is Highlight,
+// the sunken chrome is the Button* shades, the gutter rule is GrayText). It
+// is deliberately read back out of a REAL render pass rather than recomputed
+// from the same helpers the renderer uses, so the draw/hit-test agreement
+// checks below compare two genuinely independent code paths.
+func caretRectFromRender(t *testing.T, tb *TextBox) render.Rect {
+	t.Helper()
+	rr := &recordRenderer{}
+	core.RenderWidget(tb, rr)
+
+	var found []render.Rect
+	for _, f := range rr.fills {
+		if f.rect.W == caretWidth && f.color == tb.colors.WindowText {
+			found = append(found, f.rect)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("found %d caret rects in the render pass, want exactly 1", len(found))
+	}
+	return found[0]
+}
+
+// clickIndex dispatches a Press at (x,y) through tb.OnPointer and returns
+// where the caret landed — the real hit-test path, capture and all.
+func clickIndex(t *testing.T, tb *TextBox, x, y float32) int {
+	t.Helper()
+	r := input.NewRouter()
+	r.SetRoot(tb)
+	e := &input.PointerEvent{Action: input.Press, Pos: render.Point{X: x, Y: y}, Router: r}
+	tb.OnPointer(e)
+	r.Release()
+	return tb.Caret()
+}
+
+// assertDrawHitTestAgree walks the given rune indices and checks the whole
+// round trip at each: put the caret there, render, take the caret bar's
+// drawn x straight out of that render pass, click a hair to its right, and
+// require the caret to land back on the same index. Draw and hit-test must
+// offset by the gutter identically or this fails — a gutter added to only
+// one of the two shifts every click by its full width.
+func assertDrawHitTestAgree(t *testing.T, tb *TextBox, indices []int) {
+	t.Helper()
+	for _, i := range indices {
+		tb.SetCaret(i)
+		layoutButton(tb, tb.Bounds())
+
+		caret := caretRectFromRender(t, tb)
+		got := clickIndex(t, tb, caret.X+0.5, caret.Y+tb.lineHeight()/2)
+		if got != i {
+			t.Fatalf("caret drawn at x=%v for index %d, but a click there landed at index %d", caret.X, i, got)
+		}
+	}
+}
+
+// TestTextBoxLineNumbersDefaultOff is the regression lock on the default
+// path: a multi-line TextBox that never calls SetLineNumbers must reserve no
+// gutter at all — LineNumbers() false, gutterWidth() 0, the content width
+// exactly the padding-inset width, the text origin still bounds.X+PaddingM,
+// and click-to-caret still landing where it always did.
+func TestTextBoxLineNumbersDefaultOff(t *testing.T) {
+	tb := newGutterTextBox(t, "Hello fluo\nSecond line\nThird", false)
+
+	if tb.LineNumbers() {
+		t.Fatal("LineNumbers() = true by default, want false")
+	}
+	if got := tb.gutterWidth(); got != 0 {
+		t.Fatalf("gutterWidth() with the flag off = %v, want 0", got)
+	}
+	if got, want := tb.contentWidth(), tb.Bounds().W-2*tb.metrics.PaddingM; got != want {
+		t.Fatalf("contentWidth() with the flag off = %v, want %v (padding-inset, nothing reserved)", got, want)
+	}
+	// localTextX's pre-feature formula, spelled out literally.
+	probe := tb.Bounds().X + tb.metrics.PaddingM + 20
+	if got, want := tb.localTextX(probe), float32(20)+tb.hscroll; got != want {
+		t.Fatalf("localTextX(%v) = %v, want %v (no gutter subtracted)", probe, got, want)
+	}
+
+	assertDrawHitTestAgree(t, tb, []int{0, 3, 10, 11, 15, 22})
+}
+
+// TestTextBoxLineNumbersInsetsContent is the enabled counterpart: turning the
+// gutter on reserves a positive width, and the text's share of the box
+// narrows by exactly that much — the mirror image of the vertical thumb's own
+// right-edge reservation (see TestTextBoxVScrollGutterOnlyReservedWhenShown).
+func TestTextBoxLineNumbersInsetsContent(t *testing.T) {
+	off := newGutterTextBox(t, "Hello fluo\nSecond line\nThird", false)
+	on := newGutterTextBox(t, "Hello fluo\nSecond line\nThird", true)
+
+	gw := on.gutterWidth()
+	if gw <= 0 {
+		t.Fatalf("gutterWidth() with the flag on = %v, want > 0", gw)
+	}
+	if !on.LineNumbers() {
+		t.Fatal("LineNumbers() = false after SetLineNumbers(true), want true")
+	}
+	if got, want := on.contentWidth(), off.contentWidth()-gw; got != want {
+		t.Fatalf("contentWidth() with the gutter on = %v, want %v (off minus the gutter)", got, want)
+	}
+	// The gutter must fit a whole line number plus the rule and its air.
+	digits := on.face.Measure("0").W
+	if want := digits + 2*on.metrics.PaddingS + lineNumberRuleWidth; gw != want {
+		t.Fatalf("gutterWidth() = %v, want %v (one digit + 2*PaddingS + rule)", gw, want)
+	}
+}
+
+// TestTextBoxLineNumbersDrawAndHitTestAgree is the feature's whole risk in
+// one test: with the gutter on, the caret's DRAWN x (read out of a real
+// render pass) and the click hit-test must still agree at every index, so a
+// click lands on the character under the pointer rather than a gutter-width
+// further along.
+func TestTextBoxLineNumbersDrawAndHitTestAgree(t *testing.T) {
+	tb := newGutterTextBox(t, "Hello fluo\nSecond line\nThird", true)
+	assertDrawHitTestAgree(t, tb, []int{0, 3, 10, 11, 15, 22})
+}
+
+// TestTextBoxLineNumbersShiftCaretAndClicks proves the offset is real in both
+// directions rather than two consistent no-ops: the same caret index draws
+// exactly gutterWidth further right with the gutter on, and the same window
+// x hit-tests to an EARLIER index (the gutter has pushed that column's text
+// rightward, so a fixed x now falls on an earlier character).
+func TestTextBoxLineNumbersShiftCaretAndClicks(t *testing.T) {
+	off := newGutterTextBox(t, "Hello fluo\nSecond line\nThird", false)
+	on := newGutterTextBox(t, "Hello fluo\nSecond line\nThird", true)
+
+	off.SetCaret(8)
+	on.SetCaret(8)
+	layoutButton(off, off.Bounds())
+	layoutButton(on, on.Bounds())
+
+	offCaret := caretRectFromRender(t, off)
+	onCaret := caretRectFromRender(t, on)
+	if got, want := onCaret.X, offCaret.X+on.gutterWidth(); got != want {
+		t.Fatalf("caret x with the gutter on = %v, want %v (off + gutterWidth)", got, want)
+	}
+
+	// A click at a fixed window x, well into the first line's text.
+	x := off.Bounds().X + off.metrics.PaddingM + 40
+	y := off.Bounds().Y + off.metrics.PaddingM + off.lineHeight()/2
+	offIdx := clickIndex(t, off, x, y)
+	onIdx := clickIndex(t, on, x, y)
+	if onIdx >= offIdx {
+		t.Fatalf("click at x=%v landed at index %d with the gutter on and %d with it off, want strictly earlier with the gutter", x, onIdx, offIdx)
+	}
+}
+
+// TestTextBoxLineNumbersGutterWidthGrowsWithLineCount checks the gutter is
+// sized to the widest number that can actually appear: a 9-line box needs one
+// digit, a 150-line box needs three, so the latter's gutter is strictly wider
+// — by exactly the extra two digits' worth of width.
+func TestTextBoxLineNumbersGutterWidthGrowsWithLineCount(t *testing.T) {
+	small := newGutterTextBox(t, strings.TrimSuffix(strings.Repeat("x\n", 9), "\n"), true)
+	big := newGutterTextBox(t, strings.TrimSuffix(strings.Repeat("x\n", 150), "\n"), true)
+
+	if got := small.lineCount(); got != 9 {
+		t.Fatalf("small lineCount() = %d, want 9", got)
+	}
+	if got := big.lineCount(); got != 150 {
+		t.Fatalf("big lineCount() = %d, want 150", got)
+	}
+	if big.gutterWidth() <= small.gutterWidth() {
+		t.Fatalf("gutterWidth() = %v for 150 lines and %v for 9, want strictly wider for 150", big.gutterWidth(), small.gutterWidth())
+	}
+	oneDigit := small.face.Measure("0").W
+	threeDigits := big.face.Measure("000").W
+	if got, want := big.gutterWidth()-small.gutterWidth(), threeDigits-oneDigit; got != want {
+		t.Fatalf("gutter width difference = %v, want %v (two extra digits)", got, want)
+	}
+}
+
+// TestTextBoxLineNumbersDigitCount pins digitCount's own boundaries, since
+// the gutter width is entirely derived from it.
+func TestTextBoxLineNumbersDigitCount(t *testing.T) {
+	for _, tc := range []struct{ n, want int }{
+		{0, 1}, {1, 1}, {9, 1}, {10, 2}, {99, 2}, {100, 3}, {999, 3}, {1000, 4},
+	} {
+		if got := digitCount(tc.n); got != tc.want {
+			t.Fatalf("digitCount(%d) = %d, want %d", tc.n, got, tc.want)
+		}
+	}
+}
+
+// TestTextBoxLineNumbersTrackLogicalLinesWhenWrapped is the word-wrap rule:
+// numbers count REAL ('\n'-delimited) lines, not displayed rows, so a
+// wrapped logical line shows exactly one number — on its first visual row —
+// and every continuation row is left blank.
+func TestTextBoxLineNumbersTrackLogicalLinesWhenWrapped(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true).SetWordWrap(true).SetLineNumbers(true)
+	tb.SetText("The quick brown fox jumps over the lazy dog\nshort\nanother long line that will certainly wrap")
+	tb.SetWidth(160)
+	tb.SetHeight(300) // generous: no vertical overflow, so no thumb gutter
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: 160, H: 300})
+
+	rows := tb.visualRows(tb.contentWidth())
+	if len(rows) <= tb.lineCount() {
+		t.Fatalf("visual rows = %d for %d logical lines, want more (nothing wrapped)", len(rows), tb.lineCount())
+	}
+
+	nums := rowLineNumbers([]rune(tb.Text()), rows)
+	var numbered []int
+	for i, n := range nums {
+		if n == 0 {
+			continue
+		}
+		numbered = append(numbered, n)
+		// The numbered row must be that logical line's FIRST row.
+		if got, want := rows[i].start, tb.lineStart(n-1); got != want {
+			t.Fatalf("line %d numbered on a row starting at %d, want the line's own first row (starting at %d)", n, got, want)
+		}
+	}
+	if len(numbered) != tb.lineCount() {
+		t.Fatalf("numbered rows = %d, want %d (exactly one per logical line)", len(numbered), tb.lineCount())
+	}
+	for i, n := range numbered {
+		if n != i+1 {
+			t.Fatalf("numbered[%d] = %d, want %d (1-based, in order)", i, n, i+1)
+		}
+	}
+}
+
+// TestTextBoxLineNumbersUnwrappedRowsAreOneToOne is the unwrapped half of the
+// same mapping: with no wrapping there is one row per logical line, so row i
+// simply carries number i+1 and no row is ever left blank — empty lines
+// (including a trailing one) included.
+func TestTextBoxLineNumbersUnwrappedRowsAreOneToOne(t *testing.T) {
+	runes := []rune("alpha\n\nbeta\ngamma\n")
+	rows := logicalLineRows(runes)
+	nums := rowLineNumbers(runes, rows)
+
+	if len(nums) != 5 {
+		t.Fatalf("rows = %d, want 5 (four newlines, empty second and trailing lines included)", len(nums))
+	}
+	for i, n := range nums {
+		if n != i+1 {
+			t.Fatalf("nums[%d] = %d, want %d", i, n, i+1)
+		}
+	}
+}
+
+// TestTextBoxLineNumbersIgnoredWhenSingleLine pins the multiline-only gating
+// (the same shape SetWordWrap/SetTabInserts use): a single-line box keeps the
+// flag's value but reserves nothing and lays out exactly as before.
+func TestTextBoxLineNumbersIgnoredWhenSingleLine(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetLineNumbers(true)
+	tb.SetText("Hello fluo")
+	tb.SetWidth(300)
+	tb.SetHeight(30)
+	tb.OnFocusChanged(true)
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: 300, H: 30})
+
+	if !tb.LineNumbers() {
+		t.Fatal("LineNumbers() = false, want true (the flag is still recorded, just inert)")
+	}
+	if tb.showLineNumbers() {
+		t.Fatal("showLineNumbers() = true for a single-line box, want false")
+	}
+	if got := tb.gutterWidth(); got != 0 {
+		t.Fatalf("gutterWidth() for a single-line box = %v, want 0", got)
+	}
+	if got, want := tb.contentWidth(), tb.Bounds().W-2*tb.metrics.PaddingM; got != want {
+		t.Fatalf("contentWidth() = %v, want %v (unchanged)", got, want)
+	}
+
+	assertDrawHitTestAgree(t, tb, []int{0, 1, 5, 10})
+}
+
+// TestTextBoxLineNumbersNilFaceReservesNothing covers the degenerate face:
+// with no glyph widths to size a number column by, the gutter collapses to
+// nothing rather than reserving an arbitrary width (matching every other
+// nil-face convention in textbox.go), so nothing shifts.
+func TestTextBoxLineNumbersNilFaceReservesNothing(t *testing.T) {
+	tb := NewTextBox(nil).SetMultiline(true).SetLineNumbers(true)
+	tb.SetText("one\ntwo")
+	tb.SetWidth(200)
+	tb.SetHeight(120)
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: 200, H: 120})
+
+	if got := tb.gutterWidth(); got != 0 {
+		t.Fatalf("gutterWidth() with a nil face = %v, want 0", got)
+	}
+	if got, want := tb.contentWidth(), tb.Bounds().W-2*tb.metrics.PaddingM; got != want {
+		t.Fatalf("contentWidth() = %v, want %v (unchanged)", got, want)
+	}
+}
+
+// TestTextBoxLineNumbersRuleAndNumbersScrollWithText proves the gutter is
+// drawn at all and rides the same scroll offset the text does: the
+// separating rule is a GrayText hairline spanning the padding-inset height,
+// and the row y-origin the numbers are placed at is the vscroll-shifted one
+// the caret itself lands on.
+func TestTextBoxLineNumbersRuleAndNumbersScrollWithText(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true).SetLineNumbers(true)
+	tb.SetText(strings.TrimSuffix(strings.Repeat("line\n", 20), "\n"))
+	tb.SetWidth(200)
+	tb.SetHeight(80) // far too short for 20 lines: vscroll ends up non-zero
+	tb.OnFocusChanged(true)
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: 200, H: 80})
+
+	if tb.vscroll <= 0 {
+		t.Fatalf("vscroll = %v, want > 0 (caret at the end of overflowing content)", tb.vscroll)
+	}
+
+	rr := &recordRenderer{}
+	core.RenderWidget(tb, rr)
+
+	bounds := tb.Bounds()
+	pad := tb.metrics.PaddingM
+	wantRule := render.Rect{
+		X: bounds.X + pad + tb.gutterWidth() - tb.metrics.PaddingS - lineNumberRuleWidth,
+		Y: bounds.Y + pad,
+		W: lineNumberRuleWidth,
+		H: bounds.H - 2*pad,
+	}
+	var found bool
+	for _, f := range rr.fills {
+		if f.rect == wantRule && f.color == tb.colors.GrayText {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no GrayText separator rule at %+v in the render pass", wantRule)
+	}
+
+	// The numbers share the text's own row origin, so the caret's own row
+	// y is exactly the scrolled origin renderLineNumbers places them at.
+	caret := caretRectFromRender(t, tb)
+	line, _ := tb.lineCol(tb.caret)
+	wantY := bounds.Y + pad - tb.vscroll + float32(line)*tb.lineHeight()
+	if caret.Y != wantY {
+		t.Fatalf("caret y = %v, want %v (scrolled row origin the gutter numbers also use)", caret.Y, wantY)
+	}
+}
