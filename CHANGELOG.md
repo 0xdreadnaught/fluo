@@ -8,6 +8,23 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-31
+
+### Added
+
+- **Editor-ergonomics keys for the multi-line `TextBox`:**
+  - **Ctrl+Left / Ctrl+Right** — move the caret by whole words (Ctrl+Shift extends the selection).
+  - **Ctrl+Home / Ctrl+End** — jump to the start / end of the whole buffer (the
+    only way to reach it in multi-line mode; plain Home/End still stop at the line).
+  - **Ctrl+Backspace / Ctrl+Delete** — delete the previous / next word.
+  - **PageUp / PageDown** — move the caret by one viewport of rows.
+  - New `input.KeyPageUp` / `input.KeyPageDown` constants.
+
+### Changed
+
+- Block indent/outdent (Tab / Shift+Tab over a multi-line selection) now applies
+  as a single edit, firing `OnChanged` once per press instead of once per line.
+
 ## [0.10.1] - 2026-07-31
 
 ### Fixed
