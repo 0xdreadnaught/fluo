@@ -40,6 +40,13 @@ const caretWidth float32 = 1.5
 // stay visible after SDF/AA rounding.
 const preeditUnderlineThickness float32 = 1.5
 
+// tabInsertSpaces is how many space runes a Tab press inserts when
+// SetTabInserts is on (see its doc comment) — and the matching cap on how
+// many leading spaces a Shift+Tab press removes. A literal '\t' is never
+// inserted: spaces need no tab-stop rendering support, so they work with the
+// existing monospace/coverage text path unchanged.
+const tabInsertSpaces = 4
+
 // TextBox is a focusable, token-styled text input, single-line by default.
 // The data model (text/caret/selection, rune-indexed) and rendering (chrome,
 // selection highlight, caret, horizontal scroll, placeholder) were built in
@@ -101,6 +108,12 @@ type TextBox struct {
 	// zero value) is the original behavior, unchanged — only meaningful when
 	// multiline is also true (see wrapping()).
 	wordWrap bool
+
+	// tabInserts toggles opt-in Tab-inserts-indentation (see SetTabInserts);
+	// false (the zero value) is the original behavior, unchanged — only
+	// meaningful when multiline is also true (see OnKey's KeyTab case),
+	// mirroring wordWrap's own multiline-only gating.
+	tabInserts bool
 
 	// rev counts real mutations to runes (SetText's real-change path,
 	// replaceRange) — the "text revision" half of the visual-rows cache key
@@ -314,6 +327,39 @@ func (t *TextBox) WordWrap() bool {
 // guard every wrap-aware helper below branches on.
 func (t *TextBox) wrapping() bool {
 	return t.multiline && t.wordWrap
+}
+
+// SetTabInserts toggles whether a focused Tab press inserts indentation
+// instead of bubbling to the Router's focus-navigation; false (the default)
+// leaves Tab byte-for-byte unhandled by TextBox, exactly as before this
+// feature existed — the Router's own Tab/Shift+Tab focus-cycling (see
+// input/router.go) is what moves focus in that case.
+//
+// Only effective in MULTILINE mode (see SetMultiline and OnKey's KeyTab
+// case): a single-line TextBox always leaves Tab as focus-nav regardless of
+// this flag — indenting a single-line input has no sensible meaning, the
+// same multiline-only gating SetWordWrap already uses (see wrapping()).
+//
+// When enabled and multiline, a focused Tab (without Shift) inserts
+// tabInsertSpaces spaces at the caret via the same insertText path plain
+// typing uses — so OnChanged, selection-replace, and caret-advance all
+// behave exactly like typing those spaces would — and is CONSUMED
+// (e.Handled = true) so it never reaches the Router's focus cycling.
+// Shift+Tab removes up to tabInsertSpaces leading spaces from the caret's
+// current line (see unindentCurrentLine); like every other recognized
+// combination in OnKey, it is marked handled even when there is nothing to
+// remove (a no-op edit, the same convention Backspace-at-position-0 already
+// follows), so Shift+Tab never leaks through to focus-nav while this flag is
+// on either. No literal '\t' is ever inserted (see tabInsertSpaces).
+func (t *TextBox) SetTabInserts(v bool) *TextBox {
+	t.tabInserts = v
+	return t
+}
+
+// TabInserts reports whether Tab-inserts-indentation is enabled (see
+// SetTabInserts).
+func (t *TextBox) TabInserts() bool {
+	return t.tabInserts
 }
 
 // SetEnabled toggles whether the box accepts focus and pointer/keyboard
@@ -947,6 +993,40 @@ func (t *TextBox) lineEnd(line int) int {
 func (t *TextBox) indexOfLineCol(line, col int) int {
 	start, end := t.lineStart(line), t.lineEnd(line)
 	return start + clampInt(col, 0, end-start)
+}
+
+// unindentCurrentLine implements Shift+Tab's unindent step (see
+// SetTabInserts): removes up to tabInsertSpaces leading space runes from the
+// start of the caret's current logical line — only that leading run, never
+// touching spaces elsewhere on the line — and reports whether anything was
+// removed (the caller marks the key handled regardless, per OnKey's own
+// no-op convention; the bool is purely for this function's own tests). A
+// no-op (no mutation) when the line has no leading spaces at all.
+//
+// The caret is kept sensible relative to the edit rather than snapping to
+// the line start: replaceRange itself always lands the caret at start (the
+// deletion point), so a caret that was further into the line — past the
+// removed run — is walked back out by however many runes were actually
+// removed; a caret that was WITHIN the removed run (e.g. sitting among the
+// leading spaces) simply ends up at the line's new start, since those runes
+// are gone.
+func (t *TextBox) unindentCurrentLine() bool {
+	line, _ := t.lineCol(t.caret)
+	start := t.lineStart(line)
+	end := start
+	for end < len(t.runes) && end-start < tabInsertSpaces && t.runes[end] == ' ' {
+		end++
+	}
+	if end == start {
+		return false
+	}
+	removed := end - start
+	oldCaret := t.caret
+	t.replaceRange(start, end, "")
+	if newCaret := oldCaret - removed; newCaret > start {
+		t.SetCaret(newCaret)
+	}
+	return true
 }
 
 // --- Word wrap (opt-in; see SetWordWrap) ---
@@ -2135,7 +2215,10 @@ func (t *TextBox) RenderOverlay(r render.Renderer) {
 // OnSubmit set, it falls through unhandled exactly as before OnSubmit
 // existed. Home/End are handled in both modes, but target the whole text in
 // single-line mode and the caret's own line in multi-line mode
-// (homeTarget/endTarget).
+// (homeTarget/endTarget). Tab is opt-in and multi-line-only (see
+// SetTabInserts): with that flag off (the default), or in single-line mode
+// regardless of the flag, Tab falls through unhandled exactly as before that
+// feature existed, bubbling to the Router's own Tab/Shift+Tab focus-nav.
 func (t *TextBox) OnKey(e *input.KeyEvent) {
 	if !t.enabled || !t.focused || e.Action != input.Press {
 		return
@@ -2199,6 +2282,16 @@ func (t *TextBox) OnKey(e *input.KeyEvent) {
 		t.moveCaretTo(t.endTarget(), shift)
 		e.Handled = true
 		return
+	case input.KeyTab:
+		if t.multiline && t.tabInserts {
+			if shift {
+				t.unindentCurrentLine()
+			} else {
+				t.insertText(strings.Repeat(" ", tabInsertSpaces))
+			}
+			e.Handled = true
+			return
+		}
 	case input.KeyUp:
 		if t.multiline {
 			t.moveCaretVertical(-1, shift)
