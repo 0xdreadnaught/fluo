@@ -2,6 +2,7 @@ package controls
 
 import (
 	"math"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -47,6 +48,12 @@ const preeditUnderlineThickness float32 = 1.5
 // inserted: spaces need no tab-stop rendering support, so they work with the
 // existing monospace/coverage text path unchanged.
 const tabInsertSpaces = 4
+
+// lineNumberRuleWidth is the drawn width of the thin vertical rule separating
+// the line-number gutter from the text (see SetLineNumbers/renderLineNumbers)
+// — a hairline, matching the classic "thin divider" convention rather than a
+// full bevel, which would read as a second sunken well inside the first.
+const lineNumberRuleWidth float32 = 1
 
 // pageRowsFallback is the number of rows/lines PageUp/PageDown move the
 // caret by (see pageRows) when the viewport's own row count can't be
@@ -127,6 +134,13 @@ type TextBox struct {
 	// meaningful when multiline is also true (see OnKey's KeyTab case),
 	// mirroring wordWrap's own multiline-only gating.
 	tabInserts bool
+
+	// lineNumbers toggles the opt-in left line-number gutter (see
+	// SetLineNumbers); false (the zero value) is the original behavior,
+	// unchanged — only meaningful when multiline is also true (see
+	// showLineNumbers()), the same multiline-only gating wordWrap and
+	// tabInserts already use.
+	lineNumbers bool
 
 	// rev counts real mutations to runes (SetText's real-change path,
 	// replaceRange) — the "text revision" half of the visual-rows cache key
@@ -383,6 +397,94 @@ func (t *TextBox) SetTabInserts(v bool) *TextBox {
 // SetTabInserts).
 func (t *TextBox) TabInserts() bool {
 	return t.tabInserts
+}
+
+// SetLineNumbers toggles the opt-in line-number gutter; false (the default)
+// is the original behavior, byte-for-byte unchanged — no gutter is reserved,
+// so the text origin, caret, hit-testing and every measured size are exactly
+// what they were before this feature existed. Only meaningful when
+// Multiline() is also true: a SINGLE-LINE box ignores the flag entirely (it
+// has exactly one line, so numbering it carries no information), the same
+// multiline-only gating SetWordWrap and SetTabInserts already use — see
+// showLineNumbers().
+//
+// When enabled and multiline, a fixed-width column is reserved along the
+// LEFT inner edge — wide enough for the widest line number the current text
+// can produce, measured with the box's own Face (see gutterWidth) — and the
+// text content is narrowed and shifted right by exactly that width, the
+// mirror image of how the vertical scroll thumb already reserves its own
+// gutter on the right (see contentWidth/vScrollTrack). The numbers are drawn
+// right-aligned in GrayText, one per LOGICAL ('\n'-delimited) line, scrolled
+// vertically in sync with the text (the same vscroll offset), with a thin
+// vertical rule separating the gutter from the text. While word-wrap is on
+// (see SetWordWrap), only a logical line's FIRST visual row carries its
+// number; wrapped continuation rows are left blank, so the numbers keep
+// counting real lines rather than displayed rows.
+//
+// Calls InvalidateMeasure, like SetMultiline/SetWordWrap: reserving the
+// gutter narrows the width text wraps against, so it can change
+// MeasureContent's answer.
+func (t *TextBox) SetLineNumbers(v bool) *TextBox {
+	t.lineNumbers = v
+	t.InvalidateMeasure()
+	return t
+}
+
+// LineNumbers reports whether the line-number gutter is enabled (see
+// SetLineNumbers).
+func (t *TextBox) LineNumbers() bool {
+	return t.lineNumbers
+}
+
+// showLineNumbers reports whether the line-number gutter is ACTIVE right now:
+// lineNumbers is only consulted at all while multiline is also true, so this
+// is the single guard every gutter-aware helper branches on — the exact shape
+// of wrapping()'s own multiline gating.
+func (t *TextBox) showLineNumbers() bool {
+	return t.multiline && t.lineNumbers
+}
+
+// gutterWidth returns the width (logical px) currently reserved along the
+// LEFT inner edge for the line-number gutter, or 0 whenever it isn't active
+// (see showLineNumbers) — including for a nil face, which has no glyph widths
+// to size a number column by (matching every other nil-face convention in
+// this file). Every layout/render/hit-test path that establishes the text's
+// x-origin adds this, and contentWidth subtracts it, so the whole feature
+// collapses to a no-op the moment it returns 0.
+//
+// Sized to the WIDEST number that can currently appear: digitCount of the
+// logical line count, measured as that many '0' glyphs (the conventional
+// widest-digit proxy — the Go fonts, like most UI faces, draw tabular
+// figures, so every digit measures the same), plus PaddingS of air on each
+// side of the separating rule and the rule itself. Laid out as
+//
+//	[ PaddingM ][ number (right-aligned) ][ PaddingS ][ rule ][ PaddingS ][ text …
+//
+// where the leading PaddingM is the box's existing content inset, so the
+// numbers sit exactly where unnumbered text would have started and the text
+// clears the rule by the same PaddingS the numbers do.
+func (t *TextBox) gutterWidth() float32 {
+	if !t.showLineNumbers() || t.face == nil {
+		return 0
+	}
+	digits := t.face.Measure(strings.Repeat("0", digitCount(t.lineCount()))).W
+	return digits + 2*t.metrics.PaddingS + lineNumberRuleWidth
+}
+
+// digitCount returns how many decimal digits n takes to write, minimum 1 (so
+// a 0- or negative-line count — not reachable via lineCount(), which is
+// always >= 1, but cheap to be safe about — still reserves one digit's worth
+// of gutter rather than none).
+func digitCount(n int) int {
+	if n < 1 {
+		return 1
+	}
+	d := 0
+	for n > 0 {
+		d++
+		n /= 10
+	}
+	return d
 }
 
 // SetEnabled toggles whether the box accepts focus and pointer/keyboard
@@ -961,7 +1063,9 @@ func (t *TextBox) OnFocusChanged(focused bool) {
 // lineHeight() — or, while wrapping (see SetWordWrap), the same shape over
 // the caret's own visual (row,col) via rowCol/xOfInRow instead of
 // lineCol/xOfInLine (hscroll is always 0 there — see updateHScroll) — see
-// caretX/xOfInLine/xOfInRow and their doc comments.
+// caretX/xOfInLine/xOfInRow and their doc comments. The text origin includes
+// the line-number gutter (gutterWidth, 0 unless SetLineNumbers is on) exactly
+// as every render path does, so the reported rect tracks the drawn caret.
 //
 // While an IME composition is active (t.composing), the reported rect is
 // shifted to the caret's position INSIDE the preedit run (preeditMeasure of
@@ -977,7 +1081,7 @@ func (t *TextBox) CaretScreenRect() (render.Rect, bool) {
 	bounds := t.Bounds()
 	pad := t.metrics.PaddingM
 	lh := t.lineHeight()
-	textX := bounds.X + pad - t.hscroll
+	textX := bounds.X + pad + t.gutterWidth() - t.hscroll
 
 	if !t.multiline {
 		textY := bounds.Y + (bounds.H-lh)/2
@@ -1405,8 +1509,15 @@ func wrapLogicalLine(runes []rune, start, end int, face *text.Face, width float3
 // currently shown — used only by computeShowVScroll to decide whether to
 // show the thumb in the first place (see its own doc comment for why that
 // decision must use this ungated width rather than contentWidth() below).
+//
+// The LINE-NUMBER gutter (gutterWidth, 0 unless SetLineNumbers is on) IS
+// subtracted here, unlike the thumb's: its width depends only on the logical
+// line count, never on the wrap layout or the thumb decision, so subtracting
+// it involves none of the self-dependence that forces the thumb's gutter to
+// be left out — and the show/hide decision is then made against the width
+// text actually gets.
 func (t *TextBox) fullContentWidth() float32 {
-	w := t.Bounds().W - 2*t.metrics.PaddingM
+	w := t.Bounds().W - 2*t.metrics.PaddingM - t.gutterWidth()
 	if w < 0 {
 		w = 0
 	}
@@ -1508,11 +1619,14 @@ func (t *TextBox) computeShowVScroll() bool {
 // space) — textBoxDefaultWidth's own content width, so a wrapped box with
 // no explicit width still gets a deterministic, finite measurement rather
 // than wrapping against infinity (which would degenerate to "never wrap").
+// The line-number gutter (gutterWidth, 0 unless SetLineNumbers is on) is
+// subtracted too, exactly as contentWidth/fullContentWidth do at arrange
+// time, so measure and arrange wrap against the same width.
 func (t *TextBox) wrapMeasureWidth(availableW float32) float32 {
 	if math.IsInf(float64(availableW), 1) {
 		availableW = textBoxDefaultWidth
 	}
-	w := availableW - 2*t.metrics.PaddingM
+	w := availableW - 2*t.metrics.PaddingM - t.gutterWidth()
 	if w < 0 {
 		w = 0
 	}
@@ -1802,11 +1916,18 @@ func (t *TextBox) caretIndexAtPos(x, y float32) int {
 
 // localTextX converts a pointer event's window-space x (e.Pos.X) into the
 // "local text" space xOf/caretIndexAtX operate in: the padding-inset text
-// origin is at bounds.X+PaddingM-hscroll (see Render's textX), so subtracting
-// that from the window-space x yields the x offset from the start of the
-// text, in the same units xOf returns.
+// origin is at bounds.X+PaddingM+gutterWidth()-hscroll (see Render's textX),
+// so subtracting that from the window-space x yields the x offset from the
+// start of the text, in the same units xOf returns.
+//
+// This is the ONLY place a pointer position crosses into text space, so it is
+// also the only place the line-number gutter has to be accounted for on the
+// hit-test side — and it subtracts exactly the gutterWidth() term every
+// render path adds to its own text origin, which is what keeps a click, the
+// caret it produces, and the glyph drawn under it all agreeing. gutterWidth()
+// is 0 unless SetLineNumbers is on, so the term vanishes by default.
 func (t *TextBox) localTextX(windowX float32) float32 {
-	return windowX - t.Bounds().X - t.metrics.PaddingM + t.hscroll
+	return windowX - t.Bounds().X - t.metrics.PaddingM - t.gutterWidth() + t.hscroll
 }
 
 // displayText resolves what Render actually draws as the main text run and
@@ -1874,7 +1995,10 @@ func (t *TextBox) MeasureContent(available render.Size) render.Size {
 		width := t.wrapMeasureWidth(available.W)
 		rows := t.visualRows(width)
 		h := lh*float32(len(rows)) + 2*t.metrics.PaddingM
-		return render.Size{W: width + 2*t.metrics.PaddingM, H: h}
+		// The gutter is added back so the reported OUTER width still
+		// matches the available width wrapMeasureWidth resolved from (it
+		// subtracted the gutter to get the text's own share of it).
+		return render.Size{W: width + 2*t.metrics.PaddingM + t.gutterWidth(), H: h}
 	}
 
 	h := lh + 2*t.metrics.PaddingM
@@ -2256,20 +2380,24 @@ func (t *TextBox) renderMultiline(r render.Renderer, bounds render.Rect) {
 	c := t.colors
 	pad := t.metrics.PaddingM
 	lh := t.lineHeight()
-	textX := bounds.X + pad - t.hscroll
+	textX := bounds.X + pad + t.gutterWidth() - t.hscroll
 
 	s, color := t.displayText()
 
 	if t.composing {
 		lines := strings.Split(s, "\n")
+		t.renderLineNumbers(r, bounds, false)
 		t.renderComposingMultiline(r, bounds, textX, lh, lines, color)
 		return
 	}
 
 	if t.wrapping() && len(t.runes) > 0 {
+		t.renderLineNumbers(r, bounds, true)
 		t.renderMultilineWrapped(r, bounds, color)
 		return
 	}
+
+	t.renderLineNumbers(r, bounds, false)
 
 	lines := strings.Split(s, "\n")
 	start, end := t.Selection()
@@ -2316,7 +2444,7 @@ func (t *TextBox) renderMultilineWrapped(r render.Renderer, bounds render.Rect, 
 	c := t.colors
 	pad := t.metrics.PaddingM
 	lh := t.lineHeight()
-	textX := bounds.X + pad
+	textX := bounds.X + pad + t.gutterWidth()
 
 	rows := t.visualRows(t.contentWidth())
 	start, end := t.Selection()
@@ -2349,6 +2477,101 @@ func (t *TextBox) renderMultilineWrapped(r render.Renderer, bounds render.Rect, 
 		cy := bounds.Y + pad - t.vscroll + float32(row)*lh
 		r.FillRect(render.Rect{X: cx, Y: cy, W: caretWidth, H: lh}, c.WindowText)
 	}
+}
+
+// --- Line-number gutter (opt-in; see SetLineNumbers) ---
+
+// renderLineNumbers draws the left line-number gutter — the thin separating
+// rule down its right edge, then one right-aligned number per LOGICAL line —
+// or nothing at all when the gutter isn't active (gutterWidth() == 0, the
+// default). Called from renderMultiline before whichever body it dispatches
+// to, with wrapped set to whether that body lays text out over visual ROWS
+// (renderMultilineWrapped) or logical LINES (its own unwrapped loop, and the
+// composing one): the numbers have to sit on the same rows the text does, so
+// the row list is resolved the same way that body resolves it.
+//
+// Numbers are offset by t.vscroll exactly like every text row, so the gutter
+// scrolls in lockstep with the text, and rely on Render's existing PushClip
+// (the box's own bounds) to clip whatever scrolls past the top or bottom
+// edge. Everything is drawn in GrayText — the same token the placeholder and
+// disabled text use — so the numbers read as chrome rather than content.
+func (t *TextBox) renderLineNumbers(r render.Renderer, bounds render.Rect, wrapped bool) {
+	gw := t.gutterWidth()
+	if gw <= 0 {
+		// Inactive gutter (or a nil face, which gutterWidth also reports 0
+		// for): nothing reserved, nothing drawn — the default path.
+		return
+	}
+	c := t.colors
+	pad := t.metrics.PaddingM
+	padS := t.metrics.PaddingS
+	lh := t.lineHeight()
+
+	// The rule sits PaddingS in from the gutter's right edge, so the text
+	// (which starts at that edge) clears it by exactly that much — see
+	// gutterWidth's own layout diagram.
+	ruleX := bounds.X + pad + gw - padS - lineNumberRuleWidth
+	if h := bounds.H - 2*pad; h > 0 {
+		r.FillRect(render.Rect{X: ruleX, Y: bounds.Y + pad, W: lineNumberRuleWidth, H: h}, c.GrayText)
+	}
+
+	rows := logicalLineRows(t.runes)
+	if wrapped {
+		rows = t.visualRows(t.contentWidth())
+	}
+	numRight := ruleX - padS
+
+	for i, n := range rowLineNumbers(t.runes, rows) {
+		if n == 0 {
+			// A soft-wrap continuation row: blank, so the gutter keeps
+			// counting real lines rather than displayed rows.
+			continue
+		}
+		s := strconv.Itoa(n)
+		y := bounds.Y + pad - t.vscroll + float32(i)*lh
+		t.face.Draw(r, render.Point{X: numRight - t.face.Measure(s).W, Y: y}, s, c.GrayText)
+	}
+}
+
+// logicalLineStarts returns the rune index every logical ('\n'-delimited)
+// line of runes begins at — 0, plus one past each '\n' — in a single pass, so
+// its length is always lineCount(). Lets rowLineNumbers pair lines against
+// rows without the O(n) lineStart() lookup per line that would make the
+// pairing quadratic.
+func logicalLineStarts(runes []rune) []int {
+	starts := []int{0}
+	for i, r := range runes {
+		if r == '\n' {
+			starts = append(starts, i+1)
+		}
+	}
+	return starts
+}
+
+// rowLineNumbers returns, for each displayed row of rows, the 1-based LOGICAL
+// line number the gutter should draw beside it — or 0 for a row that carries
+// no number of its own, i.e. a soft-wrap continuation row (see
+// SetLineNumbers).
+//
+// Rows and logical-line starts both run in increasing rune order, and a
+// logical line's FIRST row is the only row whose start equals that line's own
+// start: a continuation row always begins strictly further into the line, and
+// never reaches the next line's start, since no row ever spans a '\n' (see
+// computeVisualRows). One two-pointer walk therefore assigns exactly one
+// number per logical line, in order — and degenerates to "row i gets number
+// i+1" for the unwrapped row list (logicalLineRows), where the two lists
+// correspond one-to-one by construction.
+func rowLineNumbers(runes []rune, rows []visualRow) []int {
+	starts := logicalLineStarts(runes)
+	nums := make([]int, len(rows))
+	k := 0
+	for i, row := range rows {
+		if k < len(starts) && row.start == starts[k] {
+			nums[i] = k + 1
+			k++
+		}
+	}
+	return nums
 }
 
 // renderComposingMultiline is renderMultiline's counterpart to

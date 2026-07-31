@@ -730,6 +730,47 @@ func TestTextBoxVScroll(t *testing.T) {
 	})
 }
 
+// TestTextBoxGutter is the opt-in line-number gutter golden (see
+// TextBox.SetLineNumbers): a focused, multi-line (word-wrap OFF) TextBox
+// holding thirteen short lines in a 220x160 frame, with the gutter on. The
+// golden should show a two-digit-wide column along the left inner edge
+// carrying the numbers 1..13 in GrayText, each RIGHT-aligned against the
+// thin vertical rule that separates the column from the text, with every
+// line of text starting just to the right of that rule rather than at the
+// box's usual padding inset. Thirteen lines is deliberately past nine, so
+// the column is sized for two digits and the single-digit numbers 1..9
+// visibly hang right-aligned under the "10".."13" below them. The content is
+// taller than the viewport, so the vertical scroll thumb is drawn on the
+// right at the same time — the two gutters, one per edge, coexist — and the
+// caret sits at the end of the text (SetText's own caret-to-end convention),
+// so the view is scrolled to the bottom and the visible numbers are the
+// TAIL of the range, proving the gutter scrolls in lockstep with the text
+// rather than being pinned to the top.
+func TestTextBoxGutter(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "textbox_gutter", 220, 160, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tb := controls.NewTextBox(face).SetMultiline(true).SetLineNumbers(true)
+		tb.SetText("package main\n\nimport \"fmt\"\n\nfunc main() {\n    for i := 0; i < 3; i++ {\n        say(i)\n    }\n}\n\nfunc say(n int) {\n    fmt.Println(n)\n}")
+		tb.OnFocusChanged(true)
+
+		frame := render.Rect{X: 0, Y: 0, W: 220, H: 160}
+		r.FillRect(frame, th.Color.WindowBackground)
+
+		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(tb, frame)
+		core.RenderWidget(tb, r)
+	})
+}
+
 // TestSliderProgress is the Phase 5 Task 7 golden: a Slider at 0.6 (over the
 // default [0,1] range) stacked above a ProgressBar at 0.3, in a vertical
 // StackPanel gapped by PaddingM, filling a 200x60 frame.
