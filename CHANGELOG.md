@@ -8,6 +8,16 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-31
+
+### Added
+
+- **`SplitPanel`** — a two-pane container with a draggable divider. Lay two
+  widgets side by side (`Horizontal`) or stacked (`Vertical`) and drag the
+  divider to resize them; `SetSplitRatio`, `SetMinPaneSize`, and an
+  `OnSplitChanged` callback control the split, and the divider shows a resize
+  cursor. Follows the same `Orientation` convention as `StackPanel`.
+
 ## [0.11.0] - 2026-07-31
 
 ### Added
