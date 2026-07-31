@@ -1482,3 +1482,26 @@ func TestToastSeverityStack(t *testing.T) {
 		core.RenderWidget(host, r)
 	})
 }
+
+// TestSplitPanel is the golden for controls.SplitPanel: a Horizontal panel
+// (First left, Second right) at a 0.4 split ratio, First filled with
+// th.Color.ButtonFace and Second with th.Color.Accent so the two panes read
+// as visibly distinct blocks with the raised divider bevel (drawRaised, via
+// bevel.go) running between them.
+func TestSplitPanel(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "splitpanel", 200, 120, func(r *glr.Renderer) {
+		first := controls.NewBorder().SetBackground(th.Color.ButtonFace)
+		second := controls.NewBorder().SetBackground(th.Color.Accent)
+
+		sp := controls.NewSplitPanel(controls.Horizontal).SetFirst(first).SetSecond(second)
+		sp.SetSplitRatio(0.4)
+
+		core.MeasureWidget(sp, render.Size{W: 200, H: 120})
+		core.ArrangeWidget(sp, render.Rect{X: 0, Y: 0, W: 200, H: 120})
+		core.RenderWidget(sp, r)
+	})
+}
