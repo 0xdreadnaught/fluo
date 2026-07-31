@@ -8,6 +8,16 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-31
+
+### Added
+
+- **`TextBox.SetTabInserts`** — opt-in for a multi-line `TextBox` to treat Tab
+  as indentation instead of focus navigation. When enabled, a focused Tab
+  inserts spaces at the caret (and is consumed), and Shift+Tab unindents the
+  current line. Off by default and inert in single-line mode, so the existing
+  Tab-moves-focus behavior is unchanged unless opted in.
+
 ## [0.9.0] - 2026-07-30
 
 ### Added
