@@ -1005,7 +1005,7 @@ func TestTextBoxBlinkStopsOnUnfocusAndResetsOnRefocus(t *testing.T) {
 	}
 }
 
-// --- Fix: Ctrl+Right degrade behavior (locked, not a regression) ---
+// --- Ctrl+Left/Right word motion, Ctrl+Home/End, Ctrl+Backspace/Delete ---
 
 // --- Multi-line mode ---
 
@@ -1477,21 +1477,316 @@ func TestTextBoxCaretScreenRectMultiline(t *testing.T) {
 	}
 }
 
-func TestTextBoxCtrlRightDegradesToPlainRight(t *testing.T) {
-	tb, r := newFocusedTextBox(t, "hello")
-	tb.SetCaret(2)
+// TestTextBoxWordBoundaryHelpers locks prevWordBoundary/nextWordBoundary's
+// word definition directly against "foo, bar\nbaz_1 x": a run of whitespace
+// (which includes '\n' — word motion crosses line boundaries for free) is
+// always skipped first, then a run of same-class runes — "word" runes
+// (letters/digits/'_') and punctuation runs are each their own stop, so ","
+// is its own boundary distinct from "foo".
+func TestTextBoxWordBoundaryHelpers(t *testing.T) {
+	tb := NewTextBox(nil)
+	tb.SetText("foo, bar\nbaz_1 x") // indices: f0o1o2,3 4b5a6r7\n8b9a10z11_12 1 13 14x15, len 16
 
-	e := &input.KeyEvent{Action: input.Press, Key: input.KeyRight, Mods: input.ModCtrl, Router: r}
+	nextCases := []struct{ from, want int }{
+		{0, 3}, {3, 4}, {4, 8}, {8, 14}, {14, 16}, {16, 16},
+	}
+	for _, c := range nextCases {
+		if got := tb.nextWordBoundary(c.from); got != c.want {
+			t.Fatalf("nextWordBoundary(%d) = %d, want %d", c.from, got, c.want)
+		}
+	}
+
+	prevCases := []struct{ from, want int }{
+		{16, 15}, {15, 9}, {9, 5}, {5, 3}, {3, 0}, {0, 0},
+	}
+	for _, c := range prevCases {
+		if got := tb.prevWordBoundary(c.from); got != c.want {
+			t.Fatalf("prevWordBoundary(%d) = %d, want %d", c.from, got, c.want)
+		}
+	}
+}
+
+// TestTextBoxCtrlRightMovesByWord is the successor to the pre-word-motion
+// "Ctrl+Right degrades to plain Right" contract: Ctrl+Right/Left now move
+// the caret by whole words (see nextWordBoundary/prevWordBoundary) rather
+// than one rune at a time — the intentional behavior this feature adds, not
+// a regression of the older placeholder behavior.
+func TestTextBoxCtrlRightMovesByWord(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "foo, bar baz")
+	tb.SetCaret(0)
+
+	wantStops := []int{3, 4, 8, 12, 12} // clamped at the end on the 5th press
+	for i, want := range wantStops {
+		e := &input.KeyEvent{Action: input.Press, Key: input.KeyRight, Mods: input.ModCtrl, Router: r}
+		tb.OnKey(e)
+		if !e.Handled {
+			t.Fatalf("press %d: Ctrl+Right Handled = false, want true", i)
+		}
+		if c := tb.Caret(); c != want {
+			t.Fatalf("press %d: Ctrl+Right Caret() = %d, want %d", i, c, want)
+		}
+		if s, e2 := tb.Selection(); s != e2 {
+			t.Fatalf("press %d: Ctrl+Right Selection() = (%d,%d), want collapsed", i, s, e2)
+		}
+	}
+}
+
+func TestTextBoxCtrlLeftMovesByWord(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "foo, bar baz")
+	tb.SetCaret(12)
+
+	wantStops := []int{9, 5, 3, 0, 0}
+	for i, want := range wantStops {
+		r.KeyDown(input.KeyLeft, 0, input.ModCtrl)
+		if c := tb.Caret(); c != want {
+			t.Fatalf("press %d: Ctrl+Left Caret() = %d, want %d", i, c, want)
+		}
+	}
+}
+
+func TestTextBoxCtrlShiftLeftRightExtendSelectionByWord(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "foo bar baz")
+	tb.SetCaret(4) // anchor==caret==4, start of "bar"
+
+	r.KeyDown(input.KeyRight, 0, input.ModCtrl|input.ModShift)
+	if s, e := tb.Selection(); s != 4 || e != 7 {
+		t.Fatalf("Ctrl+Shift+Right: Selection() = (%d,%d), want (4,7)", s, e)
+	}
+
+	r.KeyDown(input.KeyLeft, 0, input.ModCtrl|input.ModShift)
+	r.KeyDown(input.KeyLeft, 0, input.ModCtrl|input.ModShift)
+	if s, e := tb.Selection(); s != 0 || e != 4 {
+		t.Fatalf("after 2x Ctrl+Shift+Left: Selection() = (%d,%d), want (0,4) (anchor pinned at 4)", s, e)
+	}
+	if c := tb.Caret(); c != 0 {
+		t.Fatalf("Caret() = %d, want 0", c)
+	}
+}
+
+// TestTextBoxCtrlHomeEndSingleLineMatchesPlainHomeEnd locks the "Ctrl+Home/
+// End == Home/End in single-line mode" requirement: both target the same
+// 0/len(runes) bounds there, since plain Home/End already reach the whole
+// text in single-line mode (homeTarget/endTarget).
+func TestTextBoxCtrlHomeEndSingleLineMatchesPlainHomeEnd(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "hello world")
+	tb.SetCaret(4)
+
+	r.KeyDown(input.KeyHome, 0, input.ModCtrl)
+	if c := tb.Caret(); c != 0 {
+		t.Fatalf("Ctrl+Home: Caret() = %d, want 0", c)
+	}
+
+	tb.SetCaret(4)
+	r.KeyDown(input.KeyEnd, 0, input.ModCtrl)
+	want := len([]rune("hello world"))
+	if c := tb.Caret(); c != want {
+		t.Fatalf("Ctrl+End: Caret() = %d, want %d", c, want)
+	}
+}
+
+// TestTextBoxCtrlHomeEndMultilineJumpsToBufferBounds is Ctrl+Home/End's core
+// multi-line contract: plain Home/End there only reach the caret's OWN line
+// (homeTarget/endTarget), so Ctrl+Home/End is the only way to reach the
+// whole buffer's start/end.
+func TestTextBoxCtrlHomeEndMultilineJumpsToBufferBounds(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "abc\ndef\nghi")
+	tb.SetCaret(5) // line 1 ("def"), col 1
+
+	r.KeyDown(input.KeyHome, 0, input.ModCtrl)
+	if c := tb.Caret(); c != 0 {
+		t.Fatalf("Ctrl+Home: Caret() = %d, want 0 (buffer start)", c)
+	}
+	if s, e := tb.Selection(); s != e {
+		t.Fatalf("Ctrl+Home: Selection() = (%d,%d), want collapsed", s, e)
+	}
+
+	tb.SetCaret(5)
+	r.KeyDown(input.KeyEnd, 0, input.ModCtrl)
+	want := len([]rune("abc\ndef\nghi"))
+	if c := tb.Caret(); c != want {
+		t.Fatalf("Ctrl+End: Caret() = %d, want %d (buffer end)", c, want)
+	}
+}
+
+func TestTextBoxCtrlShiftHomeEndExtendSelectionToBufferBounds(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "abc\ndef\nghi")
+	tb.SetCaret(5)
+
+	r.KeyDown(input.KeyHome, 0, input.ModCtrl|input.ModShift)
+	if s, e := tb.Selection(); s != 0 || e != 5 {
+		t.Fatalf("Ctrl+Shift+Home: Selection() = (%d,%d), want (0,5)", s, e)
+	}
+
+	tb.SetCaret(5)
+	r.KeyDown(input.KeyEnd, 0, input.ModCtrl|input.ModShift)
+	want := len([]rune("abc\ndef\nghi"))
+	if s, e := tb.Selection(); s != 5 || e != want {
+		t.Fatalf("Ctrl+Shift+End: Selection() = (%d,%d), want (5,%d)", s, e, want)
+	}
+}
+
+// --- Ctrl+Backspace/Delete: word deletion ---
+
+func TestTextBoxCtrlBackspaceDeletesPrecedingWord(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "foo bar baz")
+	tb.SetCaret(len([]rune("foo bar baz")))
+
+	var got []string
+	tb.OnChanged(func(s string) { got = append(got, s) })
+
+	e := &input.KeyEvent{Action: input.Press, Key: input.KeyBackspace, Mods: input.ModCtrl, Router: r}
 	tb.OnKey(e)
 
 	if !e.Handled {
-		t.Fatal("Ctrl+Right: Handled = false, want true")
+		t.Fatal("Ctrl+Backspace: Handled = false, want true")
 	}
-	if c := tb.Caret(); c != 3 {
-		t.Fatalf("Ctrl+Right: Caret() = %d, want 3 (degrades to plain Right: moves exactly one rune, no word-jump)", c)
+	if tb.Text() != "foo bar " {
+		t.Fatalf("Text() = %q, want %q", tb.Text(), "foo bar ")
 	}
-	if s, e2 := tb.Selection(); s != e2 {
-		t.Fatalf("Ctrl+Right: Selection() = (%d,%d), want collapsed (Ctrl without Shift does not extend)", s, e2)
+	if c := tb.Caret(); c != len([]rune("foo bar ")) {
+		t.Fatalf("Caret() = %d, want %d", c, len([]rune("foo bar ")))
+	}
+	if len(got) != 1 || got[0] != "foo bar " {
+		t.Fatalf("OnChanged calls = %v, want [%q]", got, "foo bar ")
+	}
+}
+
+func TestTextBoxCtrlDeleteDeletesFollowingWord(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "foo bar baz")
+	tb.SetCaret(0)
+
+	e := &input.KeyEvent{Action: input.Press, Key: input.KeyDelete, Mods: input.ModCtrl, Router: r}
+	tb.OnKey(e)
+
+	if !e.Handled {
+		t.Fatal("Ctrl+Delete: Handled = false, want true")
+	}
+	if tb.Text() != " bar baz" {
+		t.Fatalf("Text() = %q, want %q", tb.Text(), " bar baz")
+	}
+	if c := tb.Caret(); c != 0 {
+		t.Fatalf("Caret() = %d, want 0", c)
+	}
+}
+
+// TestTextBoxCtrlBackspaceDeleteDeleteSelectionInstead locks the
+// selection-first convention Ctrl+Backspace/Delete share with plain
+// Backspace/Delete: an active selection is deleted outright, ignoring word
+// boundaries entirely.
+func TestTextBoxCtrlBackspaceDeleteDeleteSelectionInstead(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "foo bar baz")
+	tb.Select(1, 6) // "oo ba" selected, mid-word on both ends
+
+	r.KeyDown(input.KeyBackspace, 0, input.ModCtrl)
+	if tb.Text() != "fr baz" {
+		t.Fatalf("Ctrl+Backspace with selection: Text() = %q, want %q", tb.Text(), "fr baz")
+	}
+
+	tb2, r2 := newFocusedTextBox(t, "foo bar baz")
+	tb2.Select(1, 6)
+	r2.KeyDown(input.KeyDelete, 0, input.ModCtrl)
+	if tb2.Text() != "fr baz" {
+		t.Fatalf("Ctrl+Delete with selection: Text() = %q, want %q", tb2.Text(), "fr baz")
+	}
+}
+
+// --- PageUp/PageDown: viewport-height caret motion (multi-line only) ---
+
+func TestTextBoxPageUpDownFallbackRowsWithoutFace(t *testing.T) {
+	tb := NewTextBox(nil).SetMultiline(true)
+	if got := tb.pageRows(); got != pageRowsFallback {
+		t.Fatalf("pageRows() with nil face = %d, want %d (fallback)", got, pageRowsFallback)
+	}
+}
+
+func TestTextBoxPageUpDownFallbackRowsWhenUnarranged(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true) // never measured/arranged: Bounds() is zero
+	if got := tb.pageRows(); got != pageRowsFallback {
+		t.Fatalf("pageRows() unarranged = %d, want %d (fallback)", got, pageRowsFallback)
+	}
+}
+
+func TestTextBoxPageDownUpMoveByViewportRowsAndClamp(t *testing.T) {
+	// Build enough lines that PageDown/PageUp never has to clamp for the
+	// middle-of-buffer assertions below, sized relative to the box's own
+	// pageRows() so this test doesn't hardcode a font-metric-dependent row
+	// count.
+	probe, _ := newFocusedMultilineTextBox(t, "x")
+	pr := probe.pageRows()
+	if pr < 1 {
+		t.Fatalf("test setup: pageRows() = %d, want >= 1", pr)
+	}
+	total := pr*3 + 4
+
+	lines := make([]string, total)
+	for i := range lines {
+		lines[i] = "l"
+	}
+	tb, r := newFocusedMultilineTextBox(t, strings.Join(lines, "\n"))
+
+	tb.SetCaret(tb.indexOfLineCol(pr, 0))
+	r.KeyDown(input.KeyPageDown, 0, 0)
+	if line, _ := tb.lineCol(tb.Caret()); line != 2*pr {
+		t.Fatalf("PageDown from line %d: line = %d, want %d (pr=%d)", pr, line, 2*pr, pr)
+	}
+
+	r.KeyDown(input.KeyPageUp, 0, 0)
+	if line, _ := tb.lineCol(tb.Caret()); line != pr {
+		t.Fatalf("PageUp back: line = %d, want %d", line, pr)
+	}
+
+	// Clamp at the last line.
+	tb.SetCaret(tb.indexOfLineCol(total-1, 0))
+	r.KeyDown(input.KeyPageDown, 0, 0)
+	if line, _ := tb.lineCol(tb.Caret()); line != total-1 {
+		t.Fatalf("PageDown at last line: line = %d, want %d (clamped)", line, total-1)
+	}
+
+	// Clamp at the first line.
+	tb.SetCaret(0)
+	r.KeyDown(input.KeyPageUp, 0, 0)
+	if line, _ := tb.lineCol(tb.Caret()); line != 0 {
+		t.Fatalf("PageUp at first line: line = %d, want 0 (clamped)", line)
+	}
+}
+
+func TestTextBoxShiftPageUpDownExtendSelection(t *testing.T) {
+	probe, _ := newFocusedMultilineTextBox(t, "x")
+	pr := probe.pageRows()
+	total := pr*3 + 4
+	lines := make([]string, total)
+	for i := range lines {
+		lines[i] = "l"
+	}
+	tb, r := newFocusedMultilineTextBox(t, strings.Join(lines, "\n"))
+
+	start := tb.indexOfLineCol(pr, 0)
+	tb.SetCaret(start)
+	r.KeyDown(input.KeyPageDown, 0, input.ModShift)
+	if s, e := tb.Selection(); s != start {
+		t.Fatalf("Shift+PageDown: Selection() start = %d, want %d (anchor pinned)", s, start)
+	} else if line, _ := tb.lineCol(e); line != 2*pr {
+		t.Fatalf("Shift+PageDown: selection end line = %d, want %d", line, 2*pr)
+	}
+}
+
+func TestTextBoxPageUpDownSingleLineUnhandled(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "hello")
+	tb.SetCaret(2)
+
+	up := &input.KeyEvent{Action: input.Press, Key: input.KeyPageUp, Router: r}
+	tb.OnKey(up)
+	if up.Handled {
+		t.Fatal("PageUp: Handled = true on a single-line TextBox, want false")
+	}
+
+	down := &input.KeyEvent{Action: input.Press, Key: input.KeyPageDown, Router: r}
+	tb.OnKey(down)
+	if down.Handled {
+		t.Fatal("PageDown: Handled = true on a single-line TextBox, want false")
+	}
+	if c := tb.Caret(); c != 2 {
+		t.Fatalf("Caret() = %d, want unchanged 2", c)
 	}
 }
 
@@ -2552,5 +2847,73 @@ func TestTextBoxTabSingleLineSelectionInMultiLineBufferStillReplaces(t *testing.
 	want := "aaa\n" + strings.Repeat(" ", tabInsertSpaces) + "\nccc"
 	if got := tb.Text(); got != want {
 		t.Fatalf("Text() = %q, want %q (single-line selection replaced, not block-indented)", got, want)
+	}
+}
+
+// TestTextBoxTabBlockIndentFiresOnChangedOnce locks the indentSelectedLines
+// coalescing fix: a block Tab press touching three lines used to call
+// replaceRange (and therefore fire OnChanged) once PER line; it now applies
+// the whole block as a single edit, so exactly one OnChanged call comes out
+// of one Tab press, regardless of how many lines it touches.
+func TestTextBoxTabBlockIndentFiresOnChangedOnce(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "aaa\nbbb\nccc")
+	tb.SetTabInserts(true)
+	tb.Select(1, 9)
+
+	var got []string
+	tb.OnChanged(func(s string) { got = append(got, s) })
+
+	r.KeyDown(input.KeyTab, 0, 0)
+
+	want := "    aaa\n    bbb\n    ccc"
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("OnChanged calls = %v, want exactly [%q]", got, want)
+	}
+}
+
+// TestTextBoxShiftTabBlockOutdentFiresOnChangedOnce is
+// TestTextBoxTabBlockIndentFiresOnChangedOnce's outdent counterpart.
+func TestTextBoxShiftTabBlockOutdentFiresOnChangedOnce(t *testing.T) {
+	indent := strings.Repeat(" ", tabInsertSpaces)
+	tb, r := newFocusedMultilineTextBox(t, indent+"aaa\n  bbb\nccc")
+	tb.SetTabInserts(true)
+	tb.Select(0, len([]rune(indent+"aaa\n  bbb\nccc")))
+
+	var got []string
+	tb.OnChanged(func(s string) { got = append(got, s) })
+
+	r.KeyDown(input.KeyTab, 0, input.ModShift)
+
+	want := "aaa\nbbb\nccc"
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("OnChanged calls = %v, want exactly [%q]", got, want)
+	}
+}
+
+// TestTextBoxShiftTabBlockOutdentNoLeadingSpacesIsNoop locks the coalesced
+// outdentSelectedLines' no-op path: when NO touched line has any leading
+// space to remove, the block edit must be a genuine no-op — no replaceRange,
+// no OnChanged — exactly like the original per-line loop (which never called
+// replaceRange when a line had nothing to strip), while still restoring the
+// selection to span the touched block.
+func TestTextBoxShiftTabBlockOutdentNoLeadingSpacesIsNoop(t *testing.T) {
+	tb, r := newFocusedMultilineTextBox(t, "aaa\nbbb\nccc")
+	tb.SetTabInserts(true)
+	tb.Select(0, len([]rune("aaa\nbbb\nccc")))
+
+	var calls int
+	tb.OnChanged(func(string) { calls++ })
+
+	r.KeyDown(input.KeyTab, 0, input.ModShift)
+
+	if calls != 0 {
+		t.Fatalf("OnChanged calls = %d, want 0 (nothing to outdent)", calls)
+	}
+	if tb.Text() != "aaa\nbbb\nccc" {
+		t.Fatalf("Text() = %q, want unchanged %q", tb.Text(), "aaa\nbbb\nccc")
+	}
+	wantRunes := len([]rune("aaa\nbbb\nccc"))
+	if s, e := tb.Selection(); s != 0 || e != wantRunes {
+		t.Fatalf("Selection() = (%d,%d), want (0,%d) (still restored to the touched block)", s, e, wantRunes)
 	}
 }

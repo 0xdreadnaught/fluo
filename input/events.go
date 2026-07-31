@@ -50,6 +50,8 @@ const (
 	KeyLeft      Key = 263
 	KeyDown      Key = 264
 	KeyUp        Key = 265
+	KeyPageUp    Key = 266
+	KeyPageDown  Key = 267
 	KeyHome      Key = 268
 	KeyEnd       Key = 269
 )

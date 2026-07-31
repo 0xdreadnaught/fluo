@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/input"
@@ -47,6 +48,14 @@ const preeditUnderlineThickness float32 = 1.5
 // existing monospace/coverage text path unchanged.
 const tabInsertSpaces = 4
 
+// pageRowsFallback is the number of rows/lines PageUp/PageDown move the
+// caret by (see pageRows) when the viewport's own row count can't be
+// determined — a nil face (lineHeight() <= 0) or a box that hasn't been
+// arranged yet (contentHeight() <= 0) — a sane "text area" page size chosen
+// the same way textBoxMultilineDefaultLines was: enough to read as a real
+// page jump rather than a token amount.
+const pageRowsFallback = 10
+
 // TextBox is a focusable, token-styled text input, single-line by default.
 // The data model (text/caret/selection, rune-indexed) and rendering (chrome,
 // selection highlight, caret, horizontal scroll, placeholder) were built in
@@ -56,6 +65,10 @@ const tabInsertSpaces = 4
 // drag-to-select, CursorShaper's CursorIBeam). TextBox implements
 // input.Focusable and input.FocusHandler (AcceptsFocus/OnFocusChanged) since
 // focus also drives the focus-ring overlay and the focused border color.
+// A later editor-ergonomics pass added Ctrl+Home/End (buffer-bounds jump),
+// Ctrl+Left/Right (word-wise motion), Ctrl+Backspace/Delete (word
+// deletion), and PageUp/PageDown (viewport-height caret motion, multi-line
+// only) — see OnKey's own doc comment for the full keyboard map.
 // SetMultiline opts into multi-line mode (default off — single-line
 // behavior is unchanged either way); see its doc comment for the full list
 // of what changes.
@@ -620,6 +633,119 @@ func (t *TextBox) moveCaretTo(pos int, extend bool) {
 	t.SetCaret(pos)
 }
 
+// runeCharClass classifies r for word-boundary purposes (see
+// prevWordBoundary/nextWordBoundary): whitespace (runeClassSpace, which
+// includes '\n' — a newline is just another whitespace rune here, so word
+// motion crosses line boundaries for free, the same way plain Left/Right
+// already does), "word" runes (runeClassWord — letters, digits, and '_',
+// the conventional identifier-character set), or everything else
+// (runeClassPunct) — a run of punctuation is its own word, the standard
+// editor convention (e.g. "foo," is two word-motion stops: "foo" then ",").
+type runeCharClass uint8
+
+const (
+	runeClassSpace runeCharClass = iota
+	runeClassWord
+	runeClassPunct
+)
+
+func runeClassOf(r rune) runeCharClass {
+	switch {
+	case unicode.IsSpace(r):
+		return runeClassSpace
+	case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_':
+		return runeClassWord
+	default:
+		return runeClassPunct
+	}
+}
+
+// nextWordBoundary returns the rune index Ctrl+Right should move the caret
+// to from i (see OnKey): skip any run of whitespace starting at i, then skip
+// the following run of same-class runes (word or punctuation — see
+// runeClassOf) — i.e. stop at the end of the next "word", where a run of
+// punctuation counts as its own word. Returns len(t.runes) once there is
+// nothing left to skip.
+func (t *TextBox) nextWordBoundary(i int) int {
+	n := len(t.runes)
+	for i < n && runeClassOf(t.runes[i]) == runeClassSpace {
+		i++
+	}
+	if i >= n {
+		return n
+	}
+	class := runeClassOf(t.runes[i])
+	for i < n && runeClassOf(t.runes[i]) == class {
+		i++
+	}
+	return i
+}
+
+// prevWordBoundary is nextWordBoundary's mirror image for Ctrl+Left: skip
+// any run of whitespace immediately before i, then skip the preceding run of
+// same-class runes, landing at the START of the previous "word". Returns 0
+// once there is nothing left to skip.
+func (t *TextBox) prevWordBoundary(i int) int {
+	for i > 0 && runeClassOf(t.runes[i-1]) == runeClassSpace {
+		i--
+	}
+	if i <= 0 {
+		return 0
+	}
+	class := runeClassOf(t.runes[i-1])
+	for i > 0 && runeClassOf(t.runes[i-1]) == class {
+		i--
+	}
+	return i
+}
+
+// deleteWordBackward implements Ctrl+Backspace: delete the selection if one
+// is active (the same selection-first convention plain Backspace uses — see
+// deleteBackward), else delete from prevWordBoundary(caret) to the caret.
+// A no-op at the very start of the text with no selection.
+func (t *TextBox) deleteWordBackward() {
+	if start, end := t.Selection(); start != end {
+		t.replaceRange(start, end, "")
+		return
+	}
+	if t.caret > 0 {
+		t.replaceRange(t.prevWordBoundary(t.caret), t.caret, "")
+	}
+}
+
+// deleteWordForward is deleteWordBackward's Ctrl+Delete counterpart: delete
+// the selection if one is active, else delete from the caret to
+// nextWordBoundary(caret). A no-op at the very end of the text with no
+// selection.
+func (t *TextBox) deleteWordForward() {
+	if start, end := t.Selection(); start != end {
+		t.replaceRange(start, end, "")
+		return
+	}
+	if t.caret < len(t.runes) {
+		t.replaceRange(t.caret, t.nextWordBoundary(t.caret), "")
+	}
+}
+
+// pageRows returns the number of rows/lines a PageUp/PageDown press should
+// move the caret by (see OnKey): as many full lineHeight() rows as fit
+// within the box's current content (viewport) height, so a page jump lands
+// the caret roughly where the previous page's edge was — or
+// pageRowsFallback when that can't be computed (a nil face, or a box that
+// hasn't been arranged yet). Always at least 1.
+func (t *TextBox) pageRows() int {
+	lh := t.lineHeight()
+	h := t.contentHeight()
+	if lh <= 0 || h <= 0 {
+		return pageRowsFallback
+	}
+	rows := int(h / lh)
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
 // homeTarget returns the rune index Home should move the caret to: 0 in
 // single-line mode — the whole text's start, unchanged — or, in multi-line
 // mode, the start of the caret's OWN line (see SetMultiline); while
@@ -1083,20 +1209,29 @@ func (t *TextBox) touchedLines(start, end int) (first, last int) {
 // selection (see blockSelection): inserts tabInsertSpaces spaces at the
 // start of every touched line (touchedLines), leaving all existing text
 // intact — unlike insertText's single-line selection-replace, no selected
-// text is ever deleted. Mutates from the LAST touched line back to the
-// FIRST so an earlier insertion never shifts a later line's already-
-// computed lineStart out from under it. Restores the selection afterward to
-// span the whole touched block (including the newly-inserted indentation),
-// so a repeated Tab press keeps indenting further.
+// text is ever deleted. Restores the selection afterward to span the whole
+// touched block (including the newly-inserted indentation), so a repeated
+// Tab press keeps indenting further.
+//
+// Applied as a SINGLE replaceRange over the whole touched block
+// [lineStart(first), lineEnd(last)) — computed once, up front, by splitting
+// that span's own text on '\n' (touchedLines guarantees exactly one element
+// per touched line, since the span excludes any real newline outside it)
+// and rejoining with pad prepended to every line — rather than one
+// replaceRange per line: a block Tab press is one edit from the caller's
+// perspective, so it fires OnChanged (and invalidates arrange/measure) once,
+// not once per line.
 func (t *TextBox) indentSelectedLines() {
 	start, end := t.Selection()
 	first, last := t.touchedLines(start, end)
 	pad := strings.Repeat(" ", tabInsertSpaces)
-	for line := last; line >= first; line-- {
-		at := t.lineStart(line)
-		t.replaceRange(at, at, pad)
-	}
-	t.Select(t.lineStart(first), t.lineEnd(last))
+
+	blockStart, blockEnd := t.lineStart(first), t.lineEnd(last)
+	lines := strings.Split(string(t.runes[blockStart:blockEnd]), "\n")
+	newText := pad + strings.Join(lines, "\n"+pad)
+
+	t.replaceRange(blockStart, blockEnd, newText)
+	t.Select(blockStart, blockStart+len([]rune(newText)))
 }
 
 // outdentSelectedLines implements Shift+Tab's block-outdent step for a
@@ -1105,24 +1240,41 @@ func (t *TextBox) indentSelectedLines() {
 // unindentCurrentLine's own leading-run removal, just applied to every
 // touched line instead of only the caret's own. A line with fewer than
 // tabInsertSpaces leading spaces loses only what it has; a line with none is
-// left untouched (no-op for that line, mirroring unindentCurrentLine's own
-// no-op convention). Mutates from the LAST touched line back to the FIRST so
-// an earlier removal never shifts a later line's already-computed indices,
-// and restores the selection afterward to span the whole touched block.
+// left untouched. Restores the selection afterward to span the whole
+// touched block.
+//
+// Applied as a SINGLE replaceRange over the whole touched block, the same
+// coalescing indentSelectedLines uses (see its own doc comment for why):
+// the block's text is split on '\n', each line has its own leading-space
+// run stripped (up to tabInsertSpaces runes), and the result is rejoined
+// and swapped in with one replaceRange — one OnChanged per block Shift+Tab
+// press that actually removes something, not one per line. Unlike
+// indentSelectedLines (which always inserts pad, so always a real change),
+// a block with no leading spaces anywhere is a genuine no-op: replaceRange
+// is skipped entirely so no OnChanged fires, matching the original
+// per-line loop's own behavior (it never called replaceRange for a line
+// with nothing to remove) — but the selection is still restored to span
+// the touched block either way.
 func (t *TextBox) outdentSelectedLines() {
 	start, end := t.Selection()
 	first, last := t.touchedLines(start, end)
-	for line := last; line >= first; line-- {
-		lineStart := t.lineStart(line)
-		removeEnd := lineStart
-		for removeEnd < len(t.runes) && removeEnd-lineStart < tabInsertSpaces && t.runes[removeEnd] == ' ' {
-			removeEnd++
+
+	blockStart, blockEnd := t.lineStart(first), t.lineEnd(last)
+	orig := string(t.runes[blockStart:blockEnd])
+	lines := strings.Split(orig, "\n")
+	for i, line := range lines {
+		j := 0
+		for j < len(line) && j < tabInsertSpaces && line[j] == ' ' {
+			j++
 		}
-		if removeEnd > lineStart {
-			t.replaceRange(lineStart, removeEnd, "")
-		}
+		lines[i] = line[j:]
 	}
-	t.Select(t.lineStart(first), t.lineEnd(last))
+	newText := strings.Join(lines, "\n")
+
+	if newText != orig {
+		t.replaceRange(blockStart, blockEnd, newText)
+	}
+	t.Select(blockStart, blockStart+len([]rune(newText)))
 }
 
 // --- Word wrap (opt-in; see SetWordWrap) ---
@@ -2315,6 +2467,27 @@ func (t *TextBox) RenderOverlay(r render.Renderer) {
 // SetTabInserts): with that flag off (the default), or in single-line mode
 // regardless of the flag, Tab falls through unhandled exactly as before that
 // feature existed, bubbling to the Router's own Tab/Shift+Tab focus-nav.
+//
+// Ctrl adds several editor-ergonomics combinations, checked before the plain
+// keyboard map below (so a bare Left/Right/Home/End/Backspace/Delete still
+// works exactly as before whenever Ctrl ISN'T held): Ctrl+Home/End jump to
+// the very start/end of the whole buffer (0/len(runes)) — in single-line
+// mode this is the same target plain Home/End already use, but in
+// multi-line mode it is the one way to reach the buffer's true bounds,
+// since plain Home/End there stop at the caret's own line (homeTarget/
+// endTarget). Ctrl+Left/Right move by whole words (prevWordBoundary/
+// nextWordBoundary) instead of one rune, crossing line boundaries for free
+// (a newline counts as whitespace there). Ctrl+Backspace/Delete delete the
+// previous/next word (deleteWordBackward/deleteWordForward) — or the active
+// selection instead, same selection-first convention as plain Backspace/
+// Delete. Every Ctrl+<key> combination above accepts Shift too, extending
+// the selection from the current anchor exactly like its plain counterpart
+// (see moveCaretTo).
+//
+// PageUp/PageDown are multi-line-only (see SetMultiline), like Up/Down:
+// they move the caret by pageRows() lines/rows via moveCaretVertical,
+// preserving its own desired-column tracking, and fall through unhandled in
+// single-line mode.
 func (t *TextBox) OnKey(e *input.KeyEvent) {
 	if !t.enabled || !t.focused || e.Action != input.Press {
 		return
@@ -2330,6 +2503,8 @@ func (t *TextBox) OnKey(e *input.KeyEvent) {
 	if t.composing {
 		return
 	}
+
+	shift := e.Mods&input.ModShift != 0
 
 	if e.Mods&input.ModCtrl != 0 {
 		switch e.Key {
@@ -2349,10 +2524,37 @@ func (t *TextBox) OnKey(e *input.KeyEvent) {
 			t.pasteClipboard(e.Router)
 			e.Handled = true
 			return
+		case input.KeyHome:
+			// The whole-buffer jump plain Home never reaches in multi-line
+			// mode (homeTarget stops at the caret's own line there) — see
+			// SetMultiline. In single-line mode this is exactly homeTarget's
+			// own answer (0), so no separate single-line case is needed.
+			t.moveCaretTo(0, shift)
+			e.Handled = true
+			return
+		case input.KeyEnd:
+			t.moveCaretTo(len(t.runes), shift)
+			e.Handled = true
+			return
+		case input.KeyLeft:
+			t.moveCaretTo(t.prevWordBoundary(t.caret), shift)
+			e.Handled = true
+			return
+		case input.KeyRight:
+			t.moveCaretTo(t.nextWordBoundary(t.caret), shift)
+			e.Handled = true
+			return
+		case input.KeyBackspace:
+			t.deleteWordBackward()
+			e.Handled = true
+			return
+		case input.KeyDelete:
+			t.deleteWordForward()
+			e.Handled = true
+			return
 		}
 	}
 
-	shift := e.Mods&input.ModShift != 0
 	switch e.Key {
 	case input.KeyBackspace:
 		t.deleteBackward()
@@ -2404,6 +2606,18 @@ func (t *TextBox) OnKey(e *input.KeyEvent) {
 	case input.KeyDown:
 		if t.multiline {
 			t.moveCaretVertical(1, shift)
+			e.Handled = true
+			return
+		}
+	case input.KeyPageUp:
+		if t.multiline {
+			t.moveCaretVertical(-t.pageRows(), shift)
+			e.Handled = true
+			return
+		}
+	case input.KeyPageDown:
+		if t.multiline {
+			t.moveCaretVertical(t.pageRows(), shift)
 			e.Handled = true
 			return
 		}
