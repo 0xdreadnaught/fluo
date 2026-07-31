@@ -8,6 +8,15 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-31
+
+### Added
+
+- **Line-number gutter for the multi-line `TextBox`** — `SetLineNumbers(true)`
+  reserves a left column and draws one right-aligned number per logical line
+  (wrapped rows stay blank), scrolling with the text. Off by default; caret and
+  click hit-testing account for the gutter so text positioning stays exact.
+
 ## [0.12.0] - 2026-07-31
 
 ### Added
