@@ -645,6 +645,96 @@ func TestFocusReentrancyIgnored(t *testing.T) {
 	}
 }
 
+// Focus left behind in a subtree that has since been hidden must not keep
+// receiving keystrokes: a TabControl switching tabs, an Expander collapsing,
+// or a plain SetVisible(false) all hide a container without telling the
+// router, and the focused widget inside is then invisible but still typed
+// into. Note the ancestor walk is what matters here — leaf itself is never
+// hidden, only the container above it.
+func TestKeyNotDeliveredIntoHiddenSubtree(t *testing.T) {
+	leaf := &probe{name: "leaf", focusable: true, handleKey: true}
+	leaf.SetWidth(50)
+	leaf.SetHeight(50)
+	sub := (&probe{name: "sub"}).setChild(leaf)
+	sub.SetWidth(50)
+	sub.SetHeight(50)
+	root := (&probe{name: "root"}).setChild(sub)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+	r.Focus(leaf)
+
+	// Normal visible-focus dispatch is untouched: the key reaches leaf.
+	before := len(leaf.events)
+	if consumed := r.KeyDown(input.KeyA, 'a', 0); !consumed {
+		t.Fatal("KeyDown with visible focus = false, want true (leaf handles it)")
+	}
+	if got := leaf.events[before:]; len(got) != 1 || got[0] != "key" {
+		t.Fatalf("leaf.events after visible KeyDown = %v, want exactly [key]", got)
+	}
+
+	// Hide the ANCESTOR, the way setTabContentVisible does for a deselected
+	// tab's content. leaf's own visible flag stays true.
+	sub.SetVisible(false)
+	if !core.IsVisible(leaf) {
+		t.Fatal("leaf is hidden itself, want visible (the test must exercise the ancestor walk)")
+	}
+
+	before = len(leaf.events)
+	rootBefore := len(root.events)
+	if consumed := r.KeyDown(input.KeyA, 'a', 0); consumed {
+		t.Fatal("KeyDown into hidden subtree = true, want false (nothing focused took it)")
+	}
+
+	if got := leaf.events[before:]; len(got) != 1 || got[0] != "focus:false" {
+		t.Fatalf("leaf.events after hidden KeyDown = %v, want exactly [focus:false] (no key, blur fired)", got)
+	}
+	if r.Focused() != nil {
+		t.Fatalf("Focused() after hidden KeyDown = %v, want nil", r.Focused())
+	}
+	// With focus cleared, the key goes to the root, exactly as it would have
+	// had nothing been focused in the first place.
+	if got := root.events[rootBefore:]; len(got) != 1 || got[0] != "key" {
+		t.Fatalf("root.events after hidden KeyDown = %v, want exactly [key]", got)
+	}
+}
+
+// Re-showing the subtree does not resurrect the cleared focus (it was cleared
+// for real, not merely suppressed), and focusing back into the now-visible
+// subtree delivers keys again.
+func TestKeyDeliveryResumesAfterSubtreeReshown(t *testing.T) {
+	leaf := &probe{name: "leaf", focusable: true, handleKey: true}
+	leaf.SetWidth(50)
+	leaf.SetHeight(50)
+	sub := (&probe{name: "sub"}).setChild(leaf)
+	sub.SetWidth(50)
+	sub.SetHeight(50)
+	root := (&probe{name: "root"}).setChild(sub)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+	r.Focus(leaf)
+
+	sub.SetVisible(false)
+	r.KeyDown(input.KeyA, 'a', 0) // clears focus
+
+	sub.SetVisible(true)
+	if r.Focused() != nil {
+		t.Fatalf("Focused() after re-showing = %v, want nil (focus was cleared, not suspended)", r.Focused())
+	}
+
+	r.Focus(leaf)
+	before := len(leaf.events)
+	if consumed := r.KeyDown(input.KeyA, 'a', 0); !consumed {
+		t.Fatal("KeyDown after re-focusing a visible leaf = false, want true")
+	}
+	if got := leaf.events[before:]; len(got) != 1 || got[0] != "key" {
+		t.Fatalf("leaf.events after re-focus KeyDown = %v, want exactly [key]", got)
+	}
+}
+
 // TestDetachClearsSubtreeState is the primary regression test for Detach:
 // hover, capture, and focus all point at a leaf buried inside the subtree
 // being detached, and Detach must clear all three. Focus is the one that

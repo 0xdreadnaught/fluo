@@ -688,6 +688,27 @@ func keyChain(w core.Widget) []core.Widget {
 	return chain
 }
 
+// inVisibleSubtree reports whether w sits in a subtree that is currently
+// visible: w itself and every ancestor along its core.ParentOf chain must be
+// core.IsVisible. The ANCESTOR walk is the point — a widget's own visible
+// flag says nothing about whether some container above it was hidden, which
+// is exactly how focus ends up stranded (a TabControl hides the deselected
+// tab's content, an Expander collapses, a consumer calls SetVisible(false)).
+//
+// A chain that runs out of parents before reaching r.root still counts as
+// visible: nothing along it was explicitly hidden, and an unparented or
+// overlay-hosted widget must not be treated as invisible merely because it
+// isn't reachable from the root by parent links.
+func inVisibleSubtree(w core.Widget) bool {
+	for w != nil {
+		if !core.IsVisible(w) {
+			return false
+		}
+		w = core.ParentOf(w)
+	}
+	return true
+}
+
 // dispatchKey delivers e to the focused widget and bubbles it up the parent
 // chain (core.ParentOf), stopping as soon as e.Handled is set. With no
 // focused widget, delivery is to the root only (if it implements KeyHandler
@@ -695,9 +716,29 @@ func keyChain(w core.Widget) []core.Widget {
 // used before SetRoot, or with an empty tree, must produce an empty chain,
 // not a []core.Widget{nil} that would panic on the KeyHandler type
 // assertion below).
+//
+// Focus stranded inside a subtree that has since been hidden is cleared
+// first, via Focus(nil) so OnFocusChanged(false) fires normally, and the key
+// is delivered to the root instead of into the hidden widget. Nothing
+// notifies the router when a container hides its children, so this is checked
+// here at dispatch time rather than at the point of hiding — which also means
+// it catches every cause at once (tab switch, expander collapse, a consumer's
+// own SetVisible) instead of needing each to remember to clear focus. Without
+// it, keystrokes keep landing in an invisible TextBox: text is inserted and
+// OnChanged fires with nothing on screen to show for it. focusableList
+// already skips hidden subtrees, so Tab-cycling recovered from this while
+// typing did not; the two now agree.
 func (r *Router) dispatchKey(e *KeyEvent) {
+	visible := r.focused != nil && inVisibleSubtree(r.focused)
+	if r.focused != nil && !visible {
+		// Focus's reentrancy guard can refuse this (a key dispatched from
+		// inside an OnFocusChanged callback); the widget stays focused but
+		// still does not get the key, since visible is what's consulted below.
+		r.Focus(nil)
+	}
+
 	var chain []core.Widget
-	if r.focused != nil {
+	if visible {
 		chain = keyChain(r.focused)
 	} else if r.root != nil {
 		chain = []core.Widget{r.root}
