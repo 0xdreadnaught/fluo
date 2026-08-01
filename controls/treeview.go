@@ -427,12 +427,23 @@ func (t *TreeView) rowAt(pos render.Point) (idx int, ok bool) {
 // (HighlightText when selected, else WindowText) starting at
 // indent+treeChevronW+PaddingS. Rows are skipped (well still drawn) with a
 // nil face, matching TextBlock's own nil-face-renders-nothing convention.
+//
+// Row drawing is clipped to that same content area (see ClipRect): a tree
+// arranged shorter than its rows need crops the overflow at its own edge
+// instead of painting it over the sibling below.
 func (t *TreeView) Render(r render.Renderer) {
 	drawSunken(r, t.Bounds(), t.colors.WindowWell, t.colors)
 
 	if t.face == nil {
 		return
 	}
+
+	rect, clip := t.ClipRect()
+	if clip {
+		r.PushClip(rect)
+		defer r.PopClip()
+	}
+
 	bounds := t.contentBounds()
 	gap := t.metrics.PaddingS
 
@@ -463,6 +474,42 @@ func (t *TreeView) Render(r render.Renderer) {
 		lx := bounds.X + indent + treeChevronW + gap
 		t.face.Draw(r, render.Point{X: lx, Y: ly}, row.node.Label, labelColor)
 	}
+}
+
+// ClipRect implements core.ClipProvider, bounding the rows Render draws.
+// Without it a TreeView arranged shorter (or narrower) than its rows need
+// painted the overflow straight past its own edge, over whatever sibling
+// sits below — visible there, but dead to the pointer, since rowAt rejects
+// anything outside the content area.
+//
+// The rect is the region rows actually occupy: they start at the bevel-inset
+// content origin (see contentBounds) but are laid out at the size
+// MeasureContent asked for, which does NOT account for that inset — so the
+// row region is t's own arranged size taken from the content origin, not
+// contentBounds itself. Clipping to contentBounds would crop the last row
+// and the widest label by the bevel width even when the tree was given
+// exactly the size it asked for.
+//
+// TreeView draws its rows directly rather than through child widgets
+// RenderWidget would clip on its behalf, so — exactly like TextBox — Render
+// pushes this same rect itself; ClipRect is the single source of truth both
+// paths share. The well's sunken frame is drawn before the push and the
+// focus ring in RenderOverlay after the pop, so neither is ever cropped.
+//
+// The rect is grown out to whole pixels: row heights and label widths are
+// font-metric floats, so its edges land mid-pixel, and a clip is applied by
+// truncating to a whole scissor rect — an exact rect would shave the
+// partially covered edge pixel off content that is entirely the tree's own.
+// Rounding out costs at most a pixel of slop and still bounds the overflow.
+func (t *TreeView) ClipRect() (render.Rect, bool) {
+	b := t.Bounds()
+	inner := t.contentBounds()
+
+	x := float32(math.Floor(float64(inner.X)))
+	y := float32(math.Floor(float64(inner.Y)))
+	right := float32(math.Ceil(float64(inner.X + b.W)))
+	bottom := float32(math.Ceil(float64(inner.Y + b.H)))
+	return render.Rect{X: x, Y: y, W: right - x, H: bottom - y}, true
 }
 
 // RenderOverlay draws the focus ring while focused, per the global focus
