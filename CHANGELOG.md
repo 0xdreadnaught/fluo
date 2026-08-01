@@ -8,6 +8,24 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-08-01
+
+### Fixed
+
+- Pointer-capture release no longer pops a capture the widget never took — a
+  clickable whose press wasn't delivered (a disabled menu row, a dialog scrim)
+  could otherwise release another widget's capture and break modality.
+- Keyboard focus is cleared when its subtree becomes hidden (switching tabs,
+  collapsing an expander, `SetVisible(false)`), instead of routing keystrokes
+  into an invisible widget.
+- The `TextBox` caret-blink timer now runs only while the box is focused,
+  instead of ticking (and retaining the widget) on every unfocused box.
+- The shared clamp helpers reject NaN instead of passing it through, which
+  previously could collapse a virtualized list to zero rows permanently.
+- `NewListView(face, nil)`, `ScrollViewer.SetChild(nil)`, and `AddTab(label, nil)`
+  no longer panic — a nil child/item source is treated as empty.
+- `TreeView` now clips its rows to its own bounds.
+
 ## [0.15.0] - 2026-08-01
 
 ### Removed
