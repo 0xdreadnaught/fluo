@@ -95,6 +95,23 @@ const (
 	CursorVResize
 )
 
+// MultiClickInterval is the longest gap, in seconds, allowed between two
+// consecutive presses of the same button for the second to continue the same
+// click run (making it a double-click, then a triple-click) rather than
+// starting a fresh one — see Router.PointerButton and PointerEvent.ClickCount.
+// 0.4s sits just under the usual platform default (Win32's own double-click
+// time starts at 500ms), erring tight so two deliberately separate clicks are
+// less likely to be merged into one run.
+const MultiClickInterval = 0.4
+
+// MultiClickDistance is the furthest a press may land from the previous one,
+// in logical px on EITHER axis, and still continue the same click run: a
+// press outside this box starts a new run even when it falls well inside
+// MultiClickInterval, so a click-move-click never reads as a double-click.
+// The rectangular (per-axis, not radial) test mirrors Win32's own
+// SM_CXDOUBLECLK/SM_CYDOUBLECLK slop, which likewise defaults to 4px.
+const MultiClickDistance = 4
+
 // PointerEvent represents a mouse or touch pointer event.
 type PointerEvent struct {
 	Action  Action       // Press, Release, Move, Wheel, Enter, or Leave
@@ -105,6 +122,31 @@ type PointerEvent struct {
 	Target  core.Widget  // hit leaf widget (or captured widget)
 	Router  *Router      // for Capture/Focus calls from handlers
 	Handled bool         // set by handlers to prevent propagation
+
+	// Time is the event's timestamp in monotonic seconds, taken from the
+	// clock the host installed with Router.SetTimeSource (a glfw host passes
+	// glfw.GetTime — see app.Run). It is 0 on every event when no host clock
+	// was installed, which is also the zero value a synthetic event built by
+	// hand (a test, or a widget forwarding an event of its own) carries unless
+	// it sets one — so treat 0 as "unknown", not as "the beginning of time".
+	// Only the three real dispatch entry points stamp it (PointerMove,
+	// PointerButton, PointerWheel); the Enter/Leave pairs updateHover derives
+	// from a move are notifications about a state change rather than distinct
+	// hardware events, and are left at 0.
+	Time float64
+
+	// ClickCount is the position of this press within its click run: 1 for a
+	// standalone click, 2 for the second press of a double-click, 3 for the
+	// third of a triple-click, and upward from there for as long as presses
+	// keep arriving within MultiClickInterval and MultiClickDistance of one
+	// another (the Router does not wrap or cap the run — a widget that only
+	// defines behavior up to 3 should treat anything beyond as "3 or more"
+	// rather than assume the count resets). Only Press events carry it —
+	// Release, Move, Wheel, Enter, and Leave leave it 0 — and every press
+	// carries at least 1, including presses dispatched with no host clock
+	// installed: a run cannot be timed without one, so such a press is always
+	// reported as standalone rather than guessed at. See Router.PointerButton.
+	ClickCount int
 }
 
 // KeyEvent represents a keyboard event.

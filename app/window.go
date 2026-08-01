@@ -252,6 +252,11 @@ func Run(cfg Config, frame func(*Ctx)) error {
 	surf := NewSurface()
 	router := surf.Router()
 	router.SetClipboard(glfwClipboard{win: win})
+	// glfw.GetTime is seconds since Init, monotonic for the life of the
+	// process — exactly the clock input.Router wants to stamp PointerEvent.
+	// Time and to time double-/triple-click runs. Without this the router
+	// stays clockless and every press reports ClickCount 1.
+	router.SetTimeSource(glfw.GetTime)
 	imeAnc := newIMEAnchor(win)
 	imeComp := installIMEComposition(win, router)
 	defer imeComp.Close()

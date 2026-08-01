@@ -50,6 +50,22 @@ type Router struct {
 	// host hasn't wired one (e.g. headless/test routers). Set via
 	// SetClipboard; see Clipboard.
 	clipboard Clipboard
+
+	// now is the host-provided monotonic clock (seconds), or nil if the host
+	// hasn't wired one — the same headless-by-default arrangement clipboard
+	// uses. Set via SetTimeSource; read only through timeNow.
+	now func() float64
+
+	// lastPressTime/lastPressPos/lastPressButton/lastClickCount are the
+	// running click-run state PointerButton derives PointerEvent.ClickCount
+	// from: the previous press's timestamp, position, and button, plus the
+	// count it was assigned. lastClickCount is 0 until the first press, which
+	// is also what makes that first press start a run rather than continue a
+	// phantom one anchored at the zero position. See clickCountFor.
+	lastPressTime   float64
+	lastPressPos    render.Point
+	lastPressButton Button
+	lastClickCount  int
 }
 
 // NewRouter creates an empty Router. Call SetRoot before dispatching events.
@@ -85,6 +101,70 @@ func (r *Router) SetClipboard(c Clipboard) {
 // none was set (headless/test routers). Callers must nil-check before use.
 func (r *Router) Clipboard() Clipboard {
 	return r.clipboard
+}
+
+// SetTimeSource installs the host's monotonic clock, used to stamp
+// PointerEvent.Time and to time the click runs PointerEvent.ClickCount
+// reports. now must return seconds that only ever increase within a process
+// (any epoch will do — nothing compares timestamps across runs); a glfw host
+// passes glfw.GetTime directly, and a test can pass a closure over a counter
+// it advances by hand to drive multi-click detection deterministically.
+// Passing nil (the zero value) puts the router back into clockless mode: Time
+// stays 0 on every event and every press reports ClickCount 1, so a host that
+// never calls this sees exactly the single-click behavior it always did.
+func (r *Router) SetTimeSource(now func() float64) {
+	r.now = now
+}
+
+// timeNow reads the installed time source, or returns 0 when the host wired
+// none — the "unknown timestamp" convention PointerEvent.Time documents.
+func (r *Router) timeNow() float64 {
+	if r.now == nil {
+		return 0
+	}
+	return r.now()
+}
+
+// absF32 returns the absolute value of v, for the per-axis multi-click slop
+// test below (render coordinates are float32; math.Abs would round-trip
+// through float64 for no reason).
+func absF32(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// clickCountFor assigns a press at (b, p, t) its position within a click run
+// and records it as the new previous press: 1 when it starts a fresh run,
+// otherwise one more than the press before it. A press continues the previous
+// run only when all three of the button, the elapsed time (within
+// MultiClickInterval), and the distance (within MultiClickDistance on each
+// axis) match — any one of them failing starts over at 1, which is what makes
+// a slow second click, a click that drifted, and a right-click following a
+// left-click all read as standalone presses.
+//
+// With no time source installed every press would otherwise share the same
+// timestamp 0 and so appear infinitely fast, turning any two same-position
+// clicks into a double-click no matter how far apart in real time; a clockless
+// router therefore short-circuits to 1 and leaves the run state untouched,
+// preserving the pre-multi-click behavior for hosts that never opt in.
+func (r *Router) clickCountFor(b Button, p render.Point, t float64) int {
+	if r.now == nil {
+		return 1
+	}
+	n := 1
+	if r.lastClickCount > 0 && b == r.lastPressButton &&
+		t-r.lastPressTime <= MultiClickInterval &&
+		absF32(p.X-r.lastPressPos.X) <= MultiClickDistance &&
+		absF32(p.Y-r.lastPressPos.Y) <= MultiClickDistance {
+		n = r.lastClickCount + 1
+	}
+	r.lastPressTime = t
+	r.lastPressPos = p
+	r.lastPressButton = b
+	r.lastClickCount = n
+	return n
 }
 
 // Capture routes all subsequent pointer events to w exclusively, bypassing
@@ -229,23 +309,20 @@ func deliverDirect(w core.Widget, e *PointerEvent) {
 	}
 }
 
-// deliverCaptured builds a PointerEvent for action (with the given pos,
-// button, delta, and mods — callers pass the zero value for whichever of
-// button/delta don't apply to their action) targeted at the CURRENT (top of
-// stack) captured widget, and delivers it directly (no hit-testing, no
-// bubbling), returning the event so callers that need the captured widget's
-// own cursor (PointerMove) can inspect it afterward. Shared by
-// PointerMove/PointerButton/PointerWheel's captured branch, which is
-// otherwise identical across all three: build an event with Target =
-// Captured(), deliver it direct, done — even when the event's position falls
-// outside the captured widget's bounds. Note the captured widget's own
-// OnPointer may itself call Capture/Release during this delivery (nesting or
-// unwinding the stack) — deliverCaptured reads Captured() once, up front, so
-// that mid-call change doesn't retroactively affect which widget THIS event
-// was delivered to.
-func (r *Router) deliverCaptured(action Action, pos render.Point, button Button, delta render.Point, mods Modifiers) *PointerEvent {
+// deliverCaptured points the caller-built e at the CURRENT (top of stack)
+// captured widget and delivers it directly (no hit-testing, no bubbling),
+// returning it so a caller can inspect what the captured widget did with it
+// (nothing needs that today). Shared by PointerMove/PointerButton/
+// PointerWheel's captured branch, which is otherwise identical across all
+// three: set Target = Captured(), deliver direct, done — even when the
+// event's position falls outside the captured widget's bounds. Note the
+// captured widget's own OnPointer may itself call Capture/Release during this
+// delivery (nesting or unwinding the stack) — deliverCaptured reads Captured()
+// once, up front, so that mid-call change doesn't retroactively affect which
+// widget THIS event was delivered to.
+func (r *Router) deliverCaptured(e *PointerEvent) *PointerEvent {
 	top := r.Captured()
-	e := &PointerEvent{Action: action, Pos: pos, Button: button, Delta: delta, Mods: mods, Target: top, Router: r}
+	e.Target = top
 	deliverDirect(top, e)
 	return e
 }
@@ -330,7 +407,7 @@ func (r *Router) updateHover(newPath []core.Widget) {
 // leaf→root, and returns the cursor from the new hover path.
 func (r *Router) PointerMove(p render.Point, mods Modifiers) Cursor {
 	if top := r.Captured(); top != nil {
-		r.deliverCaptured(Move, p, 0, render.Point{}, mods)
+		r.deliverCaptured(&PointerEvent{Action: Move, Pos: p, Mods: mods, Time: r.timeNow(), Router: r})
 		if cs, ok := top.(CursorShaper); ok {
 			return cs.Cursor()
 		}
@@ -344,7 +421,7 @@ func (r *Router) PointerMove(p render.Point, mods Modifiers) Cursor {
 
 	path := HitPath(r.root, p)
 	r.updateHover(path)
-	Bubble(path, &PointerEvent{Action: Move, Pos: p, Mods: mods, Router: r})
+	Bubble(path, &PointerEvent{Action: Move, Pos: p, Mods: mods, Time: r.timeNow(), Router: r})
 	return cursorForPath(path)
 }
 
@@ -364,14 +441,25 @@ func (r *Router) PointerMove(p render.Point, mods Modifiers) Cursor {
 // after the hit-path bubble, i.e. some widget on the path actually handled
 // it rather than the press merely passing over non-interactive/empty space.
 // False with no root set, matching every other dispatch entry point.
+//
+// A press also carries its ClickCount — 1, 2, 3, … as consecutive presses
+// chain into a double-, triple-, or longer click run (see clickCountFor for
+// the button/time/distance rules, and SetTimeSource for the clock they need).
+// The count is assigned once, here, so it reaches whichever widget the press
+// goes to — captured or hit-tested — and so every widget derives multi-click
+// from the same shared notion of a run rather than timing presses itself.
 func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifiers) bool {
 	action := Release
 	if press {
 		action = Press
 	}
+	e := &PointerEvent{Action: action, Pos: p, Button: b, Mods: mods, Time: r.timeNow(), Router: r}
+	if press {
+		e.ClickCount = r.clickCountFor(b, p, e.Time)
+	}
 
 	if r.Captured() != nil {
-		r.deliverCaptured(action, p, b, render.Point{}, mods)
+		r.deliverCaptured(e)
 		return true
 	}
 	// No root set yet and nothing captured: nothing to hit-test or focus.
@@ -383,7 +471,6 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 	if press {
 		r.focusFromPath(path)
 	}
-	e := &PointerEvent{Action: action, Pos: p, Button: b, Mods: mods, Router: r}
 	Bubble(path, e)
 	return e.Handled
 }
@@ -393,7 +480,7 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 // captured widget if one holds the pointer grab.
 func (r *Router) PointerWheel(delta render.Point, p render.Point, mods Modifiers) {
 	if r.Captured() != nil {
-		r.deliverCaptured(Wheel, p, 0, delta, mods)
+		r.deliverCaptured(&PointerEvent{Action: Wheel, Pos: p, Delta: delta, Mods: mods, Time: r.timeNow(), Router: r})
 		return
 	}
 	// No root set yet and nothing captured: nothing to hit-test.
@@ -402,7 +489,7 @@ func (r *Router) PointerWheel(delta render.Point, p render.Point, mods Modifiers
 	}
 
 	path := HitPath(r.root, p)
-	Bubble(path, &PointerEvent{Action: Wheel, Pos: p, Delta: delta, Mods: mods, Router: r})
+	Bubble(path, &PointerEvent{Action: Wheel, Pos: p, Delta: delta, Mods: mods, Time: r.timeNow(), Router: r})
 }
 
 // focusFromPath implements press-to-focus: given the hit-test path (root→

@@ -801,6 +801,36 @@ func (t *TextBox) prevWordBoundary(i int) int {
 	return i
 }
 
+// wordSpanAt returns the [start, end) rune range of the "word" a
+// double-click at rune index i should select, plus whether there is one to
+// select at all. The word is the run of same-class runes (see runeClassOf)
+// touching i: the run ENDING at i wins whenever one does, so a click landing
+// on the trailing edge of "bar" selects "bar" rather than skipping ahead to
+// the next word; otherwise it is the run STARTING at i. ok is false only when
+// i has whitespace on both sides (or no text at all), in which case there is
+// no word under the pointer and the caller should fall back to plain caret
+// placement rather than select an arbitrary run of spaces.
+//
+// Both edges come from the same nextWordBoundary/prevWordBoundary helpers
+// Ctrl+Right/Ctrl+Left move by, so double-click granularity and word-motion
+// granularity cannot drift apart: end is nextWordBoundary from a rune already
+// known to be inside the run (so its leading skip-whitespace pass is a no-op),
+// and start walks prevWordBoundary back from that end. Since '\n' classifies
+// as whitespace, a word span never crosses a line boundary; since a run of
+// punctuation is its own word, double-clicking "," in "foo,bar" selects just
+// the comma.
+func (t *TextBox) wordSpanAt(i int) (start, end int, ok bool) {
+	switch {
+	case i > 0 && runeClassOf(t.runes[i-1]) != runeClassSpace:
+		end = t.nextWordBoundary(i - 1)
+	case i < len(t.runes) && runeClassOf(t.runes[i]) != runeClassSpace:
+		end = t.nextWordBoundary(i)
+	default:
+		return 0, 0, false
+	}
+	return t.prevWordBoundary(end), end, true
+}
+
 // deleteWordBackward implements Ctrl+Backspace: delete the selection if one
 // is active (the same selection-first convention plain Backspace uses — see
 // deleteBackward), else delete from prevWordBoundary(caret) to the caret.
@@ -2898,6 +2928,26 @@ func (t *TextBox) OnKey(e *input.KeyEvent) {
 // untouched by Select's own reassignment since the same value is passed
 // back in, so it stays pinned at the press position across an entire drag).
 // Release, only while captured, ends the drag.
+//
+// A press that arrives as part of a click run (input.PointerEvent.ClickCount,
+// which the Router assigns from press timing and distance — see
+// input.Router.PointerButton) selects rather than merely placing the caret: a
+// double-click selects the word under the pointer (wordSpanAt, falling back
+// to caret placement when the pointer sits in whitespace with no word either
+// side), and a triple-click selects the whole LOGICAL line it landed on —
+// lineStart..lineEnd, so the selection stops short of the terminating '\n'
+// and, while wrapping, spans every visual row of that line rather than just
+// the one clicked. ClickCount 1 — including EVERY press on a host that never
+// installed a time source, which is what keeps this additive — is the plain
+// caret placement above, unchanged.
+//
+// Beyond 3 the run keeps counting up rather than wrapping (see ClickCount),
+// so a fourth same-spot press holds the line selection instead of snapping
+// back to a bare caret. Dragging on from a double- or triple-click extends
+// by the ordinary per-rune Move path from the new selection's start (Select
+// leaves anchor at the range start), NOT at word or line granularity — the
+// selection stays coherent, it just loses the wider granularity as soon as
+// the drag begins.
 func (t *TextBox) OnPointer(e *input.PointerEvent) {
 	if !t.enabled {
 		if e.Router != nil && e.Router.Captured() == t {
@@ -2916,7 +2966,19 @@ func (t *TextBox) OnPointer(e *input.PointerEvent) {
 			return
 		}
 		idx := t.caretIndexAtPos(e.Pos.X, e.Pos.Y)
-		t.SetCaret(idx)
+		switch {
+		case e.ClickCount == 2:
+			if start, end, ok := t.wordSpanAt(idx); ok {
+				t.Select(start, end)
+			} else {
+				t.SetCaret(idx)
+			}
+		case e.ClickCount >= 3:
+			line, _ := t.lineCol(idx)
+			t.Select(t.lineStart(line), t.lineEnd(line))
+		default:
+			t.SetCaret(idx)
+		}
 		e.Router.Capture(t)
 		e.Handled = true
 	case input.Move:
