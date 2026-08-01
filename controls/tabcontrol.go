@@ -335,8 +335,15 @@ func NewTabControl(face *text.Face) *TabControl {
 // content starts hidden (see the type doc comment's "unconditionally in the
 // tree, only the selected one visible" rule). Returns t for chaining, per
 // the brief's normative AddTab signature.
+//
+// content may be nil — a header cell with nothing behind it. It is simply
+// skipped everywhere a real content widget would be walked (MeasureContent,
+// ArrangeContent, Children), the same way setTabContentVisible's type
+// assertion already tolerates one.
 func (t *TabControl) AddTab(title string, content core.Widget) *TabControl {
-	core.SetParent(content, t)
+	if content != nil {
+		core.SetParent(content, t)
+	}
 	idx := len(t.tabs)
 	t.tabs = append(t.tabs, tabItem{title: title, content: content})
 	setTabContentVisible(content, idx == t.selected)
@@ -431,6 +438,9 @@ func (t *TabControl) MeasureContent(available render.Size) render.Size {
 	w := stripD.W
 	var contentH float32
 	for _, tab := range t.tabs {
+		if tab.content == nil {
+			continue
+		}
 		core.MeasureWidget(tab.content, render.Size{W: available.W, H: availH})
 		d := core.DesiredSizeOf(tab.content)
 		if d.W > w {
@@ -460,6 +470,9 @@ func (t *TabControl) ArrangeContent(bounds render.Rect) {
 	}
 
 	for _, tab := range t.tabs {
+		if tab.content == nil {
+			continue
+		}
 		core.ArrangeWidget(tab.content, render.Rect{X: bounds.X, Y: contentY, W: bounds.W, H: contentH})
 	}
 }
@@ -493,12 +506,15 @@ func (t *TabControl) Render(r render.Renderer) {
 // unconditionally, regardless of which one is currently selected/visible
 // (see the type doc comment's "hidden tabs remain in the tree" normative
 // rule; contrast Expander.Children, which excludes collapsed content
-// entirely). A fresh slice each call; mutating it does not affect the
-// control.
+// entirely). A tab added with a nil content contributes nothing. A fresh
+// slice each call; mutating it does not affect the control.
 func (t *TabControl) Children() []core.Widget {
 	out := make([]core.Widget, 0, len(t.tabs)+1)
 	out = append(out, t.strip)
 	for _, tab := range t.tabs {
+		if tab.content == nil {
+			continue
+		}
 		out = append(out, tab.content)
 	}
 	return out

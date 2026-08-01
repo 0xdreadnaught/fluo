@@ -710,3 +710,25 @@ func TestListViewScrollToXAndOffsetX(t *testing.T) {
 		t.Fatalf("OffsetX() = %v, want 25", got)
 	}
 }
+
+// TestListViewNilItemsBuildsAndLaysOut covers a nil item source. l.count and
+// contentWidth both already treated nil as an empty list, but the OnChange
+// subscription in the constructor dereferenced it unguarded, so
+// NewListView(face, nil) panicked before any of that ran. A nil items must
+// now build, measure, arrange and render as a permanently empty list, and
+// Dispose (no subscription to release) must stay a no-op.
+func TestListViewNilItemsBuildsAndLaysOut(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+
+	l := NewListView(testFace(t), nil)
+	layoutListView(l, 0, 0, 120, 80)
+
+	if got := l.count(); got != 0 {
+		t.Fatalf("count = %d, want 0 (nil items is an empty list)", got)
+	}
+	if got := len(l.Children()); got != 0 {
+		t.Fatalf("Children = %d, want 0 (no rows to realize)", got)
+	}
+	l.Dispose()
+}

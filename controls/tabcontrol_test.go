@@ -432,3 +432,37 @@ func TestTabControlNoTabsIsHarmless(t *testing.T) {
 		t.Fatalf("KeyRight handled with zero tabs, want ignored")
 	}
 }
+
+// TestTabControlAddTabNilContent covers a tab with no content widget behind
+// its header. setTabContentVisible's type assertion already tolerated a nil
+// content, but AddTab re-parented it unguarded and MeasureContent /
+// ArrangeContent / Children walked it — so a nil content panicked at
+// construction. The header cell must still exist and be selectable, with
+// the nil content simply skipped everywhere a real one would be walked.
+func TestTabControlAddTabNilContent(t *testing.T) {
+	real := NewFixed(40, 20, render.RGB(1, 2, 3))
+	tc := NewTabControl(nil).AddTab("Empty", nil).AddTab("Real", real)
+	layoutTabControl(tc, 0, 0, 200, 100)
+
+	if got := len(tc.tabs); got != 2 {
+		t.Fatalf("len(tabs) = %d, want 2", got)
+	}
+	// Children is [strip, real] — the nil content contributes nothing.
+	kids := tc.Children()
+	if len(kids) != 2 {
+		t.Fatalf("Children = %d, want 2 (strip + the one real content)", len(kids))
+	}
+	for i, k := range kids {
+		if k == nil {
+			t.Fatalf("Children[%d] is nil", i)
+		}
+	}
+
+	// Selecting the nil-content tab must not panic either (applySelection
+	// walks every tab's content to toggle visibility).
+	tc.SetSelectedIndex(0)
+	layoutTabControl(tc, 0, 0, 200, 100)
+	if got := tc.SelectedIndex(); got != 0 {
+		t.Fatalf("SelectedIndex = %d, want 0", got)
+	}
+}

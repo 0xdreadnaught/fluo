@@ -417,3 +417,31 @@ func TestClampScrollOffsetRejectsNaN(t *testing.T) {
 		}
 	}
 }
+
+// TestScrollViewerSetChildNilClears covers clearing the child. Children,
+// MeasureContent, ArrangeContent and thumbGeometry all already handled a
+// nil child, and SetChild itself nil-guarded the OUTGOING one — but it then
+// re-parented the incoming one unguarded, so SetChild(nil) panicked on the
+// one state the rest of the type was written for. Clearing must detach the
+// old child and leave an empty, still-layoutable ScrollViewer.
+func TestScrollViewerSetChildNilClears(t *testing.T) {
+	child := NewFixed(80, 200, render.RGB(1, 2, 3))
+	s := NewScrollViewer().SetChild(child)
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	s.SetChild(nil)
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	if got := len(s.Children()); got != 0 {
+		t.Fatalf("Children = %d, want 0 after SetChild(nil)", got)
+	}
+	if _, ok := s.thumbRect(); ok {
+		t.Fatal("thumbRect reported a thumb with no child to scroll")
+	}
+	// The detached child must be re-attachable elsewhere (core.SetParent
+	// panics on a widget that still has a parent).
+	other := NewScrollViewer().SetChild(child)
+	if got := len(other.Children()); got != 1 {
+		t.Fatalf("re-attached Children = %d, want 1 (old child was not detached)", got)
+	}
+}

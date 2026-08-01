@@ -108,12 +108,18 @@ func NewScrollViewer() *ScrollViewer {
 // previously set child is detached (its parent cleared), matching the
 // Border convention: its future invalidations stop climbing into this
 // ScrollViewer.
+//
+// SetChild(nil) clears the child outright rather than panicking: Children,
+// MeasureContent, ArrangeContent and thumbGeometry all already handle a nil
+// child, so an empty ScrollViewer is a supported state.
 func (s *ScrollViewer) SetChild(w core.Widget) *ScrollViewer {
 	if s.child != nil {
 		core.SetParent(s.child, nil)
 	}
 	s.child = w
-	core.SetParent(w, s)
+	if w != nil {
+		core.SetParent(w, s)
+	}
 	s.InvalidateMeasure()
 	return s
 }

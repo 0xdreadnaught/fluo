@@ -105,6 +105,8 @@ type ListView struct {
 // and re-texts the pool from scratch) — per-row incrementalism is a later
 // phase. Callers MUST call Dispose() when done with the ListView (e.g. from
 // a rebuild's cancel path) to release this subscription — see Dispose.
+// items may be nil, matching the nil-face convention: the ListView builds
+// and lays out as a permanently empty list rather than panicking.
 func NewListView(face *text.Face, items ListItems) *ListView {
 	t := theme.Active()
 
@@ -117,7 +119,12 @@ func NewListView(face *text.Face, items ListItems) *ListView {
 		return l.items.Len()
 	}
 
-	l.cancel = items.OnChange(func(ListChange) { l.InvalidateMeasure() })
+	// A nil items is a valid, permanently empty list (l.count and
+	// contentWidth both already treat it as zero-length): there is nothing
+	// to subscribe to, so cancel stays nil and Dispose becomes a no-op.
+	if items != nil {
+		l.cancel = items.OnChange(func(ListChange) { l.InvalidateMeasure() })
+	}
 	return l
 }
 
