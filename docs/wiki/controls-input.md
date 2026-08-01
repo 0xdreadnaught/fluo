@@ -23,14 +23,31 @@ toggle a boolean (`CheckBox`/`ToggleSwitch`) or trigger an action (`Button`).
 
 ## TextBox
 
-`TextBox` is a single-line, focusable, token-styled text input. The data
-model (text/caret/selection, rune-indexed) and rendering (chrome, selection
-highlight, caret, horizontal scroll, placeholder) are paired with a full
-interaction layer: `OnKey` implements the normative keyboard map (rune
-insertion, Backspace/Delete, arrow/Home/End caret movement with Shift-extend,
-Ctrl+A/C/X/V) and `OnPointer` implements click-to-caret and drag-to-select.
-`TextBox` implements `input.Focusable` and `input.FocusHandler` since focus
-drives both the focus-ring overlay and caret visibility.
+`TextBox` is a focusable, token-styled text input — single-line by default,
+multi-line via `SetMultiline`. The data model (text/caret/selection,
+rune-indexed) and rendering (chrome, selection highlight, caret, scrolling,
+placeholder) are paired with a full interaction layer: `OnKey` implements the
+normative keyboard map (rune insertion, Backspace/Delete, caret movement with
+Shift-extend, word-wise motion, Ctrl+A/C/X/V) and `OnPointer` implements
+click-to-caret, drag-to-select, and double/triple-click word and line
+selection. `TextBox` implements `input.Focusable` and `input.FocusHandler`
+since focus drives both the focus ring and caret visibility, and
+`input.CompositionHandler`/`input.CaretRector` for IME input (inline preedit
+plus candidate-window anchoring).
+
+Multi-line mode is additive: every flag below defaults to off, and a
+default-constructed `TextBox` behaves exactly like the original single-line
+control. Four opt-in flags build on it:
+
+| Flag | Effect |
+|---|---|
+| [SetMultiline](#textboxsetmultiline) | Enter inserts `\n`; Up/Down/PageUp/PageDown move between lines; paste keeps newlines; a vertical scrollbar appears as needed. |
+| [SetWordWrap](#textboxsetwordwrap) | Soft-wraps long lines at the content width for display only — no `\n` is ever inserted into the buffer. Multi-line only. |
+| [SetLineNumbers](#textboxsetlinenumbers) | Reserves a right-aligned line-number gutter along the left inner edge. Multi-line only. |
+| [SetTabInserts](#textboxsettabinserts) | Tab indents instead of moving focus, including block indent/outdent over a multi-line selection. Multi-line only. |
+
+Single-line boxes gain [OnSubmit](#textboxonsubmit), fired when the user
+presses Enter.
 
 All rune-index parameters and returns (`Caret`, `Selection`, `SetCaret`,
 `Select`) are **rune indices** into `Text()`, not byte offsets — text is
@@ -66,7 +83,16 @@ box.OnChanged(func(s string) {
 | [SetText](#textboxsettext) | `SetText(s string) *TextBox` | Replaces the text, resets the caret to the end, clears selection. |
 | [SetPlaceholder](#textboxsetplaceholder) | `SetPlaceholder(s string) *TextBox` | Sets the placeholder shown whenever `Text() == ""`. |
 | [SetEnabled](#textboxsetenabled) | `SetEnabled(v bool) *TextBox` | Toggles whether the box accepts focus and editing input. |
+| [SetMultiline](#textboxsetmultiline) | `SetMultiline(v bool) *TextBox` | Toggles multi-line mode (off by default). |
+| [Multiline](#textboxsetmultiline) | `Multiline() bool` | Reports whether multi-line mode is enabled. |
+| [SetWordWrap](#textboxsetwordwrap) | `SetWordWrap(v bool) *TextBox` | Toggles display-time soft word-wrap. Multi-line only. |
+| [WordWrap](#textboxsetwordwrap) | `WordWrap() bool` | Reports whether word-wrap is enabled. |
+| [SetLineNumbers](#textboxsetlinenumbers) | `SetLineNumbers(v bool) *TextBox` | Toggles the line-number gutter. Multi-line only. |
+| [LineNumbers](#textboxsetlinenumbers) | `LineNumbers() bool` | Reports whether the gutter is enabled. |
+| [SetTabInserts](#textboxsettabinserts) | `SetTabInserts(v bool) *TextBox` | Toggles Tab-inserts-indentation. Multi-line only. |
+| [TabInserts](#textboxsettabinserts) | `TabInserts() bool` | Reports whether Tab-inserts-indentation is enabled. |
 | [OnChanged](#textboxonchanged) | `OnChanged(fn func(string)) *TextBox` | Sets the callback fired with the new text on every user edit. |
+| [OnSubmit](#textboxonsubmit) | `OnSubmit(fn func(string)) *TextBox` | Sets the callback fired when the user presses Enter in single-line mode. |
 | [SetTimers](#textboxsettimers) | `SetTimers(q *timers.Queue) *TextBox` | Wires a `timers.Queue` to drive caret blinking. |
 | [Caret](#textboxcaret) | `Caret() int` | Returns the current caret rune index. |
 | [Selection](#textboxselection) | `Selection() (start, end int)` | Returns the selected rune range, normalized so `start<=end`. |
@@ -74,13 +100,15 @@ box.OnChanged(func(s string) {
 | [Select](#textboxselect) | `Select(anchor, caret int) *TextBox` | Sets the selection to `[anchor, caret)`. |
 | [AcceptsFocus](#textboxacceptsfocus) | `AcceptsFocus() bool` | Implements `input.Focusable`; `false` while disabled. |
 | [OnFocusChanged](#textboxonfocuschanged) | `OnFocusChanged(focused bool)` | Implements `input.FocusHandler`; tracks focus state. |
-| [MeasureContent](#textboxmeasurecontent) | `MeasureContent(available render.Size) render.Size` | Reports the fixed content size. |
-| [ArrangeContent](#textboxarrangecontent) | `ArrangeContent(bounds render.Rect)` | Re-clamps the horizontal scroll offset for the arranged width. |
+| [MeasureContent](#textboxmeasurecontent) | `MeasureContent(available render.Size) render.Size` | Reports the content size (taller in multi-line mode). |
+| [ArrangeContent](#textboxarrangecontent) | `ArrangeContent(bounds render.Rect)` | Re-clamps the scroll offsets for the arranged size. |
 | [ClipRect](#textboxcliprect) | `ClipRect() (render.Rect, bool)` | Implements `core.ClipProvider`; clips to the box's own bounds. |
-| [Render](#textboxrender) | `Render(r render.Renderer)` | Paints the sunken well, selection, text, and caret. |
-| [RenderOverlay](#textboxrenderoverlay) | `RenderOverlay(r render.Renderer)` | Deliberate no-op — `TextBox` draws no separate focus ring. |
+| [Render](#textboxrender) | `Render(r render.Renderer)` | Paints the sunken well, selection, text, gutter, and caret. |
+| [RenderOverlay](#textboxrenderoverlay) | `RenderOverlay(r render.Renderer)` | Draws the vertical scroll thumb when one is shown. |
 | [OnKey](#textboxonkey) | `OnKey(e *input.KeyEvent)` | Implements `input.KeyHandler`, the normative keyboard map. |
-| [OnPointer](#textboxonpointer) | `OnPointer(e *input.PointerEvent)` | Implements `input.PointerHandler`: click-to-caret, drag-to-select. |
+| [OnPointer](#textboxonpointer) | `OnPointer(e *input.PointerEvent)` | Implements `input.PointerHandler`: click-to-caret, drag-to-select, multi-click. |
+| [OnComposition](#textboxoncomposition) | `OnComposition(e input.CompositionEvent)` | Implements `input.CompositionHandler`: inline IME preedit and commit. |
+| [CaretScreenRect](#textboxcaretscreenrect) | `CaretScreenRect() (render.Rect, bool)` | Implements `input.CaretRector`, so a host can anchor the OS IME window at the caret. |
 | [Cursor](#textboxcursor) | `Cursor() input.Cursor` | Implements `input.CursorShaper`; always an I-beam. |
 
 #### TextBox.Text
@@ -194,6 +222,153 @@ box.SetEnabled(false)
 **Notes** — `OnKey` and `OnPointer` both ignore all input while disabled.
 Purely visual/behavioral: no invalidation needed.
 
+#### TextBox.SetMultiline
+
+Toggles multi-line mode; `false` (the default) is the single-line behavior.
+
+**Syntax**
+
+```go
+func (t *TextBox) SetMultiline(v bool) *TextBox
+func (t *TextBox) Multiline() bool
+```
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `v` | `bool` | `true` for multi-line, `false` (the default) for single-line. |
+
+**Returns** — `*TextBox` for chaining.
+
+**Example**
+
+```go
+editor := controls.NewTextBox(face).
+    SetMultiline(true).
+    SetWordWrap(true).
+    SetLineNumbers(true)
+```
+
+**Notes** — Enabling multi-line mode changes:
+
+- Enter inserts a `\n` at the caret instead of being ignored (and never
+  fires [OnSubmit](#textboxonsubmit)).
+- Up/Down move the caret between lines, preserving a desired column across
+  lines shorter than it; PageUp/PageDown move by a visible page. Home/End
+  operate on the caret's **current** line rather than the whole text — use
+  Ctrl+Home/Ctrl+End for the buffer's true bounds.
+- Ctrl+V keeps newlines (normalized to `\n`) instead of stripping them.
+- `MeasureContent` reports a taller default, and a vertical scrollbar is
+  drawn and driven alongside the existing horizontal one.
+
+Text still hard-wraps only at an explicit `\n` unless
+[SetWordWrap](#textboxsetwordwrap) is also on; a line wider than the box
+scrolls horizontally, keyed off the caret's own line. Unlike most setters
+here, this one calls `InvalidateMeasure`, since it changes
+`MeasureContent`'s answer.
+
+**See also** — [SetWordWrap](#textboxsetwordwrap), [SetLineNumbers](#textboxsetlinenumbers), [SetTabInserts](#textboxsettabinserts)
+
+#### TextBox.SetWordWrap
+
+Toggles opt-in soft word-wrap; `false` (the default) is
+[SetMultiline](#textboxsetmultiline)'s hard-wrap-and-scroll behavior.
+
+**Syntax**
+
+```go
+func (t *TextBox) SetWordWrap(v bool) *TextBox
+func (t *TextBox) WordWrap() bool
+```
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `v` | `bool` | `true` to soft-wrap at the content width; `false` (the default) to hard-wrap at `\n` only. |
+
+**Returns** — `*TextBox` for chaining.
+
+**Notes** — Only meaningful when `Multiline()` is also true; a harmless
+no-op flag otherwise. **No `\n` is ever inserted into the buffer** — wrapping
+is a purely display-time re-flow of each real (`\n`-delimited) line into one
+or more visual rows at the box's current content width, so `Text()` and
+`OnChanged` are unaffected. Horizontal scrolling is disabled while wrap is
+on (wrapped rows never exceed the content width by construction), and
+vertical scrolling counts visual rows rather than logical lines. Calls
+`InvalidateMeasure`.
+
+**See also** — [SetMultiline](#textboxsetmultiline)
+
+#### TextBox.SetLineNumbers
+
+Toggles the opt-in line-number gutter.
+
+**Syntax**
+
+```go
+func (t *TextBox) SetLineNumbers(v bool) *TextBox
+func (t *TextBox) LineNumbers() bool
+```
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `v` | `bool` | `true` to reserve and draw the gutter; `false` is the default. |
+
+**Returns** — `*TextBox` for chaining.
+
+**Notes** — Multi-line only; a single-line box ignores the flag entirely. A
+fixed-width column is reserved along the **left** inner edge, wide enough
+for the widest line number the current text can produce (measured with the
+box's own `Face`), and the text content is narrowed and shifted right by
+exactly that width — the mirror image of the vertical scroll thumb's gutter
+on the right. Numbers are drawn right-aligned in `GrayText`, one per
+**logical** line, scrolled in sync with the text, with a thin vertical rule
+separating gutter from text. While word-wrap is on, only a logical line's
+first visual row carries its number; continuation rows are left blank, so
+the numbers keep counting real lines rather than displayed rows. Calls
+`InvalidateMeasure`.
+
+**See also** — [SetMultiline](#textboxsetmultiline), [SetWordWrap](#textboxsetwordwrap)
+
+#### TextBox.SetTabInserts
+
+Toggles whether a focused Tab press inserts indentation instead of bubbling
+to the router's focus navigation.
+
+**Syntax**
+
+```go
+func (t *TextBox) SetTabInserts(v bool) *TextBox
+func (t *TextBox) TabInserts() bool
+```
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `v` | `bool` | `true` to indent on Tab; `false` (the default) leaves Tab to focus navigation. |
+
+**Returns** — `*TextBox` for chaining.
+
+**Notes** — Multi-line only: a single-line box always leaves Tab as
+focus-nav regardless of this flag. When enabled:
+
+| Keys | Effect |
+|---|---|
+| Tab | Inserts spaces at the caret, through the same path plain typing uses. |
+| Shift+Tab | Removes up to one indent's worth of leading spaces from the caret's current line. |
+| Tab / Shift+Tab with a selection spanning **more than one** logical line | Indents/outdents every touched line in place, restoring the selection over the same block afterward, so repeated presses keep indenting. |
+
+No literal `\t` is ever inserted. Every recognized combination is marked
+handled even when the edit is a no-op, so Tab never leaks through to
+focus-nav while this flag is on.
+
+**See also** — [SetMultiline](#textboxsetmultiline), [OnKey](#textboxonkey)
+
 #### TextBox.OnChanged
 
 Sets the callback fired with the new text whenever the **user** changes it.
@@ -225,7 +400,44 @@ Ctrl+X, Ctrl+V — but never for a programmatic `SetText` (the package's
 uniform setter convention: programmatic setters are silent, `OnChanged`
 reports only user-driven changes). Replaces any previously set callback.
 
-**See also** — [SetText](#textboxsettext)
+**See also** — [SetText](#textboxsettext), [OnSubmit](#textboxonsubmit)
+
+#### TextBox.OnSubmit
+
+Sets the callback fired with the current text when the user presses Enter in
+**single-line** mode.
+
+**Syntax**
+
+```go
+func (t *TextBox) OnSubmit(fn func(string)) *TextBox
+```
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `fn` | `func(string)` | Called with the full current text on Enter. `nil` is a valid, silent no-op. |
+
+**Returns** — `*TextBox` for chaining.
+
+**Example**
+
+```go
+search := controls.NewTextBox(face)
+search.SetPlaceholder("Search…")
+search.OnSubmit(func(q string) {
+    runSearch(q)
+})
+```
+
+**Notes** — Multi-line mode is unaffected: Enter there always inserts a
+`\n` and never calls this callback, whether or not one is set. Like
+`OnChanged`, it fires only from a user keypress, never from a programmatic
+`SetText`. With no callback set, Enter is simply left unhandled in
+single-line mode. Replaces any previously set callback.
+
+**See also** — [OnChanged](#textboxonchanged), [SetMultiline](#textboxsetmultiline)
 
 #### TextBox.SetTimers
 
@@ -467,16 +679,17 @@ func (t *TextBox) Render(r render.Renderer)
 | `r` | `render.Renderer` | The renderer to draw into. |
 
 **Notes** — The well fills `WindowWell` (`ButtonFace` while disabled, the
-classic "grayed-out field" look). Content is clipped to `ClipRect`. `TextBox`
-draws no separate focus ring — `PaddingM` already clears the 2px sunken
-bevel, and the caret plus sunken well already read as "this is the focused
-field."
+classic "grayed-out field" look). Content is clipped to `ClipRect`. In
+multi-line mode this also draws each line (or, while wrapping, each visual
+row) and the line-number gutter when one is enabled. `TextBox` draws no
+separate focus ring — `PaddingM` already clears the 2px sunken bevel, and
+the caret plus sunken well already read as "this is the focused field."
 
 **See also** — [RenderOverlay](#textboxrenderoverlay)
 
 #### TextBox.RenderOverlay
 
-Deliberate no-op.
+Draws the vertical scroll thumb when one is shown.
 
 **Syntax**
 
@@ -484,10 +697,10 @@ Deliberate no-op.
 func (t *TextBox) RenderOverlay(r render.Renderer)
 ```
 
-**Notes** — Classic Windows textboxes draw no separate focus ring, unlike
-every other focusable control in this package. `TextBox` still implements
-`OverlayRenderer` so `core.RenderWidget`'s overlay dispatch finds a stable
-method here rather than silently falling through, but it paints nothing.
+**Notes** — Paints nothing at all in single-line mode, or whenever the
+content fits — the vertical scrollbar only exists once multi-line content
+overflows the box. No focus ring is drawn here: classic Windows textboxes
+have none, unlike every other focusable control in this package.
 
 #### TextBox.OnKey
 
@@ -515,18 +728,33 @@ auto-repeat arrives as repeated Press events from the host, not from
 | Ctrl+A | Select all (`Select(0, len(runes))`). |
 | Ctrl+C | Copy the selection to the clipboard (no-op if none, or no clipboard wired). |
 | Ctrl+X | Cut: copy then delete the selection (same no-op conditions as Ctrl+C). |
-| Ctrl+V | Paste the clipboard text at the caret/over the selection, with `\r`/`\n` stripped (single-line rule). |
+| Ctrl+V | Paste the clipboard text at the caret/over the selection. Newlines are stripped in single-line mode and normalized to `\n` in multi-line mode. |
 | Backspace | Delete the selection if one is active, else the rune before the caret. |
 | Delete | Delete the selection if one is active, else the rune after the caret. |
+| Ctrl+Backspace / Ctrl+Delete | Delete the previous/next **word** — or the active selection, same selection-first rule as plain Backspace/Delete. |
 | Left / Right | Move the caret by one rune; with Shift held, extends the selection from the current anchor instead. With no Shift and an active selection, collapses to the selection's near edge instead of stepping past it (desktop-standard convention). |
-| Home / End | Move the caret to the start/end of the text; with Shift held, extends the selection. |
+| Ctrl+Left / Ctrl+Right | Move the caret by whole **words**, crossing line boundaries (a newline counts as whitespace). |
+| Home / End | Move the caret to the start/end of the text — or, in multi-line mode, of the caret's own line. |
+| Ctrl+Home / Ctrl+End | Jump to the start/end of the whole buffer. In single-line mode this is the same target plain Home/End already use; in multi-line mode it is the only way to reach the buffer's true bounds. |
+| Enter | Multi-line: inserts a `\n`. Single-line: fires [OnSubmit](#textboxonsubmit) if one is set, else unhandled. |
+| Up / Down | **Multi-line only**: move between lines, preserving a desired column across shorter lines. Unhandled in single-line mode. |
+| PageUp / PageDown | **Multi-line only**: move by a visible page, with the same desired-column tracking. Unhandled in single-line mode. |
+| Tab / Shift+Tab | **Multi-line and [SetTabInserts](#textboxsettabinserts) only**: indent/outdent (block-wise over a multi-line selection). Otherwise unhandled, bubbling to the router's focus navigation. |
 | any printable rune (no Ctrl) | Inserts the rune, replacing the current selection if any. |
+
+Every caret-movement combination above also accepts Shift, extending the
+selection from the current anchor exactly like its unshifted counterpart.
 
 Every recognized combination sets `e.Handled = true` even when the specific
 operation ends up a no-op (e.g. Ctrl+C with no selection) — a focused
-`TextBox` owns all of these keys and must not let them bubble further.
+`TextBox` owns all of these keys and must not let them bubble further. Keys
+listed as unhandled in a given mode fall through exactly as they did before
+the corresponding feature existed.
 
-**See also** — [OnPointer](#textboxonpointer)
+An active IME composition owns keyboard input until it ends; see
+[OnComposition](#textboxoncomposition).
+
+**See also** — [OnPointer](#textboxonpointer), [SetMultiline](#textboxsetmultiline)
 
 #### TextBox.OnPointer
 
@@ -548,13 +776,82 @@ func (t *TextBox) OnPointer(e *input.PointerEvent)
 bubble past a disabled box) — except a `SetEnabled(false)` landing mid-drag
 first releases the router capture this box already holds, so the pointer
 isn't permanently wedged with no reachable widget. Press moves the caret to
-the nearest rune boundary to the click x (clearing any selection) and
-captures the pointer so the drag survives leaving the box's bounds. Move,
-only while this box holds the capture, extends the selection from the press
-position to the new nearest boundary. Release, only while captured, ends the
-drag.
+the nearest rune boundary to the click position (x only in single-line mode,
+x **and** y in multi-line mode), clearing any selection, and captures the
+pointer so the drag survives leaving the box's bounds. Move, only while this
+box holds the capture, extends the selection from the press position to the
+new nearest boundary. Release, only while captured, ends the drag.
+
+A press landing inside the vertical scroll thumb starts a **thumb** drag
+instead, checked first: Move then scrolls rather than extending the
+selection, and Release clears it alongside the capture.
+
+A press arriving as part of a click run (`input.PointerEvent.ClickCount`,
+which the router assigns from press timing and distance) selects rather than
+merely placing the caret:
+
+| ClickCount | Effect |
+|---|---|
+| 1 | Plain caret placement. Also the value on every press when the host installed no time source, which is what keeps this additive. |
+| 2 | Selects the word under the pointer, falling back to caret placement when the pointer sits in whitespace with no word either side. |
+| 3 or more | Selects the whole **logical** line, stopping short of the terminating `\n`. While wrapping, this spans every visual row of that line rather than just the one clicked. The run keeps counting up past 3 rather than wrapping, so a fourth same-spot press holds the line selection. |
+
+Dragging on from a double- or triple-click extends per-rune from the new
+selection's start, not at word or line granularity — the selection stays
+coherent, it just loses the wider granularity once the drag begins.
 
 **See also** — [OnKey](#textboxonkey)
+
+#### TextBox.OnComposition
+
+Implements `input.CompositionHandler`: inline IME preedit and commit.
+
+**Syntax**
+
+```go
+func (t *TextBox) OnComposition(e input.CompositionEvent)
+```
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `e` | `input.CompositionEvent` | The composition update, commit, or cancellation. |
+
+**Notes** — While `e.Active`, the preedit string is stored and spliced in at
+the caret for rendering only — the committed buffer (`Text()`) is left
+untouched for the whole composition, so a still-in-progress candidate never
+corrupts what `OnChanged` has already reported. When the composition ends,
+the preedit is cleared, and (unless `e.Canceled`) `e.Committed` is inserted
+at the caret through the same path every other user edit uses, firing
+`OnChanged` exactly as typing would. A canceled composition, or one ending
+with an empty commit, mutates nothing. Ignored while disabled or unfocused,
+matching `OnKey`'s own guard.
+
+**See also** — [CaretScreenRect](#textboxcaretscreenrect), [OnKey](#textboxonkey)
+
+#### TextBox.CaretScreenRect
+
+Implements `input.CaretRector`, so a host can anchor platform UI at the
+caret.
+
+**Syntax**
+
+```go
+func (t *TextBox) CaretScreenRect() (render.Rect, bool)
+```
+
+**Returns** — the caret's rectangle in window logical coordinates (the same
+space `PointerEvent.Pos` and widget bounds use), and `false` when there is
+no caret to report — e.g. while unfocused.
+
+**Notes** — `app.Run` polls this each frame via
+`input.Router.FocusedCaretRect` and forwards the result to the OS IME
+anchor, so a CJK candidate window opens **at** the caret rather than in a
+default screen corner. On platforms with no OS-level IME window to anchor,
+that step is a no-op.
+
+**See also** — [OnComposition](#textboxoncomposition)
 
 #### TextBox.Cursor
 

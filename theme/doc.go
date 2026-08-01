@@ -2,7 +2,9 @@
 // Theme bundles ColorTokens (the four-tone bevel palette — ButtonFace/
 // ButtonHighlight/ButtonLight/ButtonShadow/ButtonDarkShadow — plus
 // WindowWell/WindowText/GrayText, Highlight/HighlightText selection, and the
-// CaptionFrom/CaptionTo title bar gradient), MetricTokens (corner radii
+// CaptionFrom/CaptionTo title bar gradient, the four SeverityInfo/Success/
+// Warning/Error accents a Toast classifies itself by, and the AcrylicTint
+// composited over a backdrop blur), MetricTokens (corner radii
 // pinned to 0, BevelWidth, stroke widths, the 4/8/16 padding scale, and
 // scroll gutter/shadow blur), and TypeTokens (caption/body/subtitle/title
 // pixel sizes). Light and Dark are the two built-in variants; Active

@@ -15,11 +15,17 @@ renderer or the whole stack.
 
 - A complete control set: buttons, checkboxes, radio groups, toggle switches,
   text boxes, sliders, progress bars, combo boxes, tooltips, list/tree/tab
-  views, expanders, menus, modal dialogs, and a virtualized data grid. Layout
-  panels (stack, grid, dock, wrap, canvas) and a custom title bar for
-  undecorated windows come with it.
+  views, expanders, menus, modal dialogs, toasts, and a virtualized data grid.
+  Layout panels (stack, grid, dock, wrap, canvas), a draggable split panel, and
+  a custom title bar for undecorated windows come with it.
+- A text box that scales from a one-line field to a small code editor: word
+  wrap, a line-number gutter, Tab-to-indent with block indent/outdent,
+  word-wise motion, double-click-word and triple-click-line selection, and
+  IME input.
 - Classic Windows-2000 chrome: four-tone raised and sunken bevels, square
-  corners, gradient title bars. No drop shadows or blur.
+  corners, gradient title bars. The classic themes don't reach for soft
+  effects, but the primitives are there — `DrawShadow`, `DrawBackdropBlur`,
+  and an `AcrylicSurface` control built on them.
 - Light and dark themes, both driven entirely by design tokens. Roll your own
   by copying one and changing a few colors.
 - One- and two-way data binding between typed properties and controls, plus
@@ -104,7 +110,7 @@ binding, theming, and the renderer — live in [`docs/wiki`](docs/wiki.md).
 
 ## Status
 
-v0.13. Every layer is implemented, tested (headless layout and binding tests
+v0.15.1. Every layer is implemented, tested (headless layout and binding tests
 plus GL golden images that auto-skip without a GPU), and exercised together by
 the gallery. Known gaps:
 

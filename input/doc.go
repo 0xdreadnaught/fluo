@@ -5,10 +5,20 @@
 // nested pointer capture (Capture/Release) that redirects all pointer
 // events straight to one widget, and tracks keyboard focus (Focus/Focused/
 // FocusNext/FocusPrev), bubbling KeyDown/KeyUp from the focused widget up
-// its core.ParentOf ancestor chain. Widgets opt into event handling by
+// its core.ParentOf ancestor chain. Given a host clock (SetTimeSource),
+// Router also counts click runs, stamping each press with the
+// PointerEvent.ClickCount that turns a second or third press in the same
+// spot into a double- or triple-click; with no clock installed every press
+// reports 1. Widgets opt into event handling by
 // implementing one or more of PointerHandler, KeyHandler, Focusable, or
 // CursorShaper; PointerEvent and KeyEvent (each with a settable Handled
-// flag) are the payloads delivered to them. Clipboard abstracts host clip-
+// flag) are the payloads delivered to them. IME input rides the same focus
+// machinery through two more optional interfaces: CompositionHandler
+// receives CompositionEvents (inline preedit, then commit or cancel) from
+// Router.CompositionUpdate/CompositionCommit/CompositionCancel, and
+// CaretRector reports the focused caret's on-screen rect via
+// Router.FocusedCaretRect so a host can anchor the OS candidate window to
+// it. Clipboard abstracts host clip-
 // board access (wired via SetClipboard) so TextBox's Ctrl+C/X/V works
 // without input depending on any windowing package. The app package is
 // Router's principal driver, translating glfw callbacks into Router calls
