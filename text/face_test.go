@@ -40,11 +40,19 @@ func loadCJKFallback(t *testing.T) *Font {
 // current frame's device-pixels-per-logical-pixel factor. Every other
 // method is a no-op; Draw only calls Scale, DrawGlyphs, and (were it ever
 // reached) DrawSDFQuads.
+// It also hands out a DISTINCT TextureID per CreateTexture call and records
+// the texture each DrawGlyphs call was handed (glyphTex, one entry per
+// call): a batch is only correct if it is drawn with ITS OWN atlas page's
+// texture, and discarding that argument would let a Face that always
+// returned page 0's texture — rendering every page-1 glyph as whatever
+// happens to sit at those UVs on page 0 — pass silently.
 type recordingRenderer struct {
 	scale      float32
 	glyphCalls int
 	glyphQuads []render.GlyphQuad
+	glyphTex   []render.TextureID
 	sdfCalls   int
+	nextTex    render.TextureID
 }
 
 func (r *recordingRenderer) Begin(fbWidth, fbHeight int, scale float32)                       {}
@@ -58,7 +66,10 @@ func (r *recordingRenderer) StrokeRoundedRect(rect render.Rect, radius, width fl
 func (r *recordingRenderer) DrawShadow(rect render.Rect, radius, blur float32, c render.Color) {}
 func (r *recordingRenderer) DrawBackdropBlur(rect render.Rect, radius float32, tint render.Color) {
 }
-func (r *recordingRenderer) CreateTexture(w, h int, rgba []byte) render.TextureID           { return 1 }
+func (r *recordingRenderer) CreateTexture(w, h int, rgba []byte) render.TextureID {
+	r.nextTex++ // from 1: render.NoTexture is 0
+	return r.nextTex
+}
 func (r *recordingRenderer) UpdateTexture(id render.TextureID, x, y, w, h int, rgba []byte) {}
 func (r *recordingRenderer) DeleteTexture(id render.TextureID)                              {}
 func (r *recordingRenderer) DrawQuad(dst, src render.Rect, tex render.TextureID, tint render.Color) {
@@ -69,6 +80,7 @@ func (r *recordingRenderer) DrawSDFQuads(quads []render.GlyphQuad, tex render.Te
 func (r *recordingRenderer) DrawGlyphs(quads []render.GlyphQuad, tex render.TextureID, c render.Color) {
 	r.glyphCalls++
 	r.glyphQuads = quads
+	r.glyphTex = append(r.glyphTex, tex)
 }
 func (r *recordingRenderer) Scale() float32 {
 	if r.scale <= 0 {
@@ -248,6 +260,27 @@ func TestFaceDrawGrowsAtlasInsteadOfDropping(t *testing.T) {
 	}
 	if len(rr.glyphQuads) != 1 {
 		t.Errorf("last DrawGlyphs call had %d quads, want 1", len(rr.glyphQuads))
+	}
+
+	// Each batch must be drawn with its OWN page's texture. Without this,
+	// an ensureCoverageTexture that ignored its page argument and always
+	// handed back page 0's texture would still produce two correctly split
+	// batches — and page 1's glyphs would sample page 0 at page 1's UVs,
+	// i.e. render as garbage — with every other assertion here passing.
+	if len(rr.glyphTex) != 2 {
+		t.Fatalf("recorded %d DrawGlyphs textures, want 2", len(rr.glyphTex))
+	}
+	if rr.glyphTex[0] == render.NoTexture || rr.glyphTex[1] == render.NoTexture {
+		t.Fatalf("DrawGlyphs textures = %v, want two real textures", rr.glyphTex)
+	}
+	if rr.glyphTex[0] == rr.glyphTex[1] {
+		t.Errorf("both DrawGlyphs calls used texture %v; want one texture per page (page 0 and the grown page 1 are separate GPU textures)", rr.glyphTex[0])
+	}
+	// And each must be the texture that page actually owns.
+	for page, tex := range rr.glyphTex {
+		if want := atlas.covPages[page].tex; tex != want {
+			t.Errorf("DrawGlyphs call %d used texture %v, want page %d's own %v", page, tex, page, want)
+		}
 	}
 }
 

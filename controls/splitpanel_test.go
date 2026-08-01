@@ -246,3 +246,116 @@ func TestSplitPanelChildren(t *testing.T) {
 		t.Fatalf("Children=%v, want [first, second]", got)
 	}
 }
+
+// startDividerDrag presses at the middle of s's divider and returns the
+// router holding the capture, so a test can then move the pointer wherever
+// it likes. Fails the test if the press didn't take the capture.
+func startDividerDrag(t *testing.T, s *SplitPanel) *input.Router {
+	t.Helper()
+	_, divider, _ := s.layout()
+	r := input.NewRouter()
+	press := &input.PointerEvent{
+		Action: input.Press,
+		Pos:    render.Point{X: divider.X + divider.W/2, Y: divider.Y + divider.H/2},
+		Router: r,
+	}
+	s.OnPointer(press)
+	if r.Captured() != s {
+		t.Fatal("press on the divider did not capture the SplitPanel")
+	}
+	return r
+}
+
+// dragDividerTo moves an already-started drag to pos and re-runs layout, so
+// the panes' arranged bounds reflect the new ratio.
+func dragDividerTo(t *testing.T, s *SplitPanel, r *input.Router, pos render.Point, x, y, w, h float32) {
+	t.Helper()
+	move := &input.PointerEvent{Action: input.Move, Pos: pos, Router: r}
+	s.OnPointer(move)
+	if !move.Handled {
+		t.Fatal("move while captured not marked Handled")
+	}
+	layoutSplitPanel(s, x, y, w, h)
+}
+
+// wantPaneLen fails unless got is want to within a hundredth of a pixel. A
+// drag stores its result as a RATIO, which layout multiplies back out, so a
+// clamped pane length only survives that float32 round trip approximately
+// (64 comes back as 63.999996) — exact equality would be testing the
+// arithmetic, not the clamp.
+func wantPaneLen(t *testing.T, label string, got, want float32) {
+	t.Helper()
+	if d := got - want; d > 0.01 || d < -0.01 {
+		t.Fatalf("%s = %v, want %v", label, got, want)
+	}
+}
+
+// TestSplitPanelDragClampsAtMinPaneFirstSide covers dragTo's own
+// clampPaneLen call at the low bound. The existing drag test only drags to
+// a position well inside the legal range, so a dragTo that dropped its
+// clamp entirely would still pass it — here the pointer is dragged past the
+// panel's left edge, and First must stop at MinPaneSize instead of
+// collapsing (or going negative).
+func TestSplitPanelDragClampsAtMinPaneFirstSide(t *testing.T) {
+	first := NewFixed(10, 10, render.RGB(1, 2, 3))
+	second := NewFixed(10, 10, render.RGB(4, 5, 6))
+	s := NewSplitPanel(Horizontal).SetFirst(first).SetSecond(second)
+	s.SetMinPaneSize(30)
+	layoutSplitPanel(s, 0, 0, 100, 50)
+
+	r := startDividerDrag(t, s)
+	// Far outside the panel, on the First side.
+	dragDividerTo(t, s, r, render.Point{X: -500, Y: 25}, 0, 0, 100, 50)
+
+	wantPaneLen(t, "first width after dragging past the left edge", core.BoundsOf(first).W, 30)
+	// available(94) - first(30) = 64.
+	wantPaneLen(t, "second width", core.BoundsOf(second).W, 64)
+	// The stored ratio itself must be the clamped one — layout() re-clamps
+	// on the way to the arranged bounds, so only the ratio shows whether
+	// dragTo did its own clamping.
+	wantPaneLen(t, "ratio", s.ratio, 30.0/94.0)
+}
+
+// TestSplitPanelDragClampsAtMinPaneSecondSide is the same at the high
+// bound: dragged past the panel's right edge, Second must keep MinPaneSize
+// rather than being squeezed to nothing.
+func TestSplitPanelDragClampsAtMinPaneSecondSide(t *testing.T) {
+	first := NewFixed(10, 10, render.RGB(1, 2, 3))
+	second := NewFixed(10, 10, render.RGB(4, 5, 6))
+	s := NewSplitPanel(Horizontal).SetFirst(first).SetSecond(second)
+	s.SetMinPaneSize(30)
+	layoutSplitPanel(s, 0, 0, 100, 50)
+
+	r := startDividerDrag(t, s)
+	dragDividerTo(t, s, r, render.Point{X: 5000, Y: 25}, 0, 0, 100, 50)
+
+	// available(94) - minPane(30) = 64 is First's ceiling.
+	wantPaneLen(t, "first width after dragging past the right edge", core.BoundsOf(first).W, 64)
+	wantPaneLen(t, "second width", core.BoundsOf(second).W, 30)
+	wantPaneLen(t, "ratio", s.ratio, 64.0/94.0)
+}
+
+// TestSplitPanelDragDegenerateAvailableBelowTwoMinPanes covers the case
+// clampPaneLen relaxes its floor for: a panel too small to give BOTH panes
+// their minimum. The floor must not be applied from both ends at once
+// (which would put First above its own ceiling and hand Second a negative
+// length) — dragging either way just splits whatever room exists.
+func TestSplitPanelDragDegenerateAvailableBelowTwoMinPanes(t *testing.T) {
+	first := NewFixed(10, 10, render.RGB(1, 2, 3))
+	second := NewFixed(10, 10, render.RGB(4, 5, 6))
+	s := NewSplitPanel(Horizontal).SetFirst(first).SetSecond(second)
+	s.SetMinPaneSize(30) // 2*30 = 60 > available (40-6 = 34)
+	layoutSplitPanel(s, 0, 0, 40, 50)
+
+	r := startDividerDrag(t, s)
+
+	dragDividerTo(t, s, r, render.Point{X: -500, Y: 25}, 0, 0, 40, 50)
+	wantPaneLen(t, "first width dragged fully left", core.BoundsOf(first).W, 0)
+	wantPaneLen(t, "second width (all of the available room)", core.BoundsOf(second).W, 34)
+	wantPaneLen(t, "ratio dragged fully left", s.ratio, 0)
+
+	dragDividerTo(t, s, r, render.Point{X: 5000, Y: 25}, 0, 0, 40, 50)
+	wantPaneLen(t, "first width dragged fully right", core.BoundsOf(first).W, 34)
+	wantPaneLen(t, "second width (never negative)", core.BoundsOf(second).W, 0)
+	wantPaneLen(t, "ratio dragged fully right", s.ratio, 1)
+}
