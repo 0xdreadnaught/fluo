@@ -14,8 +14,8 @@ import (
 // (see Font.sharedAtlas), so creating many Faces at different sizes for
 // the same Font does not duplicate the Atlas itself, though each
 // distinct (glyph, device px) pair is rasterized once at that size (see
-// Atlas.glyphCoverage) since — unlike the retained SDF path — coverage
-// masks aren't resolution-independent.
+// Atlas.glyphCoverage) since coverage masks aren't
+// resolution-independent.
 //
 // Fallbacks holds an ordered fallback chain: for each rune, Measure and
 // Draw resolve the source font as the first of [Font, Fallbacks...] that
@@ -196,7 +196,7 @@ type glyphBatch struct {
 
 // Draw renders s with fa, with at as the top-left corner of the text box;
 // the baseline sits at at.Y + fa.Ascent(). This is the crisp HD-text path:
-// each glyph is rasterized directly (grayscale-AA coverage, no SDF) at the
+// each glyph is rasterized directly (grayscale-AA coverage) at the
 // exact device-pixel size for the current frame's scale (from r.Scale()),
 // and both the baseline and each glyph's draw origin are snapped to whole
 // device pixels for a sharp result. Layout stays exact: advances and

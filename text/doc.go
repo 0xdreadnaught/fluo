@@ -5,15 +5,11 @@
 // a string, and Face.Draw emits its glyph quads in a single batched call.
 //
 // Face.Draw renders HD text: each glyph is rasterized directly at the exact
-// device-pixel size for the current frame's scale (grayscale antialiasing,
-// no SDF), cached per (glyph, pixel size) in a coverage Atlas, and drawn
-// with baseline and per-glyph origins snapped to whole device pixels via
+// device-pixel size for the current frame's scale (grayscale antialiasing),
+// cached per (glyph, pixel size) in a coverage Atlas, and drawn with
+// baseline and per-glyph origins snapped to whole device pixels via
 // render.Renderer.DrawGlyphs. Glyph rasterization is baseline-integer-
 // aligned so every glyph on a line shares the same snapped baseline.
-//
-// The signed-distance-field path (sdfFromMask, the SDF Atlas, and
-// render.Renderer.DrawSDFQuads) is retained for future scaled/animated
-// text, but Face.Draw does not use it.
 //
 // Package text has no dependency on any GL/windowing package;
 // controls.TextBlock and every text-bearing control build on the Face API
