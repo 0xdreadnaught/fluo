@@ -8,6 +8,8 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-01
+
 ### Removed
 
 - **BREAKING: the 20 long-deprecated pre-v0.2 color tokens on
