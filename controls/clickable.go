@@ -11,8 +11,9 @@ import (
 // button-like widget: a Press over the widget captures the pointer (so drag
 // tracking survives the pointer leaving the widget's bounds) and marks hover
 // state via Enter/Leave; the matching Release fires OnClick only if the
-// pointer is still over the widget's bounds at release time, and always
-// releases the capture. Embed by value in a composite widget (e.g. Button)
+// pointer is still over the widget's bounds at release time, and releases
+// the capture if this widget is the one holding it. Embed by value in a
+// composite widget (e.g. Button)
 // and drive it from the owner's own OnPointer via HandlePointer, passing the
 // owner itself so containment can be tested against its live bounds.
 //
@@ -39,9 +40,16 @@ type ClickBehavior struct {
 // Enter/Leave only update Hover. Press marks pressed, captures the pointer,
 // and marks e.Handled. Release (delivered directly to the captured owner
 // regardless of e.Pos, per input.Router's capture semantics) clears pressed,
-// releases the capture, marks e.Handled, and fires OnClick only if the
-// widget was pressed AND e.Pos still falls within its current bounds —
-// releasing outside does not fire. Move and Wheel are ignored: hover across a
+// marks e.Handled, and fires OnClick only if the widget was pressed AND
+// e.Pos still falls within its current bounds — releasing outside does not
+// fire.
+//
+// The capture is released only when owner is the one actually holding it.
+// input.Router.Release pops the top of its capture stack with no identity
+// check, so an unguarded release from a Release that never had a matching
+// Press would pop somebody else's grab — which happens whenever an owner
+// skips HandlePointer on Press but not on Release (a disabled row bailing
+// out early, say), and would silently drop an OverlayHost's modal capture. Move and Wheel are ignored: hover across a
 // drag is not tracked mid-capture (input.Router itself does not deliver
 // Enter/Leave while a capture is active), a documented v0 simplification.
 func (c *ClickBehavior) HandlePointer(e *input.PointerEvent, owner core.Widget) {
@@ -57,7 +65,9 @@ func (c *ClickBehavior) HandlePointer(e *input.PointerEvent, owner core.Widget) 
 	case input.Release:
 		wasPressed := c.pressed
 		c.pressed = false
-		e.Router.Release()
+		if e.Router.Captured() == owner {
+			e.Router.Release()
+		}
 		if wasPressed && core.BoundsOf(owner).Contains(e.Pos) {
 			c.Activate()
 		}
