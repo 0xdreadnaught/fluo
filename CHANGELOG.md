@@ -8,6 +8,17 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-01
+
+### Added
+
+- **Double-click-to-select-word and triple-click-to-select-line in `TextBox`.**
+- **`PointerEvent.ClickCount` / `PointerEvent.Time`** and `Router.SetTimeSource`
+  — the router now reports a click count on each press (from the previous
+  press's button, time, and position), available to any widget. Hosts opt in
+  with a time source; without one, every press reports `ClickCount == 1` and
+  behavior is unchanged.
+
 ## [0.13.0] - 2026-07-31
 
 ### Added
