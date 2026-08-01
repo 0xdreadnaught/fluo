@@ -17,11 +17,11 @@ type Font struct {
 	buf sfnt.Buffer
 	mu  sync.Mutex
 
-	// atlas is the shared SDF glyph atlas for this font: every Face
-	// built from NewFace(f, ...) draws from the same Atlas, since
-	// glyph SDFs are rasterized once at sdfRasterPx and reused at any
-	// draw size. It is guarded by atlasMu rather than mu: fetching a
-	// glyph (Atlas.glyph) calls back into Font.rasterGlyph, which
+	// atlas is the shared glyph atlas for this font: every Face built
+	// from NewFace(f, ...) draws from the same Atlas, which caches one
+	// coverage mask per (glyph, device px) pair across all of them. It
+	// is guarded by atlasMu rather than mu: fetching a glyph
+	// (Atlas.glyphCoverage) calls back into Font.rasterGlyph, which
 	// locks mu itself, so guarding the atlas pointer with mu would
 	// deadlock any caller that held mu across that call. atlasMu only
 	// ever protects the pointer/init, never a rasterGlyph call.

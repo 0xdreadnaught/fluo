@@ -150,7 +150,7 @@ func TestText(t *testing.T) {
 // draw calls below changes from TestText; only the framebuffer size and
 // the scale passed to Begin do. This proves the renderer's scale
 // (fbW/winW, the same value app.Surface.Frame derives and passes to
-// Begin) actually flows through to SDF glyph quad placement/sizing (via
+// Begin) actually flows through to glyph quad placement/sizing (via
 // the vertex shader's aPos*uScale — see shader.go) and the scissor clip
 // path (applyClip's rd.scale multiply), producing a crisp 2x-resolution
 // render of the SAME logical layout as text.png — not a blurry pixel
@@ -179,7 +179,7 @@ func TestText2x(t *testing.T) {
 }
 
 // TestHDText is the HD-text golden: the same logical line of text drawn via
-// Face.Draw (the crisp direct grayscale-AA path, not SDF) twice into one
+// Face.Draw (the crisp direct grayscale-AA path) twice into one
 // 320x120 framebuffer — once at scale 1 (top row, device px == logical px)
 // and once at scale 2 (bottom row, logical coordinates chosen so the 2x
 // device-pixel result lands in the frame's bottom half) — each its own

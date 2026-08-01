@@ -98,7 +98,7 @@ func newWhiteTexture() uint32 {
 // (multiplied into applyClip's scissor rect and DrawBackdropBlur's
 // snapshot region — see blur.go). Everything else the Renderer accepts —
 // FillRect/FillRoundedRect/StrokeRoundedRect/DrawShadow/DrawQuad/
-// DrawSDFQuads/PushClip rects, and glyph placement upstream in
+// DrawGlyphs/PushClip rects, and glyph placement upstream in
 // text.Face.Draw — is in logical px and never multiplies by scale itself;
 // scale is applied exactly once, uniformly, right here.
 //
@@ -239,11 +239,14 @@ func (rd *Renderer) DrawQuad(dst, src render.Rect, tex render.TextureID, tint re
 	rd.quad(1, dst, src, tint, [4]float32{}, [2]float32{}, uint32(tex))
 }
 
-// DrawSDFQuads draws glyphs from an SDF alpha atlas with the given color.
+// DrawSDFQuads is a no-op.
+//
+// Deprecated: this backend no longer has a signed-distance-field text
+// pipeline — the shader's SDF branch went away with it — and nothing in
+// fluo produces an SDF atlas to feed it. It is kept only to satisfy
+// render.Renderer for callers that still reference the method. Use
+// DrawGlyphs.
 func (rd *Renderer) DrawSDFQuads(quads []render.GlyphQuad, tex render.TextureID, c render.Color) {
-	for _, q := range quads {
-		rd.quad(2, q.Dst, q.Src, c, [4]float32{}, [2]float32{}, uint32(tex))
-	}
 }
 
 // DrawGlyphs draws grayscale-coverage glyph quads (shader mode 7 — alpha

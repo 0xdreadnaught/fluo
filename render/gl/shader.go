@@ -37,21 +37,17 @@ void main(){
     vec4 c = vColor;
     if (vMode == 1) {
         c *= texture(uTex, vUV);
-    } else if (vMode == 2) {
-        float s = texture(uTex, vUV).r;
-        float w = fwidth(s);
-        c.a *= smoothstep(0.5 - w, 0.5 + w, s);
     } else if (vMode == 7) {
         // Direct grayscale-AA text: the coverage mask already IS the
-        // antialiasing (no smoothstep/fwidth needed, unlike mode 2's SDF).
+        // antialiasing, so it is applied straight to alpha with no
+        // smoothstep/fwidth reconstruction.
         c.a *= texture(uTex, vUV).r;
     } else if (vMode >= 3) {
         float d = sdRoundBox(vPos - vRect.xy, vRect.zw, vExtra.x);
         // AA band width is derived from the screen-space derivative of d
-        // (fwidth), the same principle mode 2's SDF text path uses, rather
-        // than a fixed logical-unit width — so rounded-rect/stroke/shadow
-        // edges stay ~1 device pixel wide at any scale (crisp at scale>1,
-        // no sub-pixel aliasing at scale<1).
+        // (fwidth) rather than a fixed logical-unit width — so rounded-
+        // rect/stroke/shadow edges stay ~1 device pixel wide at any scale
+        // (crisp at scale>1, no sub-pixel aliasing at scale<1).
         float aa = fwidth(d);
         if (vMode == 3) c.a *= clamp(0.5 - d/aa, 0.0, 1.0);
         else if (vMode == 4) {

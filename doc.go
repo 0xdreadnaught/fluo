@@ -32,7 +32,8 @@
 //
 //	render    — the Renderer interface and geometry primitives (Color/
 //	            Point/Size/Rect); render/gl implements it on OpenGL 3.3.
-//	text      — font loading and SDF glyph rasterization on top of render.
+//	text      — font loading, grayscale glyph rasterization into a
+//	            coverage atlas, and single-line layout, on top of render.
 //	core      — the Widget/Element layout engine (Measure/Arrange/Render)
 //	            and the reactive Property[T].
 //	input     — hit-testing, event bubbling, capture, and focus over a

@@ -66,16 +66,21 @@ type Renderer interface {
 	// DrawQuad draws a textured quad with the source rectangle in UV coordinates (0..1) and a tint color.
 	DrawQuad(dst, src Rect, tex TextureID, tint Color)
 
-	// DrawSDFQuads draws glyphs from an SDF alpha atlas with the given color.
-	// Retained for future scaled/animated text; text.Face.Draw's default
-	// (HD) path uses DrawGlyphs instead.
+	// DrawSDFQuads draws glyphs from a signed-distance-field alpha atlas
+	// with the given color.
+	//
+	// Deprecated: nothing in fluo produces an SDF atlas any more — the
+	// built-in text path rasterizes grayscale coverage masks and draws them
+	// with DrawGlyphs. The method is retained on this interface only so
+	// existing implementations keep compiling; the bundled render/gl
+	// backend implements it as a no-op. New code should use DrawGlyphs.
 	DrawSDFQuads(quads []GlyphQuad, tex TextureID, c Color)
 
 	// DrawGlyphs draws grayscale-coverage glyph quads from a coverage atlas
 	// (alpha = texture.r) tinted with c. Quads' Dst is in logical px (the
-	// vertex shader applies uScale); Src is 0..1 atlas UV. Used by
-	// text.Face for crisp, direct grayscale-AA UI text. Distinct from
-	// DrawSDFQuads (SDF path, retained for future scaled/animated text).
+	// vertex shader applies uScale); Src is 0..1 atlas UV. This is the
+	// text-drawing entry point: text.Face uses it for crisp, direct
+	// grayscale-AA UI text.
 	DrawGlyphs(quads []GlyphQuad, tex TextureID, c Color)
 
 	// Scale returns the current frame's device-pixels-per-logical-pixel

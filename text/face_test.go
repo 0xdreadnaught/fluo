@@ -34,12 +34,10 @@ func loadCJKFallback(t *testing.T) *Font {
 }
 
 // recordingRenderer is a minimal render.Renderer stub for exercising
-// Face.Draw's crisp HD-text path without a GPU: it records DrawGlyphs and
-// DrawSDFQuads calls (so a test can assert which one Draw actually used)
-// and reports a fixed scale, matching how app.Surface would report the
-// current frame's device-pixels-per-logical-pixel factor. Every other
-// method is a no-op; Draw only calls Scale, DrawGlyphs, and (were it ever
-// reached) DrawSDFQuads.
+// Face.Draw's crisp HD-text path without a GPU: it records DrawGlyphs
+// calls and reports a fixed scale, matching how app.Surface would report
+// the current frame's device-pixels-per-logical-pixel factor. Every other
+// method is a no-op; Draw only calls Scale and DrawGlyphs.
 // It also hands out a DISTINCT TextureID per CreateTexture call and records
 // the texture each DrawGlyphs call was handed (glyphTex, one entry per
 // call): a batch is only correct if it is drawn with ITS OWN atlas page's
@@ -51,7 +49,6 @@ type recordingRenderer struct {
 	glyphCalls int
 	glyphQuads []render.GlyphQuad
 	glyphTex   []render.TextureID
-	sdfCalls   int
 	nextTex    render.TextureID
 }
 
@@ -75,7 +72,6 @@ func (r *recordingRenderer) DeleteTexture(id render.TextureID)                  
 func (r *recordingRenderer) DrawQuad(dst, src render.Rect, tex render.TextureID, tint render.Color) {
 }
 func (r *recordingRenderer) DrawSDFQuads(quads []render.GlyphQuad, tex render.TextureID, c render.Color) {
-	r.sdfCalls++
 }
 func (r *recordingRenderer) DrawGlyphs(quads []render.GlyphQuad, tex render.TextureID, c render.Color) {
 	r.glyphCalls++
@@ -116,11 +112,10 @@ func visibleGlyphCount(t *testing.T, fa *Face, s string, scale float32) int {
 }
 
 // TestFaceDrawUsesDrawGlyphs is the HD-text Face.Draw test: it asserts Draw
-// calls DrawGlyphs (never DrawSDFQuads — SDF is retained for future
-// scaled/animated text but is no longer Face.Draw's default path), the
-// emitted quad count equals the visible-glyph count (spaces skipped), and
-// every quad's device origin (Dst.X*scale, Dst.Y*scale) is pixel-snapped
-// (integer-valued, within float rounding) at both scale 1 and scale 2.
+// batches every glyph into a single DrawGlyphs call, the emitted quad count
+// equals the visible-glyph count (spaces skipped), and every quad's device
+// origin (Dst.X*scale, Dst.Y*scale) is pixel-snapped (integer-valued,
+// within float rounding) at both scale 1 and scale 2.
 func TestFaceDrawUsesDrawGlyphs(t *testing.T) {
 	f, err := Load(goregular.TTF)
 	if err != nil {
@@ -133,9 +128,6 @@ func TestFaceDrawUsesDrawGlyphs(t *testing.T) {
 		rr := &recordingRenderer{scale: scale}
 		fa.Draw(rr, render.Point{X: 3.25, Y: 5.5}, s, render.RGB(255, 255, 255))
 
-		if rr.sdfCalls != 0 {
-			t.Errorf("scale=%v: DrawSDFQuads called %d times; Face.Draw must use DrawGlyphs, not the SDF path", scale, rr.sdfCalls)
-		}
 		if rr.glyphCalls != 1 {
 			t.Fatalf("scale=%v: DrawGlyphs called %d times, want 1", scale, rr.glyphCalls)
 		}

@@ -12,7 +12,7 @@ before its dependencies. Check items off as they land.
 - [x] `render.Renderer` interface + primitives (Color/Point/Size/Rect/Thickness)
 - [x] DPI scale factor plumbed through the renderer from day one
 - [x] GL backend: batched colored-quad pipeline
-- [x] SDF text: font load → glyph raster → atlas → `DrawText` (crisp at any scale)
+- [x] Text: font load → glyph raster → coverage atlas → `Face.Draw`/`Renderer.DrawGlyphs` (crisp at any scale)
 - [x] Rounded-rect + anti-aliased fill/stroke shader
 - [x] Clip stack (scissor/stencil)
 - [x] Drop shadow + image draw
