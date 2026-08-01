@@ -254,6 +254,61 @@ func TestTextBoxCaretBlinkTogglesWithTimers(t *testing.T) {
 	}
 }
 
+// The blink timer must exist only while the box is focused. A repeating
+// timer's closure retains the TextBox and only OnFocusChanged(false) stops
+// it, so a never-focused box that schedules one holds it for the queue's
+// whole lifetime — one stranded timer per TextBox per tree rebuild, each of
+// which Queue.Advance re-sorts on every fire.
+func TestTextBoxBlinkTimerOnlyWhileFocused(t *testing.T) {
+	start := time.Now()
+	q := timers.NewQueue(start)
+	tb := NewTextBox(nil)
+	tb.SetTimers(q)
+
+	if tb.blinkTimer != nil {
+		t.Fatal("blinkTimer non-nil after SetTimers on an unfocused box, want nil")
+	}
+	if got := q.Len(); got != 0 {
+		t.Fatalf("q.Len() after SetTimers on an unfocused box = %d, want 0", got)
+	}
+
+	// Caret-affecting mutations call restartBlink too — the common rebuild
+	// path — and must not schedule anything either while unfocused.
+	tb.SetText("hello")
+	tb.SetCaret(2)
+	if got := q.Len(); got != 0 {
+		t.Fatalf("q.Len() after unfocused SetText/SetCaret = %d, want 0", got)
+	}
+
+	// Nothing pending means nothing to toggle the caret.
+	q.Advance(start.Add(2 * caretBlinkPeriod))
+	if !tb.caretVisible {
+		t.Fatal("caretVisible = false on an unfocused box after two blink periods, want true (no timer running)")
+	}
+
+	// Focus starts it.
+	tb.OnFocusChanged(true)
+	if tb.blinkTimer == nil {
+		t.Fatal("blinkTimer nil after gaining focus, want a running timer")
+	}
+	if got := q.Len(); got != 1 {
+		t.Fatalf("q.Len() after gaining focus = %d, want 1", got)
+	}
+	q.Advance(start.Add(3 * caretBlinkPeriod))
+	if tb.caretVisible {
+		t.Fatal("caretVisible = true after a blink period while focused, want false (timer running)")
+	}
+
+	// Blur stops it again.
+	tb.OnFocusChanged(false)
+	if tb.blinkTimer != nil {
+		t.Fatal("blinkTimer non-nil after losing focus, want nil")
+	}
+	if got := q.Len(); got != 0 {
+		t.Fatalf("q.Len() after losing focus = %d, want 0", got)
+	}
+}
+
 func TestTextBoxSetTimersNilRestoresSolidCaret(t *testing.T) {
 	start := time.Now()
 	q := timers.NewQueue(start)
