@@ -70,7 +70,7 @@ func (b *captionButton) MeasureContent(available render.Size) render.Size {
 // shape in WindowText, both centered within the cell's own bounds. The OLD
 // look drew a fully transparent rest/hover fill with a distinct
 // CloseButtonHover red reserved for the close button (relying on the
-// TitleBar's own LayerBackground showing through at rest); the classic
+// TitleBar's own background showing through at rest); the classic
 // restyle drops that entirely — a Win2000 close button is a plain gray
 // raised square, not red on hover — so all three caption buttons share one
 // look and only differ by glyph.

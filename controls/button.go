@@ -296,46 +296,6 @@ func (b *Button) ArrangeContent(bounds render.Rect) {
 	core.ArrangeWidget(b.label, b.labelRect)
 }
 
-// stateColors resolves the fill, stroke (zero-alpha means "no stroke"), and
-// label color for the button's current state:
-//
-//   - disabled: ControlFillDisabled/ControlStrokeDisabled/TextDisabled, or
-//     for an accent button, AccentDisabled fill with no stroke.
-//   - accent (enabled): Accent/AccentHover/AccentPressed fill, no stroke,
-//     AccentText label.
-//   - default (enabled): ControlFill/Hover/Pressed fill, ControlStroke
-//     stroke, TextPrimary label.
-func (b *Button) stateColors() (fill, stroke, label render.Color) {
-	c := b.colors
-
-	if !b.enabled {
-		if b.accent {
-			return c.AccentDisabled, render.Color{}, c.TextDisabled
-		}
-		return c.ControlFillDisabled, c.ControlStrokeDisabled, c.TextDisabled
-	}
-
-	if b.accent {
-		fill = c.Accent
-		switch {
-		case b.click.Pressed():
-			fill = c.AccentPressed
-		case b.click.Hover():
-			fill = c.AccentHover
-		}
-		return fill, render.Color{}, c.AccentText
-	}
-
-	fill = c.ControlFill
-	switch {
-	case b.click.Pressed():
-		fill = c.ControlFillPressed
-	case b.click.Hover():
-		fill = c.ControlFillHover
-	}
-	return fill, c.ControlStroke, c.TextPrimary
-}
-
 // drawOuterBorder paints a 1px single-tone rectangle border around rect's
 // perimeter — the classic "default button" marker: an extra ButtonDarkShadow
 // ring drawn just outside a button's raised bevel.
@@ -497,10 +457,11 @@ func (b *Button) OnKey(e *input.KeyEvent) {
 }
 
 // ToggleButton is a Button that toggles a boolean checked state on click,
-// rendering the checked state as accent-on (Accent-family fill, no stroke,
-// AccentText label) regardless of accent — it has no independent accent
-// flag of its own; checked IS the accent look, achieved by driving the
-// embedded Button's own SetAccent as checked changes.
+// rendering the checked state as classic sunken chrome (drawSunken over
+// ButtonFace, with the same +1,+1 label nudge a held-down button gets) — it
+// has no independent accent flag of its own; checked IS the pressed-in look,
+// achieved by driving the embedded Button's own SetAccent as checked changes
+// and reading that back through isToggle (see Button.Render).
 //
 // ToggleButton embeds Button BY VALUE and never overrides most of its
 // methods (OnPointer, Render, RenderOverlay, ...): Go method promotion is

@@ -11,10 +11,6 @@ import "github.com/0xdreadnaught/fluo/render"
 // WindowText/GrayText, selection from Highlight/HighlightText, and title
 // bars from the CaptionFrom→CaptionTo gradient (CaptionText/
 // InactiveCaption for the caption label and the unfocused-window variant).
-//
-// The remaining fields are the pre-v0.2 flat token set, kept only until
-// each control is migrated to the classic fields above (see the
-// "deprecated" comment on each); new code should not read them.
 type ColorTokens struct {
 	// ButtonFace is the flat fill of buttons, panels, and other 3D chrome.
 	ButtonFace render.Color
@@ -58,42 +54,6 @@ type ColorTokens struct {
 	// so the full set is available to whatever else wants it.
 	SeverityInfo, SeveritySuccess, SeverityWarning, SeverityError render.Color
 
-	// WindowBackground, LayerBackground, and CardBackground are surface
-	// fills at increasing elevation.
-	//
-	// deprecated: migrating to classic tokens; removed after control restyle
-	WindowBackground, LayerBackground, CardBackground render.Color
-	// TextPrimary, TextSecondary, and TextDisabled are body text at
-	// decreasing emphasis.
-	//
-	// deprecated: migrating to classic tokens; removed after control restyle
-	TextPrimary, TextSecondary, TextDisabled render.Color
-	// Accent, AccentHover, AccentPressed, and AccentText are the brand
-	// accent color and its interaction states.
-	//
-	// deprecated: migrating to classic tokens; removed after control restyle
-	Accent, AccentHover, AccentPressed, AccentText render.Color
-	// ControlFill, ControlFillHover, and ControlFillPressed are a control's
-	// fill at rest and under pointer interaction.
-	//
-	// deprecated: migrating to classic tokens; removed after control restyle
-	ControlFill, ControlFillHover, ControlFillPressed render.Color
-	// ControlStroke is a control's default border.
-	//
-	// deprecated: migrating to classic tokens; removed after control restyle
-	ControlStroke render.Color
-	// SelectionBackground is the fill for selected text/content regions.
-	//
-	// deprecated: migrating to classic tokens; removed after control restyle
-	SelectionBackground render.Color
-	// ControlFillDisabled, ControlStrokeDisabled, and AccentDisabled for disabled control states.
-	//
-	// deprecated: migrating to classic tokens; removed after control restyle
-	ControlFillDisabled, ControlStrokeDisabled, AccentDisabled render.Color
-	// SelectionForeground and ScrimBackground for text selection and scrim overlays.
-	//
-	// deprecated: migrating to classic tokens; removed after control restyle
-	SelectionForeground, ScrimBackground render.Color
 	// AcrylicTint is the translucent tint composited over a backdrop-blur
 	// acrylic/mica surface (see controls.AcrylicSurface). This is a live token
 	// read by AcrylicSurface — the classic themes keep it even though they

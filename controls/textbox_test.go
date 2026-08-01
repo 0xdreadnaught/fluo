@@ -195,26 +195,26 @@ func TestTextBoxPlaceholderShowsWhenEmptyRegardlessOfFocus(t *testing.T) {
 	tb := NewTextBox(nil).SetPlaceholder("Enter name")
 
 	s, c := tb.displayText()
-	if s != "Enter name" || c != tb.colors.TextDisabled {
-		t.Fatalf("unfocused empty: displayText() = (%q,%v), want (%q,TextDisabled)", s, c, "Enter name")
+	if s != "Enter name" || c != tb.colors.GrayText {
+		t.Fatalf("unfocused empty: displayText() = (%q,%v), want (%q,GrayText)", s, c, "Enter name")
 	}
 
 	tb.OnFocusChanged(true)
 	s, c = tb.displayText()
-	if s != "Enter name" || c != tb.colors.TextDisabled {
-		t.Fatalf("focused empty: displayText() = (%q,%v), want (%q,TextDisabled) (placeholder ignores focus)", s, c, "Enter name")
+	if s != "Enter name" || c != tb.colors.GrayText {
+		t.Fatalf("focused empty: displayText() = (%q,%v), want (%q,GrayText) (placeholder ignores focus)", s, c, "Enter name")
 	}
 
 	tb.SetText("x")
 	s, c = tb.displayText()
-	if s != "x" || c != tb.colors.TextPrimary {
-		t.Fatalf("non-empty: displayText() = (%q,%v), want (%q,TextPrimary)", s, c, "x")
+	if s != "x" || c != tb.colors.WindowText {
+		t.Fatalf("non-empty: displayText() = (%q,%v), want (%q,WindowText)", s, c, "x")
 	}
 
 	tb.SetEnabled(false)
 	s, c = tb.displayText()
-	if s != "x" || c != tb.colors.TextDisabled {
-		t.Fatalf("non-empty disabled: displayText() = (%q,%v), want (%q,TextDisabled)", s, c, "x")
+	if s != "x" || c != tb.colors.GrayText {
+		t.Fatalf("non-empty disabled: displayText() = (%q,%v), want (%q,GrayText)", s, c, "x")
 	}
 }
 

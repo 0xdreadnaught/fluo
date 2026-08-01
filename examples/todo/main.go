@@ -39,7 +39,7 @@ func main() {
 	list.SetWidth(240)
 	list.SetHeight(160)
 
-	count := controls.NewTextBlock(body, "0 items").SetColor(th.Color.TextSecondary)
+	count := controls.NewTextBlock(body, "0 items").SetColor(th.Color.GrayText)
 	updateCount := func() { count.SetText(fmt.Sprintf("%d items", items.Len())) }
 	cancelCount := items.OnChanged(updateCount)
 	updateCount()

@@ -29,14 +29,14 @@ func TestLightDarkDiffer(t *testing.T) {
 	if l.Color.ButtonFace == d.Color.ButtonFace {
 		t.Fatal("ButtonFace identical")
 	}
-	if l.Color.WindowBackground == d.Color.WindowBackground {
-		t.Fatal("backgrounds identical")
+	if l.Color.WindowWell == d.Color.WindowWell {
+		t.Fatal("wells identical")
 	}
-	if l.Color.TextPrimary == d.Color.TextPrimary {
+	if l.Color.WindowText == d.Color.WindowText {
 		t.Fatal("text identical")
 	}
-	if l.Color.SelectionBackground == d.Color.SelectionBackground {
-		t.Fatal("selection background should differ between variants")
+	if l.Color.Highlight == d.Color.Highlight {
+		t.Fatal("selection fill should differ between variants")
 	}
 	if l.Metric != d.Metric {
 		t.Fatal("metrics should be SHARED between variants")
@@ -48,8 +48,8 @@ func TestLightDarkDiffer(t *testing.T) {
 
 func TestConstructorsReturnFreshCopies(t *testing.T) {
 	a, b := Dark(), Dark()
-	a.Color.Accent = render.RGB(1, 2, 3)
-	if b.Color.Accent == a.Color.Accent {
+	a.Color.Highlight = render.RGB(1, 2, 3)
+	if b.Color.Highlight == a.Color.Highlight {
 		t.Fatal("constructors share state")
 	}
 
@@ -77,57 +77,6 @@ func TestCornerRadiiAreZero(t *testing.T) {
 		if th.Metric.ControlCornerRadius != 0 {
 			t.Fatalf("%s ControlCornerRadius = %v, want 0", th.Name, th.Metric.ControlCornerRadius)
 		}
-	}
-}
-
-func TestSelectionForegroundPresent(t *testing.T) {
-	l := Light()
-	d := Dark()
-
-	// Verify the tokens exist and are set
-	_ = l.Color.SelectionForeground
-	_ = d.Color.SelectionForeground
-
-	// Dark: RGB(255, 255, 255)
-	expectedDark := render.RGB(255, 255, 255)
-	if d.Color.SelectionForeground != expectedDark {
-		t.Fatalf("dark SelectionForeground = %v, want %v", d.Color.SelectionForeground, expectedDark)
-	}
-
-	// Light: RGB(255, 255, 255)
-	expectedLight := render.RGB(255, 255, 255)
-	if l.Color.SelectionForeground != expectedLight {
-		t.Fatalf("light SelectionForeground = %v, want %v", l.Color.SelectionForeground, expectedLight)
-	}
-}
-
-func TestScrimBackgroundPresent(t *testing.T) {
-	l := Light()
-	d := Dark()
-
-	// Verify the tokens exist and are set
-	_ = l.Color.ScrimBackground
-	_ = d.Color.ScrimBackground
-
-	// Dark: RGBA(0, 0, 0, 120)
-	expectedDark := render.RGBA(0, 0, 0, 120)
-	if d.Color.ScrimBackground != expectedDark {
-		t.Fatalf("dark ScrimBackground = %v, want %v", d.Color.ScrimBackground, expectedDark)
-	}
-
-	// Light: RGBA(0, 0, 0, 90)
-	expectedLight := render.RGBA(0, 0, 0, 90)
-	if l.Color.ScrimBackground != expectedLight {
-		t.Fatalf("light ScrimBackground = %v, want %v", l.Color.ScrimBackground, expectedLight)
-	}
-}
-
-func TestScrimBackgroundLightDarkDiffer(t *testing.T) {
-	l := Light()
-	d := Dark()
-
-	if l.Color.ScrimBackground == d.Color.ScrimBackground {
-		t.Fatal("ScrimBackground should differ between light and dark")
 	}
 }
 

@@ -280,7 +280,7 @@ func (t *TextBox) SetText(s string) *TextBox {
 	return t
 }
 
-// SetPlaceholder sets the text shown (in TextDisabled color) whenever
+// SetPlaceholder sets the text shown (in GrayText) whenever
 // Text() == "", regardless of focus state — simpler and more common than
 // hiding it while focused, and the normative choice for this control.
 func (t *TextBox) SetPlaceholder(s string) *TextBox {

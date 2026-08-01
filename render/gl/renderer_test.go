@@ -336,8 +336,8 @@ func TestScrollHorizontal(t *testing.T) {
 
 // TestClassicButton is the Phase 4 milestone golden: a themed, laid-out
 // button in a real GL context, composed ONLY from theme.Light tokens (no
-// literal colors/metrics) — a card-colored Border filling the frame (inset
-// 8px) with an accent button composite centered inside it.
+// literal colors/metrics) — a ButtonFace Border filling the frame (inset
+// 8px) with a Highlight/HighlightText button composite centered inside it.
 func TestClassicButton(t *testing.T) {
 	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
@@ -350,10 +350,10 @@ func TestClassicButton(t *testing.T) {
 		}
 		face := text.NewFace(f, th.Type.BodySize)
 
-		label := controls.NewTextBlock(face, "Accept").SetColor(th.Color.AccentText)
+		label := controls.NewTextBlock(face, "Accept").SetColor(th.Color.HighlightText)
 
 		button := controls.NewBorder().
-			SetBackground(th.Color.Accent).
+			SetBackground(th.Color.Highlight).
 			SetRadius(th.Metric.ControlCornerRadius).
 			SetPadding(render.Thickness{
 				Left: th.Metric.PaddingL, Right: th.Metric.PaddingL,
@@ -363,7 +363,7 @@ func TestClassicButton(t *testing.T) {
 		button.SetAlign(core.Center, core.Center)
 
 		card := controls.NewBorder().
-			SetBackground(th.Color.CardBackground).
+			SetBackground(th.Color.ButtonFace).
 			SetRadius(th.Metric.CornerRadius).
 			SetChild(button)
 
@@ -396,7 +396,7 @@ func TestButtons(t *testing.T) {
 		row := controls.NewStackPanel(controls.Horizontal).SetGap(12).Add(def, accent, disabled)
 
 		frame := render.Rect{X: 0, Y: 0, W: 320, H: 60}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(row, render.Size{W: frame.W, H: frame.H})
 		desired := core.DesiredSizeOf(row)
@@ -439,7 +439,7 @@ func TestButtonPill(t *testing.T) {
 		row := controls.NewStackPanel(controls.Horizontal).SetGap(12).Add(rest, accent, checked, focused)
 
 		frame := render.Rect{X: 0, Y: 0, W: 420, H: 60}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(row, render.Size{W: frame.W, H: frame.H})
 		desired := core.DesiredSizeOf(row)
@@ -481,7 +481,7 @@ func TestButtonCircle(t *testing.T) {
 		row := controls.NewStackPanel(controls.Horizontal).SetGap(12).Add(rest, accent, checked, focused)
 
 		frame := render.Rect{X: 0, Y: 0, W: 320, H: 70}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(row, render.Size{W: frame.W, H: frame.H})
 		desired := core.DesiredSizeOf(row)
@@ -524,7 +524,7 @@ func TestToggles(t *testing.T) {
 			Add(cbOff, cbOn, rbOff, rbOn, swOff, swOn)
 
 		frame := render.Rect{X: 0, Y: 0, W: 360, H: 60}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(row, render.Size{W: frame.W, H: frame.H})
 		desired := core.DesiredSizeOf(row)
@@ -561,7 +561,7 @@ func TestTextBox(t *testing.T) {
 		tb.OnFocusChanged(true)
 
 		frame := render.Rect{X: 0, Y: 0, W: 200, H: 40}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
 		core.ArrangeWidget(tb, frame)
@@ -605,7 +605,7 @@ func TestTextBoxPreedit(t *testing.T) {
 		router.CompositionUpdate("world", 3) // preedit "world", caret between "wor" and "ld"
 
 		frame := render.Rect{X: 0, Y: 0, W: 200, H: 40}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
 		core.ArrangeWidget(tb, frame)
@@ -642,7 +642,7 @@ func TestTextBoxMultiline(t *testing.T) {
 		tb.OnFocusChanged(true)
 
 		frame := render.Rect{X: 0, Y: 0, W: 220, H: 100}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
 		core.ArrangeWidget(tb, frame)
@@ -686,7 +686,7 @@ func TestTextBoxWordWrap(t *testing.T) {
 		tb.OnFocusChanged(true)
 
 		frame := render.Rect{X: 0, Y: 0, W: 180, H: 140}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
 		core.ArrangeWidget(tb, frame)
@@ -722,7 +722,7 @@ func TestTextBoxVScroll(t *testing.T) {
 		tb.OnFocusChanged(true)
 
 		frame := render.Rect{X: 0, Y: 0, W: 220, H: 100}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
 		core.ArrangeWidget(tb, frame)
@@ -763,7 +763,7 @@ func TestTextBoxGutter(t *testing.T) {
 		tb.OnFocusChanged(true)
 
 		frame := render.Rect{X: 0, Y: 0, W: 220, H: 160}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
 		core.ArrangeWidget(tb, frame)
@@ -787,7 +787,7 @@ func TestSliderProgress(t *testing.T) {
 			Add(slider, progress)
 
 		frame := render.Rect{X: 0, Y: 0, W: 200, H: 60}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(stack, render.Size{W: frame.W, H: frame.H})
 		desired := core.DesiredSizeOf(stack)
@@ -814,7 +814,7 @@ func TestSliderVertical(t *testing.T) {
 		slider := controls.NewSlider().SetOrientation(controls.Vertical).SetRange(0, 100).SetValue(65)
 
 		frame := render.Rect{X: 0, Y: 0, W: 60, H: 200}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(slider, render.Size{W: frame.W, H: frame.H})
 		desired := core.DesiredSizeOf(slider)
@@ -840,7 +840,7 @@ func TestProgressVertical(t *testing.T) {
 		progress := controls.NewProgressBar().SetOrientation(controls.Vertical).SetValue(0.6)
 
 		frame := render.Rect{X: 0, Y: 0, W: 60, H: 200}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(progress, render.Size{W: frame.W, H: frame.H})
 		desired := core.DesiredSizeOf(progress)
@@ -867,7 +867,7 @@ func TestProgressSolid(t *testing.T) {
 		progress := controls.NewProgressBar().SetSolid(true).SetValue(0.6)
 
 		frame := render.Rect{X: 0, Y: 0, W: 200, H: 40}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(progress, render.Size{W: frame.W, H: frame.H})
 		desired := core.DesiredSizeOf(progress)
@@ -914,7 +914,7 @@ func TestComboOpen(t *testing.T) {
 		router.SetRoot(host)
 
 		frame := render.Rect{X: 0, Y: 0, W: 220, H: 160}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		// First layout pass: gives the field real arranged bounds, so the
 		// popup (opened below) has a real anchor rect to place against.
@@ -936,7 +936,7 @@ func TestComboOpen(t *testing.T) {
 
 // TestListView is the Phase 7 Task 3 golden: a ListView of 12 items
 // ("Item 01".."Item 12"), index 3 ("Item 04") selected — showing the
-// SelectionBackground/SelectionForeground row highlight — scrolled to the
+// Highlight/HighlightText row band — scrolled to the
 // top (via the Task 3 ScrollTo addition, mirroring ScrollViewer.ScrollTo)
 // so the first several rows are visible with the scroll thumb showing
 // (content taller than the 140px-high viewport), inside a 200x160 frame.
@@ -969,7 +969,7 @@ func TestListView(t *testing.T) {
 		root := controls.NewCanvas().Add(lv, 10, 10)
 
 		frame := render.Rect{X: 0, Y: 0, W: 200, H: 160}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
 		core.ArrangeWidget(root, frame)
@@ -979,7 +979,7 @@ func TestListView(t *testing.T) {
 
 // TestTreeExpander is the Phase 7 Task 4 golden: a TreeView (left) showing
 // two roots — "src" (expanded, with children "core", "controls" (the
-// current selection, showing the SelectionBackground/SelectionForeground
+// current selection, showing the Highlight/HighlightText
 // row highlight), and "render") and "docs" (collapsed, hiding its own single
 // child "readme.md" — proving the '>' collapsed chevron alongside "src"'s
 // 'v' expanded one) — beside an expanded Expander (right) titled "Details"
@@ -1014,7 +1014,7 @@ func TestTreeExpander(t *testing.T) {
 			Add(details, 140, 10)
 
 		frame := render.Rect{X: 0, Y: 0, W: 260, H: 180}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
 		core.ArrangeWidget(root, frame)
@@ -1023,7 +1023,7 @@ func TestTreeExpander(t *testing.T) {
 }
 
 // TestTabs is the Phase 7 Task 5 golden: a TabControl with 3 tabs ("One",
-// "Two", "Three"), the second ("Two") selected — showing the Accent
+// "Two", "Three"), the second ("Two") selected — showing the Highlight
 // underline beneath its header cell and its TextBlock content ("Tab two
 // content") below the strip — inside a 240x120 frame. "One" and "Three"'s
 // own content stays attached (per TabControl's normative "hidden tabs
@@ -1052,7 +1052,7 @@ func TestTabs(t *testing.T) {
 		root := controls.NewCanvas().Add(tc, 10, 10)
 
 		frame := render.Rect{X: 0, Y: 0, W: 240, H: 120}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
 		core.ArrangeWidget(root, frame)
@@ -1111,7 +1111,7 @@ func TestMenuOpen(t *testing.T) {
 		router.SetRoot(host)
 
 		frame := render.Rect{X: 0, Y: 0, W: 260, H: 200}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		// First layout pass: gives the bar real arranged bounds, so both the
 		// click point below and the popup's anchor rect (computed from those
@@ -1181,7 +1181,7 @@ func TestMenuDisabledItem(t *testing.T) {
 		router.SetRoot(host)
 
 		frame := render.Rect{X: 0, Y: 0, W: 160, H: 140}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		// First layout pass: gives the bar real arranged bounds, so the click
 		// point below is correct.
@@ -1248,7 +1248,7 @@ func TestDataGridHScroll(t *testing.T) {
 		root := controls.NewCanvas().Add(dg, 10, 10)
 
 		frame := render.Rect{X: 0, Y: 0, W: 280, H: 160}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
 		core.ArrangeWidget(root, frame)
@@ -1263,11 +1263,11 @@ func TestDataGridHScroll(t *testing.T) {
 // row — inside a 280x180 frame.
 // TestDataGrid is the Phase 7 Task 8 golden: a DataGrid with 3 columns
 // ("Name" Px 80, "Email" Star, "Age" Px 60) and 20 rows ("User NN",
-// "uNN@x.io", 20+NN), row 2 selected — showing the SelectionBackground/
-// SelectionForeground row band — scrolled to the top (offset 0, the
+// "uNN@x.io", 20+NN), row 2 selected — showing the Highlight/HighlightText
+// row band — scrolled to the top (offset 0, the
 // zero-value default; no explicit scroll needed) so the header (fixed,
-// LayerBackground fill + TextSecondary titles + its own bottom border) sits
-// above the first several body rows, each with its own 1px ControlStroke
+// raised ButtonFace cells + WindowText titles) sits
+// above the first several body rows, each with its own 1px ButtonShadow
 // grid line, with the scroll thumb showing (20 rows taller than the visible
 // body), inside a 300x180 frame. Sized and positioned exactly like
 // TestListView's own ScrollTo(0)-pinned golden: explicit SetWidth/SetHeight,
@@ -1304,7 +1304,7 @@ func TestDataGrid(t *testing.T) {
 		root := controls.NewCanvas().Add(dg, 10, 10)
 
 		frame := render.Rect{X: 0, Y: 0, W: 300, H: 180}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
 		core.ArrangeWidget(root, frame)
@@ -1338,7 +1338,7 @@ func TestTitleBar(t *testing.T) {
 		router.SetRoot(tb)
 
 		frame := render.Rect{X: 0, Y: 0, W: 300, H: 40}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		bounds := render.Rect{X: 0, Y: (frame.H - 32) / 2, W: 300, H: 32}
 		core.MeasureWidget(tb, render.Size{W: bounds.W, H: bounds.H})
@@ -1419,7 +1419,7 @@ func TestDialog(t *testing.T) {
 		router.SetRoot(host)
 
 		frame := render.Rect{X: 0, Y: 0, W: 280, H: 180}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		// First layout pass: gives the host (and its content) real arranged
 		// bounds, so ShowDialog's anchor (core.BoundsOf(host)) is correct.
@@ -1461,10 +1461,10 @@ func TestToastStack(t *testing.T) {
 		face := text.NewFace(f, th.Type.BodySize)
 
 		host := controls.NewOverlayHost()
-		host.SetContent(controls.NewFixed(220, 140, th.Color.WindowBackground))
+		host.SetContent(controls.NewFixed(220, 140, th.Color.ButtonFace))
 
 		frame := render.Rect{X: 0, Y: 0, W: 220, H: 140}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		// First layout pass: gives the host real arranged bounds, so
 		// arrangeToasts has a real corner to stack against.
@@ -1501,10 +1501,10 @@ func TestToastSeverityStack(t *testing.T) {
 		face := text.NewFace(f, th.Type.BodySize)
 
 		host := controls.NewOverlayHost()
-		host.SetContent(controls.NewFixed(220, 260, th.Color.WindowBackground))
+		host.SetContent(controls.NewFixed(220, 260, th.Color.ButtonFace))
 
 		frame := render.Rect{X: 0, Y: 0, W: 220, H: 260}
-		r.FillRect(frame, th.Color.WindowBackground)
+		r.FillRect(frame, th.Color.ButtonFace)
 
 		// First layout pass: gives the host real arranged bounds, so
 		// arrangeToasts has a real corner to stack against.
@@ -1526,7 +1526,7 @@ func TestToastSeverityStack(t *testing.T) {
 
 // TestSplitPanel is the golden for controls.SplitPanel: a Horizontal panel
 // (First left, Second right) at a 0.4 split ratio, First filled with
-// th.Color.ButtonFace and Second with th.Color.Accent so the two panes read
+// th.Color.ButtonFace and Second with th.Color.Highlight so the two panes read
 // as visibly distinct blocks with the raised divider bevel (drawRaised, via
 // bevel.go) running between them.
 func TestSplitPanel(t *testing.T) {
@@ -1536,7 +1536,7 @@ func TestSplitPanel(t *testing.T) {
 
 	testFrame(t, "splitpanel", 200, 120, func(r *glr.Renderer) {
 		first := controls.NewBorder().SetBackground(th.Color.ButtonFace)
-		second := controls.NewBorder().SetBackground(th.Color.Accent)
+		second := controls.NewBorder().SetBackground(th.Color.Highlight)
 
 		sp := controls.NewSplitPanel(controls.Horizontal).SetFirst(first).SetSecond(second)
 		sp.SetSplitRatio(0.4)

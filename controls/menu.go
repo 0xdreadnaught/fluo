@@ -221,7 +221,7 @@ func (card *menuPopupCard) Children() []core.Widget {
 }
 
 // Render draws the classic raised ButtonFace bevel (drawRaised) framing the
-// popup — replacing the pre-restyle rounded CardBackground fill, drop
+// popup — replacing the pre-restyle rounded card fill, drop
 // shadow, and hairline stroke: the bevel itself now reads as the popup's
 // border, with no separate shadow/stroke needed.
 func (card *menuPopupCard) Render(r render.Renderer) {
@@ -442,7 +442,7 @@ func (row *menuSeparatorRow) MeasureContent(render.Size) render.Size {
 
 // Render draws a classic etched groove (drawGroove) spanning the row's own
 // height, inset by PaddingM on both sides — replacing the pre-restyle
-// single 1px ControlStroke rule with the two-tone (ButtonShadow then
+// single 1px hairline rule with the two-tone (ButtonShadow then
 // ButtonHighlight) chiseled line.
 func (row *menuSeparatorRow) Render(r render.Renderer) {
 	bounds := row.Bounds()
