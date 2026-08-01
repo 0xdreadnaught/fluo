@@ -520,37 +520,48 @@ func (t *TextBox) OnSubmit(fn func(string)) *TextBox {
 	return t
 }
 
-// SetTimers wires q as the caret-blink driver: SetTimers schedules a
-// repeating callback every caretBlinkPeriod that flips caretVisible, and the
-// caret is drawn only while caretVisible is true. Passing nil detaches any
-// previously wired queue and reverts to a solid (always-visible-while-
-// focused) caret. Calling SetTimers again (with a different queue, or nil)
-// always stops the previously scheduled timer first, so a superseded queue
-// can never keep toggling this textbox's caret after the fact.
+// SetTimers wires q as the caret-blink driver: while this box is focused, a
+// repeating callback every caretBlinkPeriod flips caretVisible, and the caret
+// is drawn only while caretVisible is true. The timer itself runs only while
+// focused (see restartBlink) — wiring a queue to an unfocused box schedules
+// nothing until it gains focus. Passing nil detaches any previously wired
+// queue and reverts to a solid (always-visible-while-focused) caret. Calling
+// SetTimers again (with a different queue, or nil) always stops the
+// previously scheduled timer first, so a superseded queue can never keep
+// toggling this textbox's caret after the fact.
 func (t *TextBox) SetTimers(q *timers.Queue) *TextBox {
 	t.timerQueue = q
 	t.restartBlink()
 	return t
 }
 
-// restartBlink resets caretVisible to true and, if a timers.Queue is
-// currently wired (t.timerQueue), stops whatever blink timer is running and
-// starts a fresh one — restarting the blink phase from "visible" rather
-// than wherever it happened to be. Called from SetTimers (wiring a new
-// queue), OnFocusChanged(true) (regaining focus), and every caret-affecting
-// mutation (SetCaret, Select, replaceRange, and therefore SetText) so the
-// caret is always visible the instant it moves, never left mid-blink-off
-// from before the input landed. A nil t.timerQueue leaves blinkTimer nil
-// (solid-caret mode, caretVisible is set true but caretShown() ignores it
-// regardless per its own doc comment) — restartBlink is safe to call
-// unconditionally.
+// restartBlink resets caretVisible to true and, if this box is focused AND a
+// timers.Queue is currently wired (t.timerQueue), stops whatever blink timer
+// is running and starts a fresh one — restarting the blink phase from
+// "visible" rather than wherever it happened to be. Called from SetTimers
+// (wiring a new queue), OnFocusChanged(true) (regaining focus), and every
+// caret-affecting mutation (SetCaret, Select, replaceRange, and therefore
+// SetText) so the caret is always visible the instant it moves, never left
+// mid-blink-off from before the input landed. Either condition failing
+// leaves blinkTimer nil — restartBlink is safe to call unconditionally.
+//
+// The focus condition is what keeps the timer from outliving anything. A
+// repeating timer's closure retains the box, and OnFocusChanged(false) is the
+// only thing that stops it, so a box that was never focused in the first
+// place would hold a 530ms timer for the queue's whole lifetime: a consumer
+// that rebuilds its tree strands one per TextBox per rebuild, and
+// timers.Queue.Advance re-sorts every pending item for each timer that fires,
+// so the cost compounds. There is nothing to drive either — caretShown()
+// returns false while unfocused whatever caretVisible says, and with no queue
+// wired the caret is solid (again per caretShown), so neither case has a
+// blink phase to keep in motion.
 func (t *TextBox) restartBlink() {
 	if t.blinkTimer != nil {
 		t.blinkTimer.Stop()
 		t.blinkTimer = nil
 	}
 	t.caretVisible = true
-	if t.timerQueue != nil {
+	if t.focused && t.timerQueue != nil {
 		t.blinkTimer = t.timerQueue.Every(caretBlinkPeriod, func() {
 			t.caretVisible = !t.caretVisible
 		})

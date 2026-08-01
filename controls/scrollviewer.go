@@ -108,12 +108,18 @@ func NewScrollViewer() *ScrollViewer {
 // previously set child is detached (its parent cleared), matching the
 // Border convention: its future invalidations stop climbing into this
 // ScrollViewer.
+//
+// SetChild(nil) clears the child outright rather than panicking: Children,
+// MeasureContent, ArrangeContent and thumbGeometry all already handle a nil
+// child, so an empty ScrollViewer is a supported state.
 func (s *ScrollViewer) SetChild(w core.Widget) *ScrollViewer {
 	if s.child != nil {
 		core.SetParent(s.child, nil)
 	}
 	s.child = w
-	core.SetParent(w, s)
+	if w != nil {
+		core.SetParent(w, s)
+	}
 	s.InvalidateMeasure()
 	return s
 }
@@ -291,10 +297,20 @@ func (s *ScrollViewer) ArrangeContent(bounds render.Rect) {
 // clampScrollOffset clamps a raw (pre-clamp) scroll offset into
 // [0, max(0, contentLen-viewportLen)] — the single clamping rule both axes'
 // offset/offsetX share (see ArrangeContent).
+//
+// A NaN raw offset clamps to 0 rather than passing through: every ordinary
+// comparison against NaN is false, so a plain lo/hi pair of ifs would let it
+// straight out the other side, and a NaN offset poisons everything derived
+// from it downstream (virtualizer.visibleRange floors it into an int row
+// index and the list collapses to zero rows for good). Treating it as the
+// low bound keeps a single bad float from wedging the control.
 func clampScrollOffset(raw, contentLen, viewportLen float32) float32 {
 	maxOffset := contentLen - viewportLen
 	if maxOffset < 0 {
 		maxOffset = 0
+	}
+	if raw != raw { // NaN
+		return 0
 	}
 	if raw < 0 {
 		return 0

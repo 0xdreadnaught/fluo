@@ -90,6 +90,75 @@ func TestClickBehaviorReleaseOutsideDoesNotFire(t *testing.T) {
 	}
 }
 
+// A Release that arrives at a ClickBehavior which never took a capture must
+// leave whoever DOES hold the capture alone. input.Router.Release pops the
+// top of the capture stack blind, so an unguarded release here would drop
+// someone else's grab — in practice an OverlayHost's modal capture, since
+// that host is exactly what forwards pointer events into a popup subtree
+// while holding one (see OverlayHost.OnPointer), and an owner can perfectly
+// well skip HandlePointer on the Press and reach it on the Release.
+func TestClickBehaviorReleaseWithoutCaptureLeavesOthersCapture(t *testing.T) {
+	holder := &clickProbe{}
+	p := &clickProbe{}
+	p.SetWidth(40)
+	p.SetHeight(20)
+
+	clicks := 0
+	p.click.OnClick = func() { clicks++ }
+
+	r := input.NewRouter()
+	r.SetRoot(p)
+	layoutProbe(p, render.Rect{X: 0, Y: 0, W: 40, H: 20})
+
+	// holder grabs the pointer the way OverlayHost does for a modal popup.
+	r.Capture(holder)
+
+	// A Release forwarded into p's subtree with no matching Press: p is not
+	// pressed and holds no capture of its own.
+	e := &input.PointerEvent{Action: input.Release, Pos: render.Point{X: 10, Y: 10}, Router: r}
+	input.Bubble([]core.Widget{p}, e)
+
+	if got := r.Captured(); got != core.Widget(holder) {
+		t.Fatalf("Captured() after unpressed Release = %v, want holder (capture must not be popped)", got)
+	}
+	if clicks != 0 {
+		t.Fatalf("clicks = %d, want 0 (no Press preceded this Release)", clicks)
+	}
+}
+
+// The guard must not break legitimate nesting: a widget that captures while
+// someone else already holds the grab still pops only its own entry, leaving
+// the outer capture restored.
+func TestClickBehaviorReleasePopsOnlyItsOwnNestedCapture(t *testing.T) {
+	holder := &clickProbe{}
+	p := &clickProbe{}
+	p.SetWidth(40)
+	p.SetHeight(20)
+
+	clicks := 0
+	p.click.OnClick = func() { clicks++ }
+
+	r := input.NewRouter()
+	r.SetRoot(p)
+	layoutProbe(p, render.Rect{X: 0, Y: 0, W: 40, H: 20})
+
+	r.Capture(holder)
+
+	inside := render.Point{X: 10, Y: 10}
+	input.Bubble([]core.Widget{p}, &input.PointerEvent{Action: input.Press, Pos: inside, Router: r})
+	if got := r.Captured(); got != core.Widget(p) {
+		t.Fatalf("Captured() after Press = %v, want probe (nested over holder)", got)
+	}
+
+	input.Bubble([]core.Widget{p}, &input.PointerEvent{Action: input.Release, Pos: inside, Router: r})
+	if got := r.Captured(); got != core.Widget(holder) {
+		t.Fatalf("Captured() after Release = %v, want holder (outer capture restored)", got)
+	}
+	if clicks != 1 {
+		t.Fatalf("clicks = %d, want 1 (press then release inside still fires)", clicks)
+	}
+}
+
 func TestClickBehaviorHoverTracking(t *testing.T) {
 	p := &clickProbe{}
 	p.SetWidth(40)

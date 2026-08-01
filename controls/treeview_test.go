@@ -707,3 +707,69 @@ func TestTreeNodeSetExpandedWithNoOwnerIsHarmless(t *testing.T) {
 		t.Fatal("SetExpanded(true) on an unowned node did not flip the flag")
 	}
 }
+
+// TestTreeViewClipsRowsToBounds is the overflow regression: TreeView draws
+// its rows directly in Render, at bounds.Y+i*rowH, with nothing stopping
+// them at its own bottom edge — so a tree arranged shorter than its rows
+// need used to paint them over whatever sibling sat below, where they were
+// visible but unclickable (rowAt rejects positions outside the content
+// area). It must now implement core.ClipProvider and bound that drawing.
+func TestTreeViewClipsRowsToBounds(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+
+	face := testFace(t)
+	tv := NewTreeView(face,
+		NewTreeNode("a"), NewTreeNode("b"), NewTreeNode("c"),
+		NewTreeNode("d"), NewTreeNode("e"))
+
+	var _ core.ClipProvider = tv
+
+	// Arranged at its full desired size, the clip must cover every row the
+	// tree was sized to show — it never crops content of its own.
+	core.MeasureWidget(tv, render.Size{W: 400, H: 400})
+	desired := core.DesiredSizeOf(tv)
+	core.ArrangeWidget(tv, render.Rect{X: 10, Y: 10, W: desired.W, H: desired.H})
+
+	rect, ok := tv.ClipRect()
+	if !ok {
+		t.Fatal("ClipRect ok = false, want true (rows must always be clipped)")
+	}
+	rowsBottom := tv.contentBounds().Y + tv.rowH*float32(len(tv.rows))
+	if rect.Bottom() < rowsBottom {
+		t.Fatalf("clip bottom = %v, want >= %v (the last row of a tree at its desired size must not be cropped)", rect.Bottom(), rowsBottom)
+	}
+
+	// Constrained to roughly two rows' worth of height, the clip must stop
+	// at the tree's own edge (bar the sub-pixel rounding slop) rather than
+	// running on to where rows 2..4 would otherwise paint.
+	shortH := tv.rowH * 2
+	layoutTreeView(tv, 10, 10, desired.W, shortH)
+
+	rect, ok = tv.ClipRect()
+	if !ok {
+		t.Fatal("ClipRect ok = false when constrained, want true")
+	}
+	if limit := tv.Bounds().Bottom() + tv.metrics.BevelWidth + 1; rect.Bottom() > limit {
+		t.Fatalf("clip bottom = %v, want <= %v (rows must not escape the tree's own bounds)", rect.Bottom(), limit)
+	}
+	// Row 3 lies entirely past the constrained height: it must be clipped.
+	if row3Y := tv.contentBounds().Y + tv.rowH*3; rect.Bottom() > row3Y {
+		t.Fatalf("clip bottom = %v, want <= %v (row 3 sits past the constrained bounds and must be clipped away)", rect.Bottom(), row3Y)
+	}
+
+	// Rows are drawn by Render itself, not by child widgets, so Render must
+	// push that rect around them on its own — core.RenderWidget's own
+	// ClipProvider push wraps only children, of which a TreeView has none.
+	rr := &recordRenderer{}
+	tv.Render(rr)
+	if len(rr.clips) != 1 {
+		t.Fatalf("Render pushed %d clips, want exactly 1 (rows must be drawn clipped)", len(rr.clips))
+	}
+	if rr.clips[0] != rect {
+		t.Fatalf("Render pushed clip %+v, want %+v (the same rect ClipRect reports)", rr.clips[0], rect)
+	}
+	if rr.pops != 1 {
+		t.Fatalf("Render popped %d clips, want 1 (an unbalanced push leaks the clip onto later widgets)", rr.pops)
+	}
+}

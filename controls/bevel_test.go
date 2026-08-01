@@ -39,9 +39,13 @@ func TestBevels(t *testing.T) {
 // FillRect call (rect + color) into a slice; every other method is a
 // no-op. Modeled on the recordRenderer in core/engine_test.go, adapted to
 // capture FillRect calls since that is all drawRaised/drawSunken/
-// drawGroove/drawFocusRect issue.
+// drawGroove/drawFocusRect issue. PushClip/PopClip are recorded too, for
+// the controls that clip their own directly drawn content (TreeView,
+// TextBox) rather than relying on core.RenderWidget to clip children.
 type recordRenderer struct {
 	fills []filledRect
+	clips []render.Rect
+	pops  int
 }
 
 // filledRect pins one recorded FillRect call.
@@ -72,9 +76,11 @@ func (r *recordRenderer) DrawSDFQuads(quads []render.GlyphQuad, tex render.Textu
 }
 func (r *recordRenderer) DrawGlyphs(quads []render.GlyphQuad, tex render.TextureID, c render.Color) {
 }
-func (r *recordRenderer) Scale() float32            { return 1 }
-func (r *recordRenderer) PushClip(rect render.Rect) {}
-func (r *recordRenderer) PopClip()                  {}
+func (r *recordRenderer) Scale() float32 { return 1 }
+func (r *recordRenderer) PushClip(rect render.Rect) {
+	r.clips = append(r.clips, rect)
+}
+func (r *recordRenderer) PopClip() { r.pops++ }
 
 // TestDrawRaisedEmitsEdges pins drawRaised's geometry without a GPU: the
 // first FillRect must be the face fill, followed by the outer top/bottom

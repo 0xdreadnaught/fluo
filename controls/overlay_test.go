@@ -1,6 +1,7 @@
 package controls
 
 import (
+	"math"
 	"testing"
 
 	"github.com/0xdreadnaught/fluo/core"
@@ -870,5 +871,33 @@ func TestOverlayDoesNotDoubleDeliverFocusedKey(t *testing.T) {
 
 	if content.keys != 1 {
 		t.Fatalf("content.keys = %d, want exactly 1 (bubbled once via the focused chain, not double-delivered by OnKey's delegation)", content.keys)
+	}
+}
+
+// TestClampFRejectsNaN is clampF's half of the NaN guard both shared clamp
+// helpers now carry (see TestClampScrollOffsetRejectsNaN): v < lo and
+// v > hi are both false for NaN, so an unguarded clampF would hand a NaN
+// straight back to the caller and place a popup at a nonsensical position.
+// It must resolve to lo instead, and leave every ordinary value alone.
+func TestClampFRejectsNaN(t *testing.T) {
+	if got := clampF(float32(math.NaN()), 10, 100); got != 10 {
+		t.Fatalf("clampF(NaN, 10, 100) = %v, want 10 (the low bound)", got)
+	}
+	// Inverted range: lo still wins for NaN, exactly as it does for any
+	// other value once hi collapses onto lo.
+	if got := clampF(float32(math.NaN()), 10, 5); got != 10 {
+		t.Fatalf("clampF(NaN, 10, 5) = %v, want 10", got)
+	}
+
+	cases := []struct{ v, lo, hi, want float32 }{
+		{50, 10, 100, 50},   // in range: unchanged
+		{-5, 10, 100, 10},   // below the floor
+		{500, 10, 100, 100}, // past the ceiling
+		{50, 10, 5, 10},     // inverted range: lo wins
+	}
+	for _, c := range cases {
+		if got := clampF(c.v, c.lo, c.hi); got != c.want {
+			t.Errorf("clampF(%v, %v, %v) = %v, want %v", c.v, c.lo, c.hi, got, c.want)
+		}
 	}
 }

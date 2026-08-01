@@ -254,6 +254,61 @@ func TestTextBoxCaretBlinkTogglesWithTimers(t *testing.T) {
 	}
 }
 
+// The blink timer must exist only while the box is focused. A repeating
+// timer's closure retains the TextBox and only OnFocusChanged(false) stops
+// it, so a never-focused box that schedules one holds it for the queue's
+// whole lifetime — one stranded timer per TextBox per tree rebuild, each of
+// which Queue.Advance re-sorts on every fire.
+func TestTextBoxBlinkTimerOnlyWhileFocused(t *testing.T) {
+	start := time.Now()
+	q := timers.NewQueue(start)
+	tb := NewTextBox(nil)
+	tb.SetTimers(q)
+
+	if tb.blinkTimer != nil {
+		t.Fatal("blinkTimer non-nil after SetTimers on an unfocused box, want nil")
+	}
+	if got := q.Len(); got != 0 {
+		t.Fatalf("q.Len() after SetTimers on an unfocused box = %d, want 0", got)
+	}
+
+	// Caret-affecting mutations call restartBlink too — the common rebuild
+	// path — and must not schedule anything either while unfocused.
+	tb.SetText("hello")
+	tb.SetCaret(2)
+	if got := q.Len(); got != 0 {
+		t.Fatalf("q.Len() after unfocused SetText/SetCaret = %d, want 0", got)
+	}
+
+	// Nothing pending means nothing to toggle the caret.
+	q.Advance(start.Add(2 * caretBlinkPeriod))
+	if !tb.caretVisible {
+		t.Fatal("caretVisible = false on an unfocused box after two blink periods, want true (no timer running)")
+	}
+
+	// Focus starts it.
+	tb.OnFocusChanged(true)
+	if tb.blinkTimer == nil {
+		t.Fatal("blinkTimer nil after gaining focus, want a running timer")
+	}
+	if got := q.Len(); got != 1 {
+		t.Fatalf("q.Len() after gaining focus = %d, want 1", got)
+	}
+	q.Advance(start.Add(3 * caretBlinkPeriod))
+	if tb.caretVisible {
+		t.Fatal("caretVisible = true after a blink period while focused, want false (timer running)")
+	}
+
+	// Blur stops it again.
+	tb.OnFocusChanged(false)
+	if tb.blinkTimer != nil {
+		t.Fatal("blinkTimer non-nil after losing focus, want nil")
+	}
+	if got := q.Len(); got != 0 {
+		t.Fatalf("q.Len() after losing focus = %d, want 0", got)
+	}
+}
+
 func TestTextBoxSetTimersNilRestoresSolidCaret(t *testing.T) {
 	start := time.Now()
 	q := timers.NewQueue(start)
@@ -3478,5 +3533,36 @@ func TestTextBoxDoubleClickThroughRealRouter(t *testing.T) {
 	r.PointerButton(input.ButtonLeft, true, at, 0)
 	if start, end := tb.Selection(); start != 0 || end != 11 {
 		t.Fatalf("third click selected [%d,%d), want [0,11) (the whole first line)", start, end)
+	}
+}
+
+// TestComputeVisualRowsSingleRuneWiderThanWidth covers wrapLogicalLine's
+// case 1 — a single rune too wide for the wrap width, which every other
+// wrap test misses by using widths of three glyphs or more. Two things only
+// this case exercises: each rune must get its own row (a row can never be
+// empty, so the break has to consume the rune that overflowed), and the
+// final break lands exactly on rowStart == end, which the guard after the
+// loop must recognize — an unconditional trailing append there would tack a
+// spurious empty row onto the end of a line already fully covered, giving
+// the TextBox a phantom last line to place the caret on.
+func TestComputeVisualRowsSingleRuneWiderThanWidth(t *testing.T) {
+	face := buttonFace(t)
+	runes := []rune("abc")
+	// Narrower than any single glyph: every rune overflows on its own.
+	width := face.Measure("a").W / 4
+
+	rows := computeVisualRows(runes, face, width)
+
+	want := []visualRow{{start: 0, end: 1}, {start: 1, end: 2}, {start: 2, end: 3}}
+	if len(rows) != len(want) {
+		t.Fatalf("computeVisualRows(%q, width=%v) = %+v, want %+v (one row per rune, no trailing empty row)", string(runes), width, rows, want)
+	}
+	for i := range want {
+		if rows[i] != want[i] {
+			t.Fatalf("rows[%d] = %+v, want %+v (full: %+v)", i, rows[i], want[i], rows)
+		}
+	}
+	if last := rows[len(rows)-1]; last.start == last.end {
+		t.Fatalf("last row %+v is empty; the text is already fully covered by the rows before it", last)
 	}
 }

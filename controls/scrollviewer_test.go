@@ -1,6 +1,7 @@
 package controls
 
 import (
+	"math"
 	"testing"
 
 	"github.com/0xdreadnaught/fluo/core"
@@ -382,5 +383,65 @@ func TestScrollViewerNonThumbPressNotHandled(t *testing.T) {
 	}
 	if r.Captured() != nil {
 		t.Fatal("press outside the thumb should not capture")
+	}
+}
+
+// TestClampScrollOffsetRejectsNaN pins the NaN guard in the shared offset
+// clamp. Both of the clamp's ordinary comparisons are false for NaN, so
+// without an explicit check a NaN offset would pass through untouched and
+// then poison every consumer of it — virtualizer.visibleRange floors the
+// offset into an int row index, and int(math.Floor(NaN)) leaves the list
+// permanently showing zero rows. Ordinary values must be untouched.
+func TestClampScrollOffsetRejectsNaN(t *testing.T) {
+	nan := float32(math.NaN())
+
+	got := clampScrollOffset(nan, 500, 100)
+	if got != got {
+		t.Fatalf("clampScrollOffset(NaN, 500, 100) = %v, want 0 (a finite low bound)", got)
+	}
+	if got != 0 {
+		t.Fatalf("clampScrollOffset(NaN, 500, 100) = %v, want 0", got)
+	}
+
+	cases := []struct {
+		raw, contentLen, viewportLen, want float32
+	}{
+		{50, 500, 100, 50},    // in range: unchanged
+		{-10, 500, 100, 0},    // below the floor
+		{9000, 500, 100, 400}, // past the ceiling (contentLen-viewportLen)
+		{50, 80, 100, 0},      // content shorter than the viewport: nothing to scroll
+	}
+	for _, c := range cases {
+		if got := clampScrollOffset(c.raw, c.contentLen, c.viewportLen); got != c.want {
+			t.Errorf("clampScrollOffset(%v, %v, %v) = %v, want %v", c.raw, c.contentLen, c.viewportLen, got, c.want)
+		}
+	}
+}
+
+// TestScrollViewerSetChildNilClears covers clearing the child. Children,
+// MeasureContent, ArrangeContent and thumbGeometry all already handled a
+// nil child, and SetChild itself nil-guarded the OUTGOING one — but it then
+// re-parented the incoming one unguarded, so SetChild(nil) panicked on the
+// one state the rest of the type was written for. Clearing must detach the
+// old child and leave an empty, still-layoutable ScrollViewer.
+func TestScrollViewerSetChildNilClears(t *testing.T) {
+	child := NewFixed(80, 200, render.RGB(1, 2, 3))
+	s := NewScrollViewer().SetChild(child)
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	s.SetChild(nil)
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	if got := len(s.Children()); got != 0 {
+		t.Fatalf("Children = %d, want 0 after SetChild(nil)", got)
+	}
+	if _, ok := s.thumbRect(); ok {
+		t.Fatal("thumbRect reported a thumb with no child to scroll")
+	}
+	// The detached child must be re-attachable elsewhere (core.SetParent
+	// panics on a widget that still has a parent).
+	other := NewScrollViewer().SetChild(child)
+	if got := len(other.Children()); got != 1 {
+		t.Fatalf("re-attached Children = %d, want 1 (old child was not detached)", got)
 	}
 }

@@ -432,10 +432,16 @@ func placePopup(anchor render.Rect, desired render.Size, bounds render.Rect) ren
 
 // clampF clamps v into [lo, hi]. If hi < lo (the content being placed is
 // larger than the space available), lo wins outright rather than producing
-// an inverted range.
+// an inverted range. A NaN v also resolves to lo: both of the comparisons
+// below are false for NaN, so without this it would pass through unclamped
+// and place the popup at a nonsensical position (see clampScrollOffset,
+// which shares the same rule).
 func clampF(v, lo, hi float32) float32 {
 	if hi < lo {
 		hi = lo
+	}
+	if v != v { // NaN
+		return lo
 	}
 	if v < lo {
 		return lo
