@@ -161,13 +161,33 @@ func TestCheckBoxFocusRingTracked(t *testing.T) {
 	}
 }
 
-func TestCheckBoxHoverFillDiffersFromRestFill(t *testing.T) {
+// TestCheckBoxHoverDoesNotChangeRenderedChrome pins the classic-checkbox
+// spec Render's doc comment states: the box is a WindowWell sunken well that
+// does NOT react to hover (unlike Button, whose face lightens). Any hover
+// tint creeping back into the box would break the classic look.
+func TestCheckBoxHoverDoesNotChangeRenderedChrome(t *testing.T) {
 	c := NewCheckBox(nil, "")
-	rest, _ := c.stateColors()
+	layoutButton(c, render.Rect{X: 0, Y: 0, W: 80, H: 20})
+
+	rest := &recordRenderer{}
+	c.Render(rest)
+	// drawSunken's face fill plus its eight 1px bevel edges — guards this
+	// comparison against passing vacuously on an empty recording.
+	if len(rest.fills) != 9 {
+		t.Fatalf("Render emitted %d FillRect calls, want 9 (drawSunken's signature)", len(rest.fills))
+	}
+
 	c.click.hover = true
-	hover, _ := c.stateColors()
-	if hover == rest {
-		t.Fatalf("hover fill == rest fill (%v), want ControlFillHover to differ from ControlFill", hover)
+	hover := &recordRenderer{}
+	c.Render(hover)
+
+	if len(rest.fills) != len(hover.fills) {
+		t.Fatalf("hovered Render emitted %d FillRect calls, want %d (same as rest)", len(hover.fills), len(rest.fills))
+	}
+	for i := range rest.fills {
+		if rest.fills[i] != hover.fills[i] {
+			t.Fatalf("fill %d differs on hover: rest %+v, hover %+v", i, rest.fills[i], hover.fills[i])
+		}
 	}
 }
 
@@ -351,16 +371,6 @@ func TestRadioButtonFocusRingTracked(t *testing.T) {
 	rb.OnFocusChanged(false)
 	if rb.focused {
 		t.Fatal("focused = true after OnFocusChanged(false), want false")
-	}
-}
-
-func TestRadioButtonHoverFillDiffersFromRestFill(t *testing.T) {
-	rb := NewRadioButton(nil, "")
-	restFill, _, _, _ := rb.stateColors()
-	rb.click.hover = true
-	hoverFill, _, _, _ := rb.stateColors()
-	if hoverFill == restFill {
-		t.Fatalf("hover fill == rest fill (%v), want ControlFillHover to differ from ControlFill", hoverFill)
 	}
 }
 

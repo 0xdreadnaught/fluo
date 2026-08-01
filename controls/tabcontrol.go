@@ -10,7 +10,7 @@ import (
 
 // tabUnderlineThickness is the height, in px, of the band reserved below
 // every header cell's own text+padding box — pre-classic-restyle this held
-// the SELECTED cell's 2px Accent underline; now (v0.2 classic) it is the
+// the SELECTED cell's 2px accent underline; now (v0.2 classic) it is the
 // merge band the selected tab's raised bevel extends INTO so it reads as
 // one continuous raised surface with the body panel below (see
 // tabStrip.Render and TabControl.Render), while every non-selected cell

@@ -109,8 +109,8 @@ type swatch struct {
 
 	w, h       float32
 	color      render.Color
-	ringColor  render.Color // selected-state stroke (th.Color.Accent)
-	hoverColor render.Color // hover-state stroke (th.Color.TextPrimary)
+	ringColor  render.Color // selected-state stroke (th.Color.Highlight)
+	hoverColor render.Color // hover-state stroke (th.Color.WindowText)
 	hover      bool
 	selected   bool
 }
@@ -423,7 +423,7 @@ func buildControlsSection(th *theme.Theme, body *text.Face, host *controls.Overl
 func buildControlsPage(th *theme.Theme, body *text.Face, host *controls.OverlayHost, counter *int, tq *timers.Queue, textProp *core.Property[string], sliderProp *core.Property[float32], itemList *bind.List[string], cancels *[]func()) core.Widget {
 	swatches := controls.NewWrapPanel().SetGap(th.Metric.PaddingM)
 	for _, c := range swatchPalette {
-		swatches.Add(newSwatch(72, 48, c, th.Color.Accent, th.Color.TextPrimary))
+		swatches.Add(newSwatch(72, 48, c, th.Color.Highlight, th.Color.WindowText))
 	}
 
 	controlsSection := buildControlsSection(th, body, host, counter, tq, textProp, sliderProp, itemList, cancels)
@@ -680,7 +680,7 @@ func buildUI(th *theme.Theme, font *text.Font, counter *int, onToggle func(), tq
 			// both edges (row text stays inset by the ListView's own row
 			// padding).
 			b := controls.NewBorder().
-				SetBackground(th.Color.LayerBackground).
+				SetBackground(th.Color.ButtonFace).
 				SetPadding(render.Thickness{Top: th.Metric.PaddingS, Bottom: th.Metric.PaddingS}).
 				SetChild(navList)
 			b.SetWidth(150)

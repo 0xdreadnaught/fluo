@@ -8,6 +8,24 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING: the 20 long-deprecated pre-v0.2 color tokens on
+  `theme.ColorTokens`** — `WindowBackground`, `LayerBackground`,
+  `CardBackground`, `TextPrimary`, `TextSecondary`, `TextDisabled`, `Accent`,
+  `AccentHover`, `AccentPressed`, `AccentText`, `ControlFill`,
+  `ControlFillHover`, `ControlFillPressed`, `ControlStroke`,
+  `SelectionBackground`, `ControlFillDisabled`, `ControlStrokeDisabled`,
+  `AccentDisabled`, `SelectionForeground`, and `ScrimBackground`. Every
+  control finished migrating to the classic four-tone palette in v0.2, so
+  nothing rendered from these fields any more. `AcrylicTint` is unaffected and
+  remains a live token. Rendering is unchanged — every golden is
+  byte-identical. Code still reading a removed field should switch to the
+  classic token it was mapped onto: the background/fill trio to `ButtonFace`,
+  `TextPrimary` to `WindowText`, `TextSecondary`/`TextDisabled` to `GrayText`,
+  `Accent`/`SelectionBackground` to `Highlight`, and
+  `AccentText`/`SelectionForeground` to `HighlightText`.
+
 ## [0.14.0] - 2026-08-01
 
 ### Added

@@ -447,11 +447,34 @@ func TestSliderHoverTracked(t *testing.T) {
 	s := NewSlider()
 	layoutSlider(s, render.Rect{X: 0, Y: 0, W: 160, H: 24})
 
-	restColor := s.thumbColor()
+	rest := &recordRenderer{}
+	s.Render(rest)
+
 	s.OnPointer(&input.PointerEvent{Action: input.Enter})
-	hoverColor := s.thumbColor()
-	if hoverColor == restColor {
-		t.Fatalf("hover thumb color == rest thumb color (%v), want AccentHover to differ from Accent", hoverColor)
+	if !s.hover {
+		t.Fatal("hover = false after Enter, want true")
+	}
+	hover := &recordRenderer{}
+	s.Render(hover)
+
+	// Only the thumb's face fill reacts to hover; the groove, the Highlight
+	// band, and every bevel edge are painted identically either way.
+	if len(rest.fills) != len(hover.fills) {
+		t.Fatalf("hovered Render emitted %d FillRect calls, want %d (same as rest)", len(hover.fills), len(rest.fills))
+	}
+	var changed []int
+	for i := range rest.fills {
+		if rest.fills[i] != hover.fills[i] {
+			changed = append(changed, i)
+		}
+	}
+	if len(changed) != 1 {
+		t.Fatalf("hover changed %d fills, want exactly 1 (the thumb face)", len(changed))
+	}
+	i := changed[0]
+	if rest.fills[i].color != s.colors.ButtonFace || hover.fills[i].color != s.colors.ButtonLight {
+		t.Fatalf("thumb face rest/hover = %v/%v, want ButtonFace %v / ButtonLight %v",
+			rest.fills[i].color, hover.fills[i].color, s.colors.ButtonFace, s.colors.ButtonLight)
 	}
 	s.OnPointer(&input.PointerEvent{Action: input.Leave})
 	if s.hover {

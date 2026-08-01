@@ -110,14 +110,14 @@ func TestColorAnimRedirectMidFlightStartsFromCurrent(t *testing.T) {
 // so Render's painted fill is byte-identical to before this feature existed.
 func TestButtonAnimatedFillDefaultOffIsPassthrough(t *testing.T) {
 	b := NewButton(nil, "X")
-	rest := b.colors.ControlFill
-	hover := b.colors.ControlFillHover
+	rest := b.colors.ButtonFace
+	hover := b.colors.ButtonLight
 
 	if got := b.animatedFill(rest); got != rest {
 		t.Fatalf("animatedFill(rest) on a non-animated button = %v, want %v unchanged", got, rest)
 	}
 	// Even a differing color must pass straight through: animated defaults
-	// false regardless of what fill stateColors resolves to.
+	// false regardless of what fill Render resolves to.
 	if got := b.animatedFill(hover); got != hover {
 		t.Fatalf("animatedFill(hover) on a non-animated button = %v, want %v unchanged", got, hover)
 	}
@@ -128,7 +128,7 @@ func TestButtonAnimatedFillDefaultOffIsPassthrough(t *testing.T) {
 // called, must still be instant/pass-through.
 func TestButtonAnimatedNoTimersIsPassthrough(t *testing.T) {
 	b := NewButton(nil, "X").SetAnimated(true)
-	hover := b.colors.ControlFillHover
+	hover := b.colors.ButtonLight
 
 	if got := b.animatedFill(hover); got != hover {
 		t.Fatalf("animatedFill(hover) with SetAnimated(true) but no SetTimers = %v, want %v unchanged", got, hover)
@@ -144,8 +144,8 @@ func TestButtonAnimatedCrossFadesFillTransition(t *testing.T) {
 	q := timers.NewQueue(animT0)
 	b.SetTimers(q)
 
-	rest := b.colors.ControlFill
-	hover := b.colors.ControlFillHover
+	rest := b.colors.ButtonFace
+	hover := b.colors.ButtonLight
 
 	// First animated frame at rest: no tween in flight yet, seeded exactly
 	// at rest (no fade-in-from-nothing pop).

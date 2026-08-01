@@ -503,9 +503,9 @@ func TestListViewPoolRecolorsSelectedRow(t *testing.T) {
 		t.Fatalf("pool size = %d, want 3", len(l.pool))
 	}
 	for i, tb := range l.pool {
-		want := th.Color.TextPrimary
+		want := th.Color.WindowText
 		if i == 1 {
-			want = th.Color.SelectionForeground
+			want = th.Color.HighlightText
 		}
 		if got := tb.Color(); got != want {
 			t.Fatalf("pool[%d].Color() = %v, want %v (selected == %d)", i, got, want, l.SelectedIndex())
@@ -528,10 +528,10 @@ func TestListViewPoolRecolorsAfterSelectionChangesWithoutRetext(t *testing.T) {
 	l.SetSelectedIndex(2)
 	layoutListView(l, 0, 0, 100, 500)
 
-	if got, want := l.pool[2].Color(), th.Color.SelectionForeground; got != want {
+	if got, want := l.pool[2].Color(), th.Color.HighlightText; got != want {
 		t.Fatalf("pool[2].Color() = %v, want %v", got, want)
 	}
-	if got, want := l.pool[0].Color(), th.Color.TextPrimary; got != want {
+	if got, want := l.pool[0].Color(), th.Color.WindowText; got != want {
 		t.Fatalf("pool[0].Color() = %v, want %v", got, want)
 	}
 }

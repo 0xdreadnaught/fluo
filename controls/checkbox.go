@@ -21,12 +21,10 @@ const checkGlyphInset float32 = 5
 // radioInnerSize and radioInnerRadius describe the checked radio button's
 // inner dot: a 9x9 filled rounded-rect of radius 4.5 (a circle, since
 // radius == half the side), centered within the 18x18 outer circle —
-// normative approximation of "outer stroke Accent width 2 + inner Accent
-// circle radius 4.5".
+// normative approximation of the spec's "inner circle radius 4.5" marker.
 const (
 	radioInnerSize   float32 = 9
 	radioInnerRadius float32 = 4.5
-	radioRingWidth   float32 = 2
 )
 
 // glyphMeasure computes the desired size of a glyph-box-plus-optional-label
@@ -200,41 +198,6 @@ func (c *CheckBox) ArrangeContent(bounds render.Rect) {
 // Children returns the label as the checkbox's sole child.
 func (c *CheckBox) Children() []core.Widget {
 	return []core.Widget{c.label}
-}
-
-// stateColors resolves the fill and stroke (zero-alpha means "no stroke")
-// for the current checked/enabled state, applying the same hover/pressed
-// feedback as Button.stateColors: unchecked walks ControlFill ->
-// ControlFillHover -> ControlFillPressed, checked walks Accent ->
-// AccentHover -> AccentPressed, both keyed off the embedded ClickBehavior.
-func (c *CheckBox) stateColors() (fill, stroke render.Color) {
-	th := c.colors
-	if !c.enabled {
-		if c.checked {
-			return th.AccentDisabled, render.Color{}
-		}
-		return th.ControlFillDisabled, th.ControlStrokeDisabled
-	}
-
-	if c.checked {
-		fill = th.Accent
-		switch {
-		case c.click.Pressed():
-			fill = th.AccentPressed
-		case c.click.Hover():
-			fill = th.AccentHover
-		}
-		return fill, render.Color{}
-	}
-
-	fill = th.ControlFill
-	switch {
-	case c.click.Pressed():
-		fill = th.ControlFillPressed
-	case c.click.Hover():
-		fill = th.ControlFillHover
-	}
-	return fill, th.ControlStroke
 }
 
 // Render paints the 18x18 box as a classic sunken well (WindowWell fill —
@@ -453,49 +416,6 @@ func (rb *RadioButton) ArrangeContent(bounds render.Rect) {
 // Children returns the label as the radio button's sole child.
 func (rb *RadioButton) Children() []core.Widget {
 	return []core.Widget{rb.label}
-}
-
-// stateColors resolves the fill, ring stroke, ring stroke width, and inner
-// dot color (zero-alpha dot means "no dot", i.e. unchecked) for the current
-// checked/enabled state, applying the same hover/pressed feedback as
-// Button/CheckBox: the base circle fill always walks ControlFill ->
-// ControlFillHover -> ControlFillPressed (per the embedded ClickBehavior),
-// and when checked the ring+dot additionally walk Accent -> AccentHover ->
-// AccentPressed together (they're both "the accent chrome").
-//
-// Disabled marker note: the inner dot uses TextDisabled (not AccentDisabled)
-// when disabled+checked, matching CheckBox's disabled checkmark and
-// ToggleSwitch's disabled thumb — both put a TextDisabled marker on top of
-// an otherwise-disabled-accent-colored chrome, for contrast. The ring itself
-// stays AccentDisabled, since it IS that chrome, not the marker on it.
-func (rb *RadioButton) stateColors() (fill, ring render.Color, ringWidth float32, dot render.Color) {
-	th := rb.colors
-	if !rb.enabled {
-		if rb.checked {
-			return th.ControlFillDisabled, th.AccentDisabled, radioRingWidth, th.TextDisabled
-		}
-		return th.ControlFillDisabled, th.ControlStrokeDisabled, rb.metrics.StrokeWidth, render.Color{}
-	}
-
-	fill = th.ControlFill
-	switch {
-	case rb.click.Pressed():
-		fill = th.ControlFillPressed
-	case rb.click.Hover():
-		fill = th.ControlFillHover
-	}
-
-	if rb.checked {
-		accent := th.Accent
-		switch {
-		case rb.click.Pressed():
-			accent = th.AccentPressed
-		case rb.click.Hover():
-			accent = th.AccentHover
-		}
-		return fill, accent, radioRingWidth, accent
-	}
-	return fill, th.ControlStroke, rb.metrics.StrokeWidth, render.Color{}
 }
 
 // Render paints the 18x18 circle as a classic sunken-looking well — fill

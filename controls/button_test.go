@@ -447,17 +447,34 @@ func TestButtonRectShapeRenderMatchesDrawRaised(t *testing.T) {
 	}
 }
 
-func TestButtonStateColorsAccentDisabledUsesAccentDisabledFill(t *testing.T) {
-	b := NewButton(nil, "X").SetAccent(true).SetEnabled(false)
-	fill, stroke, label := b.stateColors()
-	if fill != b.colors.AccentDisabled {
-		t.Fatalf("accent+disabled fill = %v, want AccentDisabled %v", fill, b.colors.AccentDisabled)
+// TestButtonAccentDisabledRendersRaisedFaceWithOuterBorder pins what a
+// disabled accent ("default") button actually paints: the ordinary raised
+// ButtonFace chrome — disabled is signalled by the grayed label, NOT by a
+// different face fill — plus the accent button's extra 1px ButtonDarkShadow
+// ring just outside the bevel, which the disabled state does not suppress.
+func TestButtonAccentDisabledRendersRaisedFaceWithOuterBorder(t *testing.T) {
+	b := NewButton(buttonFace(t), "X").SetAccent(true).SetEnabled(false)
+	b.SetWidth(80)
+	b.SetHeight(30)
+	layoutButton(b, render.Rect{X: 0, Y: 0, W: 80, H: 30})
+
+	rr := &recordRenderer{}
+	b.Render(rr)
+
+	// drawRaised's 9 fills, then drawOuterBorder's 4 edges.
+	if len(rr.fills) != 13 {
+		t.Fatalf("accent+disabled Render emitted %d FillRect calls, want 13 (drawRaised's 9 + the outer border's 4)", len(rr.fills))
 	}
-	if stroke.A != 0 {
-		t.Fatalf("accent+disabled stroke = %v, want no stroke (zero alpha)", stroke)
+	if got := rr.fills[0]; got.rect != b.Bounds() || got.color != b.colors.ButtonFace {
+		t.Fatalf("first FillRect = %+v, want face fill %v over %v", got, b.colors.ButtonFace, b.Bounds())
 	}
-	if label != b.colors.TextDisabled {
-		t.Fatalf("accent+disabled label = %v, want TextDisabled %v", label, b.colors.TextDisabled)
+	for i, f := range rr.fills[9:] {
+		if f.color != b.colors.ButtonDarkShadow {
+			t.Fatalf("outer border edge %d = %v, want ButtonDarkShadow %v", i, f.color, b.colors.ButtonDarkShadow)
+		}
+	}
+	if got := b.label.Color(); got != b.colors.GrayText {
+		t.Fatalf("accent+disabled label color = %v, want GrayText %v", got, b.colors.GrayText)
 	}
 }
 

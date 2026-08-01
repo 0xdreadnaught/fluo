@@ -25,10 +25,10 @@ const (
 // convention: SetChecked is a silent programmatic setter, OnChanged fires
 // only for user-driven changes (click or Space/Enter while focused).
 //
-// Visuals (normative): off = ControlFill fill + ControlStroke stroke, with
-// a TextSecondary thumb circle (12px) inset 4px from the LEFT edge; on =
-// Accent fill, no stroke, with an AccentText thumb inset 4px from the RIGHT
-// edge instead.
+// Visuals (normative): a sunken track — ButtonFace when off, Highlight when
+// on — with a small raised ButtonFace knob inset from the LEFT edge when off
+// and from the RIGHT edge when on. Hover and pressed deliberately leave both
+// untinted; only the checked state changes any color (see Render).
 type ToggleSwitch struct {
 	core.Element
 
@@ -104,42 +104,6 @@ func (s *ToggleSwitch) ArrangeContent(bounds render.Rect) {}
 
 // Children returns nil: ToggleSwitch is a leaf widget.
 func (s *ToggleSwitch) Children() []core.Widget { return nil }
-
-// stateColors resolves the pill fill, stroke (zero-alpha means "no
-// stroke"), and thumb color for the current checked/enabled state, applying
-// the same hover/pressed feedback as Button/CheckBox to the track fill:
-// off walks ControlFill -> ControlFillHover -> ControlFillPressed, on walks
-// Accent -> AccentHover -> AccentPressed. The thumb color is unaffected by
-// hover/pressed — only the track responds.
-func (s *ToggleSwitch) stateColors() (fill, stroke, thumb render.Color) {
-	th := s.colors
-	if !s.enabled {
-		if s.checked {
-			return th.AccentDisabled, render.Color{}, th.TextDisabled
-		}
-		return th.ControlFillDisabled, th.ControlStrokeDisabled, th.TextDisabled
-	}
-
-	if s.checked {
-		fill = th.Accent
-		switch {
-		case s.click.Pressed():
-			fill = th.AccentPressed
-		case s.click.Hover():
-			fill = th.AccentHover
-		}
-		return fill, render.Color{}, th.AccentText
-	}
-
-	fill = th.ControlFill
-	switch {
-	case s.click.Pressed():
-		fill = th.ControlFillPressed
-	case s.click.Hover():
-		fill = th.ControlFillHover
-	}
-	return fill, th.ControlStroke, th.TextSecondary
-}
 
 // Render paints the 40x20 track as a classic sunken well (ButtonFace fill,
 // or Highlight when on) and the knob as a small raised square sliding to the

@@ -268,28 +268,6 @@ func (s *Slider) ArrangeContent(bounds render.Rect) {}
 // Children returns nil: Slider is a leaf widget.
 func (s *Slider) Children() []core.Widget { return nil }
 
-// thumbColor resolves the thumb's color: Accent at rest, AccentHover while
-// the pointer hovers the slider, AccentDisabled while disabled (checked
-// first — a disabled slider ignores hover entirely, per OnPointer never
-// updating s.hover while disabled).
-//
-// Render no longer calls thumbColor (the classic restyle draws the thumb via
-// drawRaised keyed directly off s.hover — ButtonLight/ButtonFace, not this
-// method's Accent-family colors); it is kept solely because
-// TestSliderHoverTracked exercises it directly as its regression proof that
-// hover and rest resolve to different colors (the pre-restyle deprecated
-// tokens this method reads, Accent/AccentHover, are still distinct in both
-// classic themes, so the test still passes unchanged).
-func (s *Slider) thumbColor() render.Color {
-	if !s.enabled {
-		return s.colors.AccentDisabled
-	}
-	if s.hover {
-		return s.colors.AccentHover
-	}
-	return s.colors.Accent
-}
-
 // Render paints the classic trackbar: a thin sunken groove (drawSunken,
 // ButtonFace) across the slider's full main-axis length, a Highlight-filled
 // band covering the track's Min side up to the thumb's center overlaid on

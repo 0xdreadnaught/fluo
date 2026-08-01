@@ -324,8 +324,8 @@ func TestDataGridClickOnHeaderDoesNotSelect(t *testing.T) {
 
 // TestDataGridHoverClearedOnWheel guards against hoverRow going stale: it is
 // an absolute row index, so scrolling via Wheel without a fresh Move to
-// re-hit-test against must clear it rather than leave the ControlFillHover
-// band painting on whatever row now occupies that index's new on-screen
+// re-hit-test against must clear it rather than leave a stale hover
+// index pointing at whatever row now occupies that slot's new on-screen
 // position (see hoverRow's field doc comment).
 func TestDataGridHoverClearedOnWheel(t *testing.T) {
 	g := NewDataGrid(nil)

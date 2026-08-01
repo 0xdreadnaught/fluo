@@ -44,7 +44,7 @@ func main() {
 	agreeBox := controls.NewCheckBox(body, "I agree to the terms")
 	volumeSlider := controls.NewSlider()
 
-	summary := controls.NewTextBlock(body, "").SetColor(th.Color.TextSecondary)
+	summary := controls.NewTextBlock(body, "").SetColor(th.Color.GrayText)
 	refresh := func() {
 		summary.SetText(fmt.Sprintf("name=%q agree=%v volume=%.2f",
 			m.name.Get(), m.agree.Get(), m.volume.Get()))

@@ -131,13 +131,25 @@ func TestToggleSwitchFocusRingTracked(t *testing.T) {
 	}
 }
 
-func TestToggleSwitchHoverFillDiffersFromRestFill(t *testing.T) {
+// TestToggleSwitchCheckedTrackFillDiffersFromOff pins the switch's only
+// state-driven color change: the sunken track fills with ButtonFace when off
+// and Highlight when on (hover deliberately does not tint it — the knob and
+// track are classic chrome). The face fill is drawSunken's first FillRect.
+func TestToggleSwitchCheckedTrackFillDiffersFromOff(t *testing.T) {
 	s := NewToggleSwitch()
-	restFill, _, _ := s.stateColors()
-	s.click.hover = true
-	hoverFill, _, _ := s.stateColors()
-	if hoverFill == restFill {
-		t.Fatalf("hover fill == rest fill (%v), want ControlFillHover to differ from ControlFill", hoverFill)
+	layoutButton(s, render.Rect{X: 0, Y: 0, W: 40, H: 20})
+
+	off := &recordRenderer{}
+	s.Render(off)
+	if got := off.fills[0].color; got != s.colors.ButtonFace {
+		t.Fatalf("off track fill = %v, want ButtonFace %v", got, s.colors.ButtonFace)
+	}
+
+	s.SetChecked(true)
+	on := &recordRenderer{}
+	s.Render(on)
+	if got := on.fills[0].color; got != s.colors.Highlight {
+		t.Fatalf("on track fill = %v, want Highlight %v", got, s.colors.Highlight)
 	}
 }
 

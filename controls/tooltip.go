@@ -195,7 +195,7 @@ func newTipPopup(face *text.Face, tip string, colors theme.ColorTokens, metrics 
 // tipCard is ToolTipArea's popup chrome: a raised ButtonFace bevel (drawRaised)
 // framing a single child (the tip's TextBlock), inset by the bevel width plus
 // PaddingS breathing room on every side — square corners, replacing the
-// pre-restyle rounded CardBackground Border. Mirrors comboPopupCard/
+// pre-restyle rounded card Border. Mirrors comboPopupCard/
 // menuPopupCard's "dedicated bevel-framed card" pattern.
 type tipCard struct {
 	core.Element
@@ -258,7 +258,7 @@ func (card *tipCard) Children() []core.Widget {
 }
 
 // Render draws the classic raised ButtonFace bevel (drawRaised) framing the
-// tip, replacing the pre-restyle rounded CardBackground fill.
+// tip, replacing the pre-restyle rounded card fill.
 func (card *tipCard) Render(r render.Renderer) {
 	drawRaised(r, card.Bounds(), card.colors.ButtonFace, card.colors)
 }
