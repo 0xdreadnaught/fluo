@@ -51,10 +51,12 @@ before its dependencies. Check items off as they land.
 - [x] Fluent Light theme
 - [x] Fluent Dark theme
 - [x] Wire existing widgets to tokens (no hard-coded styling anywhere)
-- [x] **MILESTONE: themed, laid-out, clickable Fluent button in a real GL context** —
-      `render/gl` golden `TestFluentButton` (composed purely from `theme.FluentLight()`
-      tokens) plus the live `fluo-gallery` demo button (Accent/AccentHover/AccentPressed
-      states, click counter) and its T-key Light/Dark toggle.
+- [x] **MILESTONE: themed, laid-out, clickable button in a real GL context** —
+      `render/gl` golden `TestClassicButton` (composed purely from `theme.Light()`
+      tokens) plus the live `fluo-gallery` demo button (rest/hover/pressed/accent
+      states, click counter) and its T-key Light/Dark toggle. Originally landed
+      against the Fluent themes; renamed with the v0.2 classic-depth restyle
+      (Phase 9), which replaced `FluentLight`/`FluentDark` with `Light`/`Dark`.
 
 ## Phase 5 · Core controls
 - [x] Overlay/popup layer (prerequisite for several controls)
@@ -129,7 +131,9 @@ before its dependencies. Check items off as they land.
       test); residual manual-verification gap (no live 2x display in WSLg)
       documented.
 - [x] Docs site / examples / integration guide — root + per-package `doc.go`
-      (all 17 packages), `examples/{counter,form,todo}`, expanded README.
+      (11 in all: the root plus `anim`, `app`, `bind`, `controls`, `core`,
+      `input`, `render`, `text`, `theme`, `timers`), `examples/{counter,form,
+      todo}`, expanded README.
 - [x] Chain-aware popup forwarding (Phase-7 backlog) — `OverlayHost`
       generalized to walk the whole popup stack: an outside press now
       dismisses the entire open chain (not just the topmost popup), and
@@ -142,7 +146,15 @@ before its dependencies. Check items off as they land.
       MenuBar does not slide File↔Edit on hover.
 - [x] v0.1 publish PREP complete — `go.mod`/`LICENSE`/doc coverage verified,
       `go vet`/`gofmt`/`go build`/`go test` (incl. golden suite) all clean.
-- [ ] *(stretch)* IME input
+- [x] *(stretch)* IME input — shipped after v0.1. Two halves behind
+      platform-agnostic seams: candidate-window anchoring (`input.CaretRector`
+      → `Router.FocusedCaretRect` → `app`'s `imeAnchor`, so a CJK candidate
+      list opens at the caret rather than a screen corner) and inline preedit
+      (`input.CompositionEvent`/`CompositionHandler` →
+      `TextBox.OnComposition`, which renders the provisional string at the
+      caret and leaves the committed buffer untouched until commit). Windows
+      drives both via imm32; every other platform's implementation is a no-op.
+      Golden: `textbox_preedit.png`.
 - [ ] *(stretch)* Accessibility hooks
 
 **fluo is v0.1-ready.** Every non-stretch Phase 0–8 item is implemented,

@@ -506,10 +506,11 @@ pill := controls.NewButton(face, "Pill").SetShape(controls.ShapePill)
 ## ToggleButton
 
 `ToggleButton` is a `Button` that toggles a boolean checked state on click,
-rendering the checked state as accent-on (`Accent`-family fill, no stroke,
-`AccentText` label) regardless of accent — it has no independent accent flag
-of its own; checked *is* the accent look, achieved by driving the embedded
-`Button`'s own `SetAccent` as checked changes.
+rendering the checked state as classic sunken chrome (`drawSunken` over
+`ButtonFace`, with the same +1,+1 label nudge a held-down button gets) — it
+has no independent accent flag of its own; checked *is* the pressed-in look,
+achieved by driving the embedded `Button`'s own `SetAccent` as checked
+changes and reading that back through `isToggle`.
 
 `ToggleButton` embeds `Button` **by value** and inherits its full method set
 by promotion — `SetEnabled`, `Label`, `SetAnimated`, `SetTimers`,
@@ -1563,10 +1564,12 @@ no face or label argument). Like `CheckBox` and `ToggleButton`, it is
 `SetEnabled` convention: `SetChecked` is a silent programmatic setter,
 `OnChanged` fires only for user-driven changes.
 
-Visuals (normative): off = `ControlFill` fill + `ControlStroke` stroke, with
-a `TextSecondary` thumb square (12px) inset 4px from the left edge; on =
-`Accent` fill, no stroke, with an `AccentText` thumb inset 4px from the
-right edge instead.
+Visuals (normative): the track is drawn as a classic sunken well
+(`drawSunken`) filled with `ButtonFace` when off and `Highlight` when on. The
+knob is a small raised square (`drawRaised` over `ButtonFace`, 12px) inset
+4px from the track's left edge when off and from its right edge when on.
+While focused, `RenderOverlay` adds the classic focus rectangle around the
+track.
 
 **Constructor**
 

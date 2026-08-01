@@ -66,7 +66,7 @@ of view.
 | [UpdateTexture](#rendererupdatetexture) | `UpdateTexture(id TextureID, x, y, w, h int, rgba []byte)` | Updates a region of an existing texture. |
 | [DeleteTexture](#rendererdeletetexture) | `DeleteTexture(id TextureID)` | Frees a texture created by `CreateTexture`. |
 | [DrawQuad](#rendererdrawquad) | `DrawQuad(dst, src Rect, tex TextureID, tint Color)` | Draws a textured quad. |
-| [DrawSDFQuads](#rendererdrawsdfquads) | `DrawSDFQuads(quads []GlyphQuad, tex TextureID, c Color)` | Draws glyphs from an SDF alpha atlas. |
+| [DrawSDFQuads](#rendererdrawsdfquads) | `DrawSDFQuads(quads []GlyphQuad, tex TextureID, c Color)` | *Deprecated.* A no-op in the GL backend; use `DrawGlyphs`. |
 | [DrawGlyphs](#rendererdrawglyphs) | `DrawGlyphs(quads []GlyphQuad, tex TextureID, c Color)` | Draws grayscale-coverage glyph quads from a coverage atlas. |
 | [Scale](#rendererscale) | `Scale() float32` | Returns the current frame's device-pixels-per-logical-pixel factor. |
 | [PushClip](#rendererpushclip) | `PushClip(r Rect)` | Pushes a new clip rectangle that intersects with the current clip. |
@@ -350,9 +350,9 @@ DrawQuad(dst, src Rect, tex TextureID, tint Color)
 
 #### Renderer.DrawSDFQuads
 
-Draws glyphs from an SDF alpha atlas with the given color. Retained for
-future scaled/animated text; `text.Face.Draw`'s default (HD) path uses
-`DrawGlyphs` instead.
+**Deprecated.** Nothing in fluo produces a signed-distance-field atlas any
+more — the text path rasterizes grayscale coverage masks and draws them with
+[DrawGlyphs](#rendererdrawglyphs). New code should use `DrawGlyphs`.
 
 **Syntax**
 
@@ -368,9 +368,10 @@ DrawSDFQuads(quads []GlyphQuad, tex TextureID, c Color)
 | `tex` | `TextureID` | The SDF atlas texture. |
 | `c` | `Color` | Text color. |
 
-**Notes** — Not the path `text.Face.Draw` uses today (see
-[DrawGlyphs](#rendererdrawglyphs)); kept for a future scaled/animated-text
-feature that needs resolution-independent glyphs.
+**Notes** — The method is retained on the `Renderer` interface only so
+existing implementations keep compiling; the SDF glyph path and the shader
+branch behind it are gone. The bundled `render/gl` backend implements it as a
+**no-op** — calling it draws nothing.
 
 **See also** — [Renderer.DrawGlyphs](#rendererdrawglyphs), [GlyphQuad](#glyphquad), [Face.Draw](#facedraw)
 
@@ -393,12 +394,11 @@ DrawGlyphs(quads []GlyphQuad, tex TextureID, c Color)
 | `tex` | `TextureID` | The coverage atlas texture. |
 | `c` | `Color` | Text color. |
 
-**Notes** — Used by `text.Face` for crisp, direct grayscale-AA UI text —
-the path `Face.Draw` uses by default today. Distinct from
-[DrawSDFQuads](#rendererdrawsdfquads) (the SDF path, retained for future
-scaled/animated text).
+**Notes** — Used by `text.Face` for crisp, direct grayscale-AA UI text. This
+is the text-drawing entry point — the only glyph path fluo has, now that
+[DrawSDFQuads](#rendererdrawsdfquads) is a deprecated no-op.
 
-**See also** — [Renderer.DrawSDFQuads](#rendererdrawsdfquads), [GlyphQuad](#glyphquad), [Face.Draw](#facedraw)
+**See also** — [GlyphQuad](#glyphquad), [Face.Draw](#facedraw)
 
 #### Renderer.Scale
 
@@ -483,8 +483,7 @@ type TextureID uint32
 
 `GlyphQuad` represents a glyph quad with destination and source
 rectangles. It is the unit `Face.Draw` batches and submits to
-[Renderer.DrawGlyphs](#rendererdrawglyphs) (or, for the SDF path,
-[Renderer.DrawSDFQuads](#rendererdrawsdfquads)).
+[Renderer.DrawGlyphs](#rendererdrawglyphs).
 
 ### Fields
 
@@ -493,7 +492,7 @@ rectangles. It is the unit `Face.Draw` batches and submits to
 | `Dst` | `Rect` | Destination rectangle, in logical px. |
 | `Src` | `Rect` | Source rectangle within the glyph atlas, in UV coordinates (0..1). |
 
-**See also** — [Renderer.DrawGlyphs](#rendererdrawglyphs), [Renderer.DrawSDFQuads](#rendererdrawsdfquads), [Face.Draw](#facedraw)
+**See also** — [Renderer.DrawGlyphs](#rendererdrawglyphs), [Face.Draw](#facedraw)
 
 ---
 
@@ -904,18 +903,25 @@ if font.HasGlyph('✓') {
 
 ## Atlas
 
-`Atlas` packs SDF glyph masks for a single `Font` into one square alpha
-image (1024×1024), uploading it to a GPU texture lazily and
-incrementally. Every `Face` built from a given `Font` (via `NewFace`)
-draws from that font's one shared `Atlas` — glyph SDFs are rasterized
-once, at a fixed 48px raster size, and reused at any draw size — so
-creating many `Face`s at different sizes for the same `Font` does not
-duplicate the atlas. Internally the same `Atlas` also owns a second,
-independent backing image/texture for the direct grayscale-coverage
-glyphs `Face.Draw`'s default path uses (coverage masks are rasterized at
-their exact device-pixel size rather than being resolution-independent
-like the SDF path, so a new size means a new raster). Callers do not pack
-glyphs directly; `Font.sharedAtlas` and `Face.Draw` do that internally.
+`Atlas` packs grayscale coverage masks for a single `Font` into an **ordered
+list of fixed-size pages** (1024×1024 each), uploading each page to its own
+GPU texture lazily and incrementally. Every `Face` built from a given `Font`
+(via `NewFace`) draws from that font's one shared `Atlas`, so creating many
+`Face`s at different sizes for the same `Font` does not duplicate the atlas.
+
+The atlas grows rather than capping out: when a mask doesn't fit on the last
+page, a fresh page is appended and the glyph is packed there instead — so a
+document with many distinct glyphs (a large multilingual string spanning
+several fallback fonts, say) is never forced to drop a glyph just because
+earlier ones filled page 0. Growth only ever appends; a page is never removed
+or reflowed, so page indices already handed out stay valid for the `Atlas`'s
+lifetime. The one remaining error case is a single mask too large to fit on a
+whole empty page, which no amount of growth can fix.
+
+Coverage masks are rasterized at their exact device-pixel size rather than
+being resolution-independent, so the same glyph at a new size means a new
+raster and a new entry. Callers do not pack glyphs directly;
+`Font.sharedAtlas` and `Face.Draw` do that internally.
 
 **Constructor**
 
@@ -941,8 +947,8 @@ constructs or drives an `Atlas` directly beyond that.
 coverage masks it draws from (see `Draw`) live in the `Font`'s shared
 `Atlas`, so creating many `Face`s at different sizes for the same `Font`
 does not duplicate the atlas itself — though each distinct (glyph, device
-px) pair is rasterized once at that size, since coverage masks aren't
-resolution-independent the way the retained SDF path is. `Face` is the
+px) pair is rasterized once at that size, since coverage masks are not
+resolution-independent. `Face` is the
 layout-facing text API: `controls` widgets depend on `Measure`,
 `LineHeight`, and `Ascent` to size and position themselves, then call
 `Draw` to paint.
@@ -1065,19 +1071,20 @@ func (fa *Face) Draw(r render.Renderer, at render.Point, s string, c render.Colo
 | `c` | `render.Color` | Text color. |
 
 **Notes** — This is the crisp HD-text path: each glyph is rasterized
-directly (grayscale-AA coverage, no SDF) at the exact device-pixel size
-for the current frame's scale (from `r.Scale()`), and both the baseline
-and each glyph's draw origin are snapped to whole device pixels for a
-sharp result. Layout stays exact: advances and kerning are computed from
-the unsnapped logical-px metrics path, and the pen is never snapped
-cumulatively — only each glyph's own draw origin is — so accumulated
-advance/`Measure` width never drifts from the pixels actually drawn.
-Glyph quads are gathered from the font's shared coverage atlas and
-submitted to `r` in a single [Renderer.DrawGlyphs](#rendererdrawglyphs)
-batch (not `DrawSDFQuads` — that path is retained for future
-scaled/animated text). Runes with no glyph in the font fall back to glyph
-index 0 (`.notdef`); glyphs with no visible coverage (e.g. space) are
-skipped but still advance the pen.
+directly (grayscale-AA coverage) at the exact device-pixel size for the
+current frame's scale (from `r.Scale()`), and both the baseline and each
+glyph's draw origin are snapped to whole device pixels for a sharp result.
+Layout stays exact: advances and kerning are computed from the unsnapped
+logical-px metrics path, and the pen is never snapped cumulatively — only
+each glyph's own draw origin is — so accumulated advance/`Measure` width
+never drifts from the pixels actually drawn. Glyph quads are gathered from
+the font's shared coverage atlas, grouped by (source font, atlas page) in
+first-seen order, and submitted to `r` as one
+[Renderer.DrawGlyphs](#rendererdrawglyphs) call per distinct page texture —
+which collapses to exactly one call for a string with no fallback fonts that
+fits on a single page, the common case. Runes with no glyph in the font fall
+back to glyph index 0 (`.notdef`); glyphs with no visible coverage (e.g.
+space) are skipped but still advance the pen.
 
 **Example**
 
@@ -1085,4 +1092,4 @@ skipped but still advance the pen.
 title.Draw(r, render.Point{X: card.X + 24, Y: card.Y + 20}, "fluo", render.RGB(255, 255, 255))
 ```
 
-**See also** — [Renderer.DrawGlyphs](#rendererdrawglyphs), [Renderer.DrawSDFQuads](#rendererdrawsdfquads), [Renderer.Scale](#rendererscale), [Face.Measure](#facemeasure)
+**See also** — [Renderer.DrawGlyphs](#rendererdrawglyphs), [Renderer.Scale](#rendererscale), [Face.Measure](#facemeasure)

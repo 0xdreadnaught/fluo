@@ -174,9 +174,14 @@ raised/sunken chrome from `ButtonFace`/`ButtonHighlight`/`ButtonLight`/
 `WindowWell`/`WindowText`/`GrayText`, selection from
 `Highlight`/`HighlightText`, and title bars from the `CaptionFrom`→`CaptionTo`
 gradient (`CaptionText`/`InactiveCaption` for the caption label and the
-unfocused-window variant). The remaining fields are the pre-v0.2 flat token
-set, kept only until each control is migrated onto the classic fields above;
-new code should not read them.
+unfocused-window variant). Two smaller groups sit alongside them: the four
+`Severity*` accents added in v0.8 for `Toast`'s colored stripe, and
+`AcrylicTint`, the translucent tint `controls.AcrylicSurface` composites over
+a backdrop blur.
+
+The pre-v0.2 flat token set (`Accent`, `TextPrimary`, `ControlFill`, and the
+rest) was removed in v0.15.0. If you are porting code that read those, see
+[Replacements for the removed flat tokens](#replacements-for-the-removed-flat-tokens).
 
 ### Fields
 
@@ -199,31 +204,20 @@ new code should not read them.
 | `CaptionText` | `render.Color` | Title bar label color. |
 | `InactiveCaption` | `render.Color` | Flat fill an unfocused window's title bar uses in place of the `CaptionFrom`/`CaptionTo` gradient. |
 
-**Deprecated flat tokens** (pre-v0.2; see [Deprecated fields](#deprecated-fields) below)
+**Severity accents**
 
 | Name | Type | Description |
 |---|---|---|
-| `WindowBackground` | `render.Color` | Surface fill at base elevation. *Deprecated.* |
-| `LayerBackground` | `render.Color` | Surface fill one elevation up. *Deprecated.* |
-| `CardBackground` | `render.Color` | Surface fill at highest elevation. *Deprecated.* |
-| `TextPrimary` | `render.Color` | Body text at full emphasis. *Deprecated.* |
-| `TextSecondary` | `render.Color` | Body text at reduced emphasis. *Deprecated.* |
-| `TextDisabled` | `render.Color` | Body text for disabled content. *Deprecated.* |
-| `Accent` | `render.Color` | Brand accent color at rest. *Deprecated.* |
-| `AccentHover` | `render.Color` | Brand accent color under pointer hover. *Deprecated.* |
-| `AccentPressed` | `render.Color` | Brand accent color while pressed. *Deprecated.* |
-| `AccentText` | `render.Color` | Text/foreground color over an `Accent` fill. *Deprecated.* |
-| `ControlFill` | `render.Color` | A control's fill at rest. *Deprecated.* |
-| `ControlFillHover` | `render.Color` | A control's fill under pointer hover. *Deprecated.* |
-| `ControlFillPressed` | `render.Color` | A control's fill while pressed. *Deprecated.* |
-| `ControlStroke` | `render.Color` | A control's default border. *Deprecated.* |
-| `SelectionBackground` | `render.Color` | Fill for selected text/content regions. *Deprecated.* |
-| `ControlFillDisabled` | `render.Color` | A disabled control's fill. *Deprecated.* |
-| `ControlStrokeDisabled` | `render.Color` | A disabled control's border. *Deprecated.* |
-| `AccentDisabled` | `render.Color` | Accent color for a disabled accent control. *Deprecated.* |
-| `SelectionForeground` | `render.Color` | Text/foreground color over `SelectionBackground`. *Deprecated.* |
-| `ScrimBackground` | `render.Color` | Overlay tint for modal scrims. *Deprecated.* |
-| `AcrylicTint` | `render.Color` | Translucent tint composited over a backdrop-blur acrylic/mica surface (see `controls.AcrylicSurface`). *Deprecated.* |
+| `SeverityInfo` | `render.Color` | Accent for an informational condition. Deliberately unused by `Toast`'s default rendering (see below), but set to a real color so anything else can use it. |
+| `SeveritySuccess` | `render.Color` | Accent for a condition that completed as intended. |
+| `SeverityWarning` | `render.Color` | Accent for a condition worth attention but not a failure. |
+| `SeverityError` | `render.Color` | Accent for a failed or broken condition. |
+
+**Surface effects**
+
+| Name | Type | Description |
+|---|---|---|
+| `AcrylicTint` | `render.Color` | Translucent tint composited over a backdrop-blur acrylic/mica surface (see `controls.AcrylicSurface`). The one token in the palette carrying partial alpha. |
 
 ### Classic color tokens
 
@@ -373,37 +367,81 @@ Flat fill an unfocused window's title bar uses in place of the
 the current control set only renders the focused/active gradient, so this
 token is not yet consumed anywhere.
 
-### Deprecated fields
+### Severity accents
 
-The pre-v0.2 flat tokens (`WindowBackground` … `AcrylicTint`) are kept only
-until every control that still reads them is migrated onto the classic
-fields; **new code should read the classic tokens instead.** Both `Light`
-and `Dark` set every deprecated field to the same `render.Color` value as
-its classic replacement (see the value table below), so unmigrated controls
-still render in classic colors today — but that mapping is not guaranteed
-to hold once a field is actually removed.
+Added in v0.8.0 alongside `Toast`'s `Severity` field. `Toast` maps its
+`Severity` to one of these and paints it as an accent stripe down the card's
+left inner edge, inset by `BevelWidth` so it sits inside the raised bevel
+rather than covering it.
 
-| Deprecated field | Replacement | Still read by |
-|---|---|---|
-| `WindowBackground`, `LayerBackground`, `CardBackground` | `ButtonFace` | — (value-only match; no current reader found) |
-| `TextPrimary` | `WindowText` | `controls.NewTextBlock`'s default color |
-| `TextSecondary`, `TextDisabled` | `GrayText` | — (value-only match) |
-| `Accent` | `Highlight` | — (value-only match) |
-| `AccentHover`, `AccentPressed` | *(no classic equivalent)* | — |
-| `AccentText` | `HighlightText` | — (value-only match) |
-| `ControlFill`, `ControlFillHover`, `ControlFillPressed` | `ButtonFace` / `ButtonLight` / `ButtonFace` | `CheckBox`, `ToggleSwitch` state-color helpers |
-| `ControlStroke` | `ButtonShadow` | `CheckBox`, `RadioButton`, `ToggleSwitch`, `Button` (legacy `stateColors` path) |
-| `SelectionBackground` | `Highlight` | — (value-only match) |
-| `ControlFillDisabled`, `ControlStrokeDisabled` | `ButtonFace` / `ButtonShadow` | `CheckBox`, `RadioButton`, `ToggleSwitch`, `Button` disabled state |
-| `AccentDisabled` | `GrayText` | `Button` disabled-accent state |
-| `SelectionForeground` | `HighlightText` | — (value-only match; asserted in `listview_test.go`) |
-| `ScrimBackground` | *(no classic equivalent)* | — |
-| `AcrylicTint` | *(no classic equivalent — migration target not yet designed)* | `controls.NewAcrylicSurface`'s default tint |
+#### ColorTokens.SeverityInfo
 
-**Notes** — `AcrylicTint` is marked deprecated like the rest of this group,
-but it is the one field in the group still actively read by a live,
-non-legacy code path (`AcrylicSurface`'s default tint) with no classic
-token yet designed to replace it.
+Accent for an informational condition.
+
+`controls.SeverityInfo` is `Severity`'s zero value, and a toast carrying it
+renders with **no** color cue at all — a plain bevelled card — so this token
+has no reader in the current control set. Both themes still set it to a real
+color so anything classifying conditions by severity has a full four-color
+set to draw from.
+
+#### ColorTokens.SeveritySuccess
+
+Accent for a condition that completed as intended. Painted as `Toast`'s
+stripe for `controls.SeveritySuccess`.
+
+#### ColorTokens.SeverityWarning
+
+Accent for a condition worth the user's attention but not a failure.
+Painted as `Toast`'s stripe for `controls.SeverityWarning`.
+
+#### ColorTokens.SeverityError
+
+Accent for a failed or broken condition. Painted as `Toast`'s stripe for
+`controls.SeverityError`.
+
+### Surface effects
+
+#### ColorTokens.AcrylicTint
+
+Translucent tint composited over a backdrop-blur acrylic/mica surface.
+
+Read by `controls.NewAcrylicSurface` as its default tint (overridable per
+instance with `SetTint`). The only token in the palette with partial alpha —
+both themes set it to their own `ButtonFace` at alpha 180. The classic themes
+keep it even though nothing else in their chrome uses translucency.
+
+**Example**
+
+```go
+c := theme.Active().Color
+surface := controls.NewAcrylicSurface().SetTint(c.AcrylicTint)
+```
+
+### Replacements for the removed flat tokens
+
+The pre-v0.2 flat tokens were removed in v0.15.0, after the last control
+still reading one was migrated onto the classic palette. Code written against
+the old names will not compile against v0.15+; this is the mapping to port
+by. Where a token has no classic equivalent, the effect it named is gone from
+the classic chrome rather than renamed.
+
+| Removed field | Read instead |
+|---|---|
+| `WindowBackground`, `LayerBackground`, `CardBackground` | `ButtonFace` |
+| `TextPrimary` | `WindowText` |
+| `TextSecondary`, `TextDisabled` | `GrayText` |
+| `Accent`, `SelectionBackground` | `Highlight` |
+| `AccentText`, `SelectionForeground` | `HighlightText` |
+| `AccentHover`, `AccentPressed` | *(none — the classic palette has one selection color, not a hover/press ramp)* |
+| `ControlFill`, `ControlFillPressed`, `ControlFillDisabled` | `ButtonFace` |
+| `ControlFillHover` | `ButtonLight` (the classic hover face — see [ButtonLight](#colortokensbuttonlight)) |
+| `ControlStroke`, `ControlStrokeDisabled` | `ButtonShadow` |
+| `AccentDisabled` | `GrayText` |
+| `ScrimBackground` | *(none — `Dialog`'s scrim is painted invisibly, matching classic Win2000 modals)* |
+
+**Notes** — `AcrylicTint` was listed with this group before v0.15 but was
+never part of it: it is a live token, still read by `AcrylicSurface`, and it
+survives unchanged (see [above](#colortokensacrylictint)).
 
 ---
 
@@ -500,28 +538,20 @@ read directly from `classic.go`. Colors are constructed with
 | `CaptionText` | `RGB(255, 255, 255)` | `RGB(255, 255, 255)` |
 | `InactiveCaption` | `RGB(128, 128, 128)` | `RGB(42, 42, 42)` |
 
-### Deprecated flat tokens
+### Severity accents
+
+Brighter in `Dark()` than in `Light()`, so each still reads clearly against
+the darker button face.
 
 | Field | Light() | Dark() |
 |---|---|---|
-| `WindowBackground` | `RGB(212, 208, 200)` | `RGB(58, 58, 58)` |
-| `LayerBackground` | `RGB(212, 208, 200)` | `RGB(58, 58, 58)` |
-| `CardBackground` | `RGB(212, 208, 200)` | `RGB(58, 58, 58)` |
-| `TextPrimary` | `RGB(0, 0, 0)` | `RGB(240, 240, 240)` |
-| `TextSecondary` | `RGB(128, 128, 128)` | `RGB(110, 110, 110)` |
-| `TextDisabled` | `RGB(128, 128, 128)` | `RGB(110, 110, 110)` |
-| `Accent` | `RGB(0, 0, 128)` | `RGB(42, 77, 143)` |
-| `AccentHover` | `RGB(0, 0, 168)` | `RGB(66, 103, 173)` |
-| `AccentPressed` | `RGB(0, 0, 96)` | `RGB(26, 56, 110)` |
-| `AccentText` | `RGB(255, 255, 255)` | `RGB(255, 255, 255)` |
-| `ControlFill` | `RGB(212, 208, 200)` | `RGB(58, 58, 58)` |
-| `ControlFillHover` | `RGB(232, 228, 220)` | `RGB(70, 70, 70)` |
-| `ControlFillPressed` | `RGB(212, 208, 200)` | `RGB(58, 58, 58)` |
-| `ControlStroke` | `RGB(128, 128, 128)` | `RGB(32, 32, 32)` |
-| `SelectionBackground` | `RGB(0, 0, 128)` | `RGB(42, 77, 143)` |
-| `ControlFillDisabled` | `RGB(212, 208, 200)` | `RGB(58, 58, 58)` |
-| `ControlStrokeDisabled` | `RGB(128, 128, 128)` | `RGB(32, 32, 32)` |
-| `AccentDisabled` | `RGB(128, 128, 128)` | `RGB(110, 110, 110)` |
-| `SelectionForeground` | `RGB(255, 255, 255)` | `RGB(255, 255, 255)` |
-| `ScrimBackground` | `RGBA(0, 0, 0, 90)` | `RGBA(0, 0, 0, 120)` |
+| `SeverityInfo` | `RGB(0, 90, 158)` | `RGB(70, 130, 190)` |
+| `SeveritySuccess` | `RGB(0, 128, 0)` | `RGB(60, 170, 60)` |
+| `SeverityWarning` | `RGB(196, 130, 0)` | `RGB(214, 158, 0)` |
+| `SeverityError` | `RGB(178, 0, 0)` | `RGB(214, 60, 60)` |
+
+### Surface effects
+
+| Field | Light() | Dark() |
+|---|---|---|
 | `AcrylicTint` | `RGBA(212, 208, 200, 180)` | `RGBA(58, 58, 58, 180)` |
