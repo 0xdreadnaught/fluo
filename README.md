@@ -9,6 +9,8 @@ Controls draw themselves from swappable design tokens, so restyling an app is a
 data change. Each package stands on its own, so you can pull in just the
 renderer or the whole stack.
 
+![The fluo gallery — menus, tabs, a list view, and the classic four-tone chrome](docs/gallery.png)
+
 ## Features
 
 - A complete control set: buttons, checkboxes, radio groups, toggle switches,
