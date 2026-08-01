@@ -8,6 +8,12 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Removed the unused signed-distance-field text path; the built-in text renderer
+  has used the grayscale coverage atlas since v0.2. `Renderer.DrawSDFQuads`
+  stays on the interface for compatibility but is now a no-op in the GL backend.
+
 ## [0.15.1] - 2026-08-01
 
 ### Fixed
