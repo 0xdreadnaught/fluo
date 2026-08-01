@@ -1117,3 +1117,236 @@ func TestFocusedCaretRectRealTextBox(t *testing.T) {
 		t.Fatalf("FocusedCaretRect() = %v, want %v (TextBox.CaretScreenRect())", got, want)
 	}
 }
+
+// clickProbe records the ClickCount and Time of every pointer event it
+// receives, split by action, so the multi-click tests below assert on what
+// the Router actually stamped rather than on state the Router keeps
+// privately. It marks presses handled but never captures, so every press goes
+// through the ordinary hit-test path.
+type clickProbe struct {
+	core.Element
+	pressCounts   []int
+	pressTimes    []float64
+	releaseCounts []int
+}
+
+func (p *clickProbe) OnPointer(e *input.PointerEvent) {
+	switch e.Action {
+	case input.Press:
+		p.pressCounts = append(p.pressCounts, e.ClickCount)
+		p.pressTimes = append(p.pressTimes, e.Time)
+	case input.Release:
+		p.releaseCounts = append(p.releaseCounts, e.ClickCount)
+	}
+	e.Handled = true
+}
+
+// newClickProbeRouter builds a 50x50 clickProbe at the origin of a laid-out
+// root, wired to a router whose time source reads *clock — so a test drives
+// multi-click detection by assigning to clock rather than by sleeping.
+func newClickProbeRouter(clock *float64) (*clickProbe, *input.Router) {
+	p := &clickProbe{}
+	p.SetWidth(50)
+	p.SetHeight(50)
+	root := controls.NewCanvas().Add(p, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+	r.SetTimeSource(func() float64 { return *clock })
+	return p, r
+}
+
+// TestClickCountRuns walks one router through every way a click run can
+// continue or break: three quick presses at the same spot climb 1, 2, 3, a
+// fourth keeps climbing (the Router counts rather than wrapping — widgets
+// decide what "beyond 3" means), then a press after too long a gap, a press
+// too far away, and a press with a different button each restart at 1.
+func TestClickCountRuns(t *testing.T) {
+	clock := 0.0
+	p, r := newClickProbeRouter(&clock)
+
+	at := render.Point{X: 10, Y: 10}
+	moved := render.Point{X: at.X + input.MultiClickDistance + 1, Y: at.Y}
+	press := func(b input.Button, dt float64, pt render.Point) {
+		clock += dt
+		r.PointerButton(b, true, pt, 0)
+	}
+
+	press(input.ButtonLeft, 0, at)      // 1: first press ever
+	press(input.ButtonLeft, 0.1, at)    // 2: well inside the interval
+	press(input.ButtonLeft, 0.1, at)    // 3
+	press(input.ButtonLeft, 0.1, at)    // 4: keeps counting past a triple
+	press(input.ButtonLeft, 1.0, at)    // 1: gap exceeds MultiClickInterval
+	press(input.ButtonLeft, 0.1, at)    // 2: quick again, a new run resumes
+	press(input.ButtonLeft, 0.1, moved) // 1: beyond MultiClickDistance
+	press(input.ButtonRight, 0.1, moved)
+
+	want := []int{1, 2, 3, 4, 1, 2, 1, 1}
+	if len(p.pressCounts) != len(want) {
+		t.Fatalf("saw %d presses (%v), want %d", len(p.pressCounts), p.pressCounts, len(want))
+	}
+	for i, w := range want {
+		if p.pressCounts[i] != w {
+			t.Fatalf("press %d: ClickCount = %d, want %d (full run: %v)", i, p.pressCounts[i], w, p.pressCounts)
+		}
+	}
+}
+
+// TestClickCountAtThresholdEdges pins the boundaries themselves: a press
+// exactly MultiClickInterval later, or exactly MultiClickDistance away, still
+// continues the run (both comparisons are inclusive), while a hair past
+// either one does not.
+func TestClickCountAtThresholdEdges(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		dt   float64
+		dx   float32
+		want int
+	}{
+		{"exactly at the time limit", input.MultiClickInterval, 0, 2},
+		{"just past the time limit", input.MultiClickInterval + 0.01, 0, 1},
+		{"exactly at the distance limit", 0.05, input.MultiClickDistance, 2},
+		{"just past the distance limit", 0.05, input.MultiClickDistance + 0.01, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := 0.0
+			p, r := newClickProbeRouter(&clock)
+
+			first := render.Point{X: 10, Y: 10}
+			r.PointerButton(input.ButtonLeft, true, first, 0)
+			clock += tc.dt
+			r.PointerButton(input.ButtonLeft, true, render.Point{X: first.X + tc.dx, Y: first.Y}, 0)
+
+			if len(p.pressCounts) != 2 {
+				t.Fatalf("saw %d presses (%v), want 2", len(p.pressCounts), p.pressCounts)
+			}
+			if p.pressCounts[1] != tc.want {
+				t.Fatalf("second press ClickCount = %d, want %d", p.pressCounts[1], tc.want)
+			}
+		})
+	}
+}
+
+// TestClickCountVerticalDistanceBreaksRun covers the y half of the slop box.
+// The x half is exercised above; both matter because the test is per-axis
+// (a rectangle) rather than radial.
+func TestClickCountVerticalDistanceBreaksRun(t *testing.T) {
+	clock := 0.0
+	p, r := newClickProbeRouter(&clock)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0)
+	clock += 0.05
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10 + input.MultiClickDistance + 1}, 0)
+
+	if p.pressCounts[1] != 1 {
+		t.Fatalf("press moved vertically out of the slop box: ClickCount = %d, want 1", p.pressCounts[1])
+	}
+}
+
+// TestClickCountWithoutTimeSource is the regression lock on the additive
+// promise: a router the host never gave a clock behaves exactly as it always
+// did — every press is standalone no matter how many land on the same pixel,
+// since without a clock they would all share timestamp 0 and so look
+// infinitely fast.
+func TestClickCountWithoutTimeSource(t *testing.T) {
+	p := &clickProbe{}
+	p.SetWidth(50)
+	p.SetHeight(50)
+	root := controls.NewCanvas().Add(p, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root) // deliberately no SetTimeSource
+
+	at := render.Point{X: 10, Y: 10}
+	for i := 0; i < 3; i++ {
+		r.PointerButton(input.ButtonLeft, true, at, 0)
+	}
+	for i, got := range p.pressCounts {
+		if got != 1 {
+			t.Fatalf("press %d on a clockless router: ClickCount = %d, want 1 (full run: %v)", i, got, p.pressCounts)
+		}
+		if p.pressTimes[i] != 0 {
+			t.Fatalf("press %d on a clockless router: Time = %v, want 0", i, p.pressTimes[i])
+		}
+	}
+
+	// Installing a clock afterwards starts counting from scratch rather than
+	// chaining onto presses dispatched before it existed.
+	clock := 0.0
+	r.SetTimeSource(func() float64 { return clock })
+	r.PointerButton(input.ButtonLeft, true, at, 0)
+	if got := p.pressCounts[len(p.pressCounts)-1]; got != 1 {
+		t.Fatalf("first press after installing a clock: ClickCount = %d, want 1", got)
+	}
+}
+
+// TestClickCountOnlyOnPress checks the field stays 0 for everything that is
+// not a press, and that the release every real double-click interleaves does
+// not itself break the run.
+func TestClickCountOnlyOnPress(t *testing.T) {
+	clock := 0.0
+	p, r := newClickProbeRouter(&clock)
+
+	at := render.Point{X: 10, Y: 10}
+	r.PointerButton(input.ButtonLeft, true, at, 0)
+	clock += 0.05
+	r.PointerButton(input.ButtonLeft, false, at, 0)
+	clock += 0.05
+	r.PointerButton(input.ButtonLeft, true, at, 0)
+
+	if len(p.pressCounts) != 2 || p.pressCounts[1] != 2 {
+		t.Fatalf("press counts = %v, want [1 2] (an intervening release must not break the run)", p.pressCounts)
+	}
+	for i, got := range p.releaseCounts {
+		if got != 0 {
+			t.Fatalf("release %d: ClickCount = %d, want 0", i, got)
+		}
+	}
+}
+
+// timeProbe records e.Time for the Move/Press/Wheel events it receives,
+// ignoring the Enter that arrives alongside the first move (updateHover's
+// derived notifications carry no timestamp by design).
+type timeProbe struct {
+	core.Element
+	times []float64
+}
+
+func (p *timeProbe) OnPointer(e *input.PointerEvent) {
+	switch e.Action {
+	case input.Move, input.Press, input.Wheel:
+		p.times = append(p.times, e.Time)
+	}
+}
+
+// TestPointerEventTimeStamped proves Time reaches widgets from the installed
+// clock on all three real dispatch entry points, not only on presses.
+func TestPointerEventTimeStamped(t *testing.T) {
+	const clock = 12.5
+
+	p := &timeProbe{}
+	p.SetWidth(50)
+	p.SetHeight(50)
+	root := controls.NewCanvas().Add(p, 0, 0)
+	layout(root, 100, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+	r.SetTimeSource(func() float64 { return clock })
+
+	at := render.Point{X: 10, Y: 10}
+	r.PointerMove(at, 0)
+	r.PointerButton(input.ButtonLeft, true, at, 0)
+	r.PointerWheel(render.Point{Y: 1}, at, 0)
+
+	if len(p.times) != 3 {
+		t.Fatalf("saw %d timestamped events (%v), want 3", len(p.times), p.times)
+	}
+	for i, got := range p.times {
+		if got != clock {
+			t.Fatalf("event %d: Time = %v, want %v", i, got, clock)
+		}
+	}
+}

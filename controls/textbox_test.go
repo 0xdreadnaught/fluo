@@ -3270,3 +3270,213 @@ func TestTextBoxLineNumbersRuleAndNumbersScrollWithText(t *testing.T) {
 		t.Fatalf("caret y = %v, want %v (scrolled row origin the gutter numbers also use)", caret.Y, wantY)
 	}
 }
+
+// multiClickText is the fixture the double-/triple-click tests below share:
+// two logical lines, punctuation both glued to a word ("alpha,") and standing
+// alone between words, so word spans have to respect the punctuation-is-its-
+// own-word rule and stop at the line break.
+//
+//	index: 0..4 alpha  5 ,  6 space  7..10 beta  11 \n
+//	       12..16 gamma  17 space  18..22 delta   (len 23)
+const multiClickText = "alpha, beta\ngamma delta"
+
+// newMultiClickTextBox builds a focused, laid-out, non-wrapping multi-line
+// TextBox over s, sized so both lines fit without scrolling.
+func newMultiClickTextBox(t *testing.T, s string) *TextBox {
+	t.Helper()
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true)
+	tb.SetText(s)
+	tb.SetWidth(300)
+	tb.SetHeight(120)
+	tb.OnFocusChanged(true)
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: 300, H: 120})
+	return tb
+}
+
+// pointAtIndex inverts caretIndexAtPos for a non-wrapping TextBox: the
+// window-space point that hit-tests to rune index i, vertically centered in
+// its own row. Every caller re-checks the round trip through caretIndexAtPos
+// before relying on it, so a geometry slip here fails loudly rather than
+// quietly testing the wrong word.
+func pointAtIndex(t *testing.T, tb *TextBox, i int) (x, y float32) {
+	t.Helper()
+	line, col := tb.lineCol(i)
+	x = tb.Bounds().X + tb.metrics.PaddingM + tb.gutterWidth() - tb.hscroll + tb.xOfInLine(line, col)
+	y = tb.Bounds().Y + tb.metrics.PaddingM - tb.vscroll + (float32(line)+0.5)*tb.lineHeight()
+	if got := tb.caretIndexAtPos(x, y); got != i {
+		t.Fatalf("pointAtIndex(%d) = (%v,%v), which hit-tests to index %d instead", i, x, y, got)
+	}
+	return x, y
+}
+
+// pressWithClicks dispatches a synthetic Press at index i carrying the given
+// ClickCount, through a throwaway router whose capture it drops again — the
+// shape of a press the real Router would deliver mid-run.
+func pressWithClicks(t *testing.T, tb *TextBox, i, clicks int) {
+	t.Helper()
+	x, y := pointAtIndex(t, tb, i)
+	r := input.NewRouter()
+	r.SetRoot(tb)
+	e := &input.PointerEvent{Action: input.Press, Pos: render.Point{X: x, Y: y}, ClickCount: clicks, Router: r}
+	tb.OnPointer(e)
+	r.Release()
+}
+
+// TestTextBoxDoubleClickSelectsWord covers the word span a ClickCount 2 press
+// selects at each interesting position: inside a word, on a word's leading
+// and trailing edges (the trailing edge must keep the word just ended rather
+// than skip to the next one), on punctuation standing as its own word, and at
+// the very end of the text.
+func TestTextBoxDoubleClickSelectsWord(t *testing.T) {
+	for _, tc := range []struct {
+		at   int
+		want string
+	}{
+		{0, "alpha"},  // leading edge of the first word
+		{2, "alpha"},  // inside it
+		{5, "alpha"},  // trailing edge: the word that ends here wins
+		{6, ","},      // trailing edge of the comma, its own word
+		{7, "beta"},   // leading edge, straight after a space
+		{9, "beta"},   // inside it
+		{11, "beta"},  // end of line 0: must not reach across the '\n'
+		{12, "gamma"}, // start of line 1, likewise
+		{14, "gamma"},
+		{20, "delta"},
+		{23, "delta"}, // very end of the text
+	} {
+		tb := newMultiClickTextBox(t, multiClickText)
+		pressWithClicks(t, tb, tc.at, 2)
+
+		start, end := tb.Selection()
+		if got := string(tb.runes[start:end]); got != tc.want {
+			t.Fatalf("double-click at index %d selected %q [%d,%d), want %q", tc.at, got, start, end, tc.want)
+		}
+	}
+}
+
+// TestTextBoxDoubleClickInWhitespacePlacesCaret covers wordSpanAt's no-word
+// case: a double-click with whitespace on both sides has nothing to select,
+// so it falls back to plain caret placement rather than selecting the run of
+// spaces.
+func TestTextBoxDoubleClickInWhitespacePlacesCaret(t *testing.T) {
+	tb := newMultiClickTextBox(t, "hi   there")
+	pressWithClicks(t, tb, 3, 2) // "hi_|__there", spaces either side
+
+	if start, end := tb.Selection(); start != end {
+		t.Fatalf("double-click in whitespace selected [%d,%d), want an empty selection", start, end)
+	}
+	if got := tb.Caret(); got != 3 {
+		t.Fatalf("double-click in whitespace: caret = %d, want 3", got)
+	}
+}
+
+// TestTextBoxTripleClickSelectsLine covers ClickCount 3: the whole LOGICAL
+// line under the pointer, stopping short of its terminating newline. A fourth
+// press in the same run keeps that line selected rather than snapping back to
+// a bare caret, since the Router keeps counting upward past 3.
+func TestTextBoxTripleClickSelectsLine(t *testing.T) {
+	for _, tc := range []struct {
+		at     int
+		clicks int
+		want   string
+	}{
+		{2, 3, "alpha, beta"},
+		{11, 3, "alpha, beta"}, // clicking at the line's end still takes it whole
+		{14, 3, "gamma delta"},
+		{14, 4, "gamma delta"}, // beyond a triple, the line selection holds
+	} {
+		tb := newMultiClickTextBox(t, multiClickText)
+		pressWithClicks(t, tb, tc.at, tc.clicks)
+
+		start, end := tb.Selection()
+		if got := string(tb.runes[start:end]); got != tc.want {
+			t.Fatalf("%d-click at index %d selected %q [%d,%d), want %q", tc.clicks, tc.at, got, start, end, tc.want)
+		}
+	}
+}
+
+// TestTextBoxSingleClickStillPlacesCaret is the regression lock: a press with
+// ClickCount 1 — and equally one carrying the zero value, which is every
+// synthetic event built before this field existed — places the caret and
+// clears the selection exactly as it always did.
+func TestTextBoxSingleClickStillPlacesCaret(t *testing.T) {
+	for _, clicks := range []int{0, 1} {
+		tb := newMultiClickTextBox(t, multiClickText)
+		tb.Select(0, 5) // a selection that the press must clear
+		pressWithClicks(t, tb, 9, clicks)
+
+		if got := tb.Caret(); got != 9 {
+			t.Fatalf("press with ClickCount %d: caret = %d, want 9", clicks, got)
+		}
+		if start, end := tb.Selection(); start != end {
+			t.Fatalf("press with ClickCount %d selected [%d,%d), want an empty selection", clicks, start, end)
+		}
+	}
+}
+
+// TestTextBoxDragAfterDoubleClickExtendsFromWordStart pins the drag that
+// follows a multi-click: it stays coherent, extending per-rune from the word
+// the double-click selected (Select leaves the anchor at the range start), and
+// notably does not crash or leave a stale anchor behind.
+func TestTextBoxDragAfterDoubleClickExtendsFromWordStart(t *testing.T) {
+	tb := newMultiClickTextBox(t, multiClickText)
+
+	r := input.NewRouter()
+	r.SetRoot(tb)
+
+	px, py := pointAtIndex(t, tb, 9) // inside "beta"
+	tb.OnPointer(&input.PointerEvent{Action: input.Press, Pos: render.Point{X: px, Y: py}, ClickCount: 2, Router: r})
+	if start, end := tb.Selection(); start != 7 || end != 11 {
+		t.Fatalf("double-click selected [%d,%d), want [7,11)", start, end)
+	}
+	if r.Captured() != core.Widget(tb) {
+		t.Fatal("double-click did not capture the pointer, so no drag could follow")
+	}
+
+	mx, my := pointAtIndex(t, tb, 2) // drag back into "alpha"
+	tb.OnPointer(&input.PointerEvent{Action: input.Move, Pos: render.Point{X: mx, Y: my}, Router: r})
+	if start, end := tb.Selection(); start != 2 || end != 7 {
+		t.Fatalf("drag after a double-click selected [%d,%d), want [2,7) (anchored at the word start)", start, end)
+	}
+
+	tb.OnPointer(&input.PointerEvent{Action: input.Release, Pos: render.Point{X: mx, Y: my}, Router: r})
+	if r.Captured() != nil {
+		t.Fatal("release after a double-click drag left the pointer captured")
+	}
+}
+
+// TestTextBoxDoubleClickThroughRealRouter is the end-to-end check that the
+// two halves meet: a real input.Router on a driven clock, two presses close
+// enough in time and space to form a double-click, and a TextBox that selects
+// the word — with nobody setting ClickCount by hand anywhere along the way.
+func TestTextBoxDoubleClickThroughRealRouter(t *testing.T) {
+	tb := newMultiClickTextBox(t, multiClickText)
+
+	clock := 0.0
+	r := input.NewRouter()
+	r.SetRoot(tb)
+	r.SetTimeSource(func() float64 { return clock })
+
+	x, y := pointAtIndex(t, tb, 9) // inside "beta"
+	at := render.Point{X: x, Y: y}
+
+	r.PointerButton(input.ButtonLeft, true, at, 0)
+	if got := tb.Caret(); got != 9 {
+		t.Fatalf("first click: caret = %d, want 9", got)
+	}
+	r.PointerButton(input.ButtonLeft, false, at, 0)
+
+	clock += 0.1
+	r.PointerButton(input.ButtonLeft, true, at, 0)
+	if start, end := tb.Selection(); start != 7 || end != 11 {
+		t.Fatalf("second click %vs later selected [%d,%d), want [7,11) (the word \"beta\")", 0.1, start, end)
+	}
+	r.PointerButton(input.ButtonLeft, false, at, 0)
+
+	// A third press, still inside the run, promotes to the whole line.
+	clock += 0.1
+	r.PointerButton(input.ButtonLeft, true, at, 0)
+	if start, end := tb.Selection(); start != 0 || end != 11 {
+		t.Fatalf("third click selected [%d,%d), want [0,11) (the whole first line)", start, end)
+	}
+}
