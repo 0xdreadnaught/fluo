@@ -406,6 +406,13 @@ func (l *ListView) MeasureContent(available render.Size) render.Size {
 // a source must announce the edit (a Replace/Reset notification) like any
 // other, which is also already required for the row text itself to be
 // re-realized.
+//
+// The face is not a staleness source: it is captured once in NewListView and
+// never reassigned (there is no SetFace), and Measure works in logical pixels
+// (scale-independent), so a DPI/scale change does not change a row's measured
+// width. Changing the face or theme means rebuilding the widget tree, which
+// constructs a fresh ListView with a cold memo — so font changes can never
+// leave this value stale on a live instance.
 func (l *ListView) contentWidth() float32 {
 	if !l.cachedContentWOK {
 		l.cachedContentW = l.measureContentWidth()
