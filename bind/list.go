@@ -269,9 +269,17 @@ func Items[T any](l *List[T], panel *controls.StackPanel, makeItem func(item T, 
 			panel.Add(widget)
 		}
 	}
-	rebuild()
-
-	// Subscribe to list changes
+	// Subscribe BEFORE the initial rebuild so a list mutation made from within
+	// makeItem on that very first pass is not lost. The rebuilding/pending
+	// coalescing (above) only engages via this subscription: a makeItem that
+	// mutates the list fires notify, which — only if we are already listening —
+	// re-enters rebuild, sees rebuilding==true, and sets pending so one more
+	// pass runs after the outer completes. Subscribing AFTER the first rebuild
+	// (the prior order) meant that first-pass mutation reached no subscriber,
+	// set no pending flag, and left the panel permanently stale. OnChanged only
+	// registers the callback (it never invokes rebuild itself), so the explicit
+	// rebuild() below still runs exactly once — no double build.
 	cancel = l.OnChanged(rebuild)
+	rebuild()
 	return
 }

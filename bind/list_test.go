@@ -686,6 +686,43 @@ func TestItemsReentrancyGuard(t *testing.T) {
 	}
 }
 
+// TestItemsMutationOnFirstBuildNotLost is the FIX B1 regression: a makeItem
+// that mutates the list on the INITIAL build pass must still trigger a
+// coalesced rebuild, so the panel reflects the appended item instead of being
+// left permanently stale. Before the fix, Items subscribed to OnChanged only
+// AFTER running the first rebuild, so the first-pass mutation reached no
+// subscriber, set no pending flag, and was dropped forever.
+func TestItemsMutationOnFirstBuildNotLost(t *testing.T) {
+	face, err := text.Load(goregular.TTF)
+	if err != nil {
+		t.Fatalf("text.Load: %v", err)
+	}
+	textFace := text.NewFace(face, 14)
+
+	l := NewList[string]("Alice")
+	panel := controls.NewStackPanel(controls.Vertical)
+
+	appended := false
+	Items[string](l, panel, func(item string, index int) core.Widget {
+		tb := controls.NewTextBox(textFace)
+		tb.SetText(item)
+		// Mutate on the FIRST build pass, exactly once.
+		if item == "Alice" && !appended {
+			appended = true
+			l.Add("Bob")
+		}
+		return tb
+	})
+
+	// The coalesced rebuild after the first pass must have materialized Bob.
+	if got := len(panel.Children()); got != 2 {
+		t.Fatalf("panel.Children() = %d, want 2 (first-pass mutation must not be lost)", got)
+	}
+	if l.Len() != 2 || l.At(0) != "Alice" || l.At(1) != "Bob" {
+		t.Fatalf("list = %d items %q/%q, want [Alice Bob]", l.Len(), l.At(0), l.At(l.Len()-1))
+	}
+}
+
 // --- OnChange (granular) events ---
 
 func TestListOnChangeAddSingleItem(t *testing.T) {
