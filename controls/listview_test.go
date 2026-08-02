@@ -1008,13 +1008,18 @@ func TestListViewContentWidthRemeasuredAfterListChange(t *testing.T) {
 	items := newFakeListItems("a", "b")
 	l := NewListView(face, items)
 
-	narrow := l.contentWidth()
+	narrow := l.contentWidth() // warms the cache
 
-	items.Add(wideText)
+	// An append grows the memo incrementally: only the newly-added row is
+	// measured (one At call), never the whole list, and the cache stays warm.
 	items.atCalls = 0
+	items.Add(wideText)
+	if items.atCalls != 1 {
+		t.Fatalf("an append measured %d items, want 1 (only the newly-added row, not a full re-measure)", items.atCalls)
+	}
 	wide := l.contentWidth()
-	if items.atCalls != items.Len() {
-		t.Fatalf("contentWidth() after an add read %d items, want %d (the change must drop the cache)", items.atCalls, items.Len())
+	if items.atCalls != 1 {
+		t.Fatalf("contentWidth() after an incremental append read %d items total, want 1 (the cache must stay warm)", items.atCalls)
 	}
 	if wide <= narrow {
 		t.Fatalf("contentWidth() after adding a wide row = %v, want > %v", wide, narrow)
@@ -1033,6 +1038,79 @@ func TestListViewContentWidthRemeasuredAfterListChange(t *testing.T) {
 	items.Set(0, wideText)
 	if got := l.contentWidth(); got != wide {
 		t.Fatalf("contentWidth() after replacing row 0 with the wide text = %v, want %v", got, wide)
+	}
+}
+
+// TestListViewContentWidthAppendNarrowerRowKeepsMax proves the incremental
+// append path leaves the memo at its existing max when the added row is
+// narrower: only the new row is measured (one At call), and the width is
+// unchanged.
+func TestListViewContentWidthAppendNarrowerRowKeepsMax(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+
+	face := testFace(t)
+	items := newFakeListItems("a", wideText, "c")
+	l := NewListView(face, items)
+
+	wide := l.contentWidth() // warms the cache; widest row is wideText
+
+	items.atCalls = 0
+	items.Add("z") // far narrower than wideText
+	if items.atCalls != 1 {
+		t.Fatalf("appending a narrow row measured %d items, want 1 (only the added row)", items.atCalls)
+	}
+	if got := l.contentWidth(); got != wide {
+		t.Fatalf("contentWidth() after appending a narrow row = %v, want %v (max unchanged)", got, wide)
+	}
+	if items.atCalls != 1 {
+		t.Fatalf("contentWidth() after a narrow append read %d items total, want 1 (cache stayed warm)", items.atCalls)
+	}
+}
+
+// TestListViewContentWidthAppendColdCacheStaysCold proves an append against a
+// never-measured (cold) memo does not eagerly measure anything: the memo stays
+// cold and the next contentWidth() does the one full measure.
+func TestListViewContentWidthAppendColdCacheStaysCold(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+
+	face := testFace(t)
+	items := newFakeListItems("a", "b")
+	l := NewListView(face, items)
+
+	// Never call contentWidth(): the memo is cold.
+	items.atCalls = 0
+	items.Add(wideText)
+	if items.atCalls != 0 {
+		t.Fatalf("append against a cold cache measured %d items, want 0 (nothing to grow yet)", items.atCalls)
+	}
+	want := wantContentWidth(face, items.items, theme.Light().Metric)
+	if got := l.contentWidth(); got != want {
+		t.Fatalf("contentWidth() after cold-cache append = %v, want %v (full measure)", got, want)
+	}
+}
+
+// TestListViewContentWidthRemoveWidestRecomputes proves a Remove of the widest
+// row shrinks the memo — the one change kind an append's incremental grow can
+// never handle (it can only widen), so it must fully re-measure.
+func TestListViewContentWidthRemoveWidestRecomputes(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+
+	face := testFace(t)
+	items := newFakeListItems("a", wideText, "c")
+	l := NewListView(face, items)
+
+	wide := l.contentWidth() // widest row is wideText at index 1
+
+	items.RemoveAt(1) // drop the widest row
+	got := l.contentWidth()
+	if got >= wide {
+		t.Fatalf("contentWidth() after removing the widest row = %v, want < %v (must shrink)", got, wide)
+	}
+	if want := wantContentWidth(face, items.items, theme.Light().Metric); got != want {
+		t.Fatalf("contentWidth() after removing the widest row = %v, want %v", got, want)
 	}
 }
 

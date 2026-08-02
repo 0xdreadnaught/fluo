@@ -111,12 +111,13 @@ type ListView struct {
 // NewListView returns a ListView rendering items (v0: plain strings) with
 // face, styled from theme.Active() at construction (rebuild to re-theme).
 // It subscribes to items.OnChange (the granular channel) so that any list
-// mutation invalidates measure+arrange and drops the memoized content width
-// (see contentWidth); v0 does not use the Change payload for incremental
-// updates (a full re-layout recomputes the visible range and re-texts the
-// pool from scratch) — per-row incrementalism is a later phase. Callers
-// MUST call Dispose() when done with the ListView (e.g. from a rebuild's
-// cancel path) to release this subscription — see Dispose.
+// mutation invalidates measure+arrange and refreshes the memoized content
+// width (see contentWidth and updateContentWidth: an append grows the memo by
+// the one added row rather than dropping it; every other change drops it). The
+// pool itself is still re-texted from a full re-layout — per-row row
+// incrementalism is a later phase. Callers MUST call Dispose() when done with
+// the ListView (e.g. from a rebuild's cancel path) to release this
+// subscription — see Dispose.
 // items may be nil, matching the nil-face convention: the ListView builds
 // and lays out as a permanently empty list rather than panicking.
 func NewListView(face *text.Face, items ListItems) *ListView {
@@ -135,8 +136,8 @@ func NewListView(face *text.Face, items ListItems) *ListView {
 	// contentWidth both already treat it as zero-length): there is nothing
 	// to subscribe to, so cancel stays nil and Dispose becomes a no-op.
 	if items != nil {
-		l.cancel = items.OnChange(func(ListChange) {
-			l.invalidateContentWidth()
+		l.cancel = items.OnChange(func(c ListChange) {
+			l.updateContentWidth(c)
 			l.InvalidateMeasure()
 		})
 	}
@@ -438,13 +439,51 @@ func (l *ListView) measureContentWidth() float32 {
 	return maxW + lpad + rpad
 }
 
+// updateContentWidth refreshes the memoized content width in response to a
+// list change, called from the items subscription installed in NewListView
+// (the single point at which the item set can change under a ListView: there
+// is no SetItems, and neither the face nor the padding metrics can change
+// after construction, so no other change point exists to miss).
+//
+// An append can only widen the content, never narrow it, so a ListChangeAdd
+// against a currently-valid memo is folded in incrementally: measure only the
+// one newly-added row (identified by the change's Index — bind.List fires one
+// ListChangeAdd per single Add/Insert carrying that row's index; a multi-item
+// Add coalesces into a Reset, handled by the full-drop path below) and grow
+// the memo to max(cached, that row's width). That turns the common "append a
+// row" case from an O(n) face.Measure sweep into a single Measure.
+//
+// Every other change can shrink the widest row — a Remove could drop the
+// widest item outright, a Replace/Reset can rewrite it narrower — so those
+// fall through to a full invalidation and the next contentWidth() re-measures.
+// An Add against an already-cold memo also just stays cold (nothing to grow).
+// See contentWidth's staleness contract.
+func (l *ListView) updateContentWidth(c ListChange) {
+	if c.Kind == ListChangeAdd && l.cachedContentWOK {
+		if w := l.itemWidth(c.Index); w > l.cachedContentW {
+			l.cachedContentW = w
+		}
+		return
+	}
+	l.invalidateContentWidth()
+}
+
+// itemWidth measures a single row's content width the same way
+// measureContentWidth measures the widest one: the row's text width plus the
+// lpad/rpad inset every row gets, so the result is directly comparable to (and
+// can grow) the memoized max. Nil face/items, or an out-of-range index, report
+// 0 — matching measureContentWidth's nil-source convention.
+func (l *ListView) itemWidth(i int) float32 {
+	if l.face == nil || l.items == nil || i < 0 || i >= l.items.Len() {
+		return 0
+	}
+	lpad := 2 * l.metrics.PaddingS
+	rpad := l.metrics.PaddingS
+	return l.face.Measure(l.items.At(i)).W + lpad + rpad
+}
+
 // invalidateContentWidth drops the memoized content width so the next
-// contentWidth() re-measures. Called from the items subscription installed
-// in NewListView — the single point at which the item set can change under a
-// ListView (there is no SetItems: an existing ListView stays bound to the
-// source it was constructed with, and neither the face nor the padding
-// metrics can change after construction either, so no other invalidation
-// point exists to miss). See contentWidth's staleness contract.
+// contentWidth() re-measures. See contentWidth's staleness contract.
 func (l *ListView) invalidateContentWidth() {
 	l.cachedContentWOK = false
 }
