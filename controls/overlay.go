@@ -313,8 +313,19 @@ func (h *OverlayHost) ClosePopup(popup core.Widget) {
 	h.popupHoverGen++
 
 	core.SetParent(popup, nil)
+
+	// focusClearedByClose records whether detaching this popup strips keyboard
+	// focus from the whole tree — true only when the focused widget lived
+	// inside popup's subtree, which is exactly when Detach clears it via
+	// Focus(nil) (e.g. the dialog scrim ShowDialog focuses). Captured BEFORE
+	// Detach, compared AFTER, so a popup whose owner keeps focus elsewhere (a
+	// ComboBox dropdown, a menu — their opener field stays focused, outside the
+	// closing subtree) leaves this false and is left untouched below.
+	var focusClearedByClose bool
 	if h.router != nil {
+		hadFocus := h.router.Focused() != nil
 		h.router.Detach(popup)
+		focusClearedByClose = hadFocus && h.router.Focused() == nil
 	}
 	if entry.onDismiss != nil {
 		entry.onDismiss()
@@ -323,6 +334,17 @@ func (h *OverlayHost) ClosePopup(popup core.Widget) {
 
 	if !h.hasModalPopup() && h.router != nil && h.router.Captured() == core.Widget(h) {
 		h.router.Release()
+	}
+
+	// If closing this popup left the tree unfocused AND another popup is still
+	// open beneath it, route focus to the now-topmost popup so it stays
+	// keyboard-reachable. Without this, OverlayHost.OnKey — which delegates to
+	// CONTENT whenever Focused() == nil — would send Escape (and every other
+	// unfocused key) to content instead of the surviving dialog, stranding a
+	// button-less dialog whose only close path is Escape. Mirrors how
+	// ShowDialog focuses a single dialog's scrim.
+	if focusClearedByClose && h.router != nil && len(h.popups) > 0 {
+		h.router.Focus(h.popups[len(h.popups)-1].w)
 	}
 }
 
