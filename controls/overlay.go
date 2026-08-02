@@ -57,7 +57,7 @@ type popupEntry struct {
 // the paragraph below.
 //
 // Focus trapping is a SEPARATE opt-in from modality, and a narrower one:
-// showPopupTrapFocus (used by ShowDialog, and the only user of it in v0)
+// ShowModalPopup (which is also how ShowDialog opens its own surface)
 // pushes an input.Router focus scope rooted at the popup, so Tab/Shift+Tab
 // cycle only the popup's own focusable widgets and keys never dispatch into
 // the content behind it; ClosePopup pops that scope again. Being modal is
@@ -256,7 +256,7 @@ func (h *OverlayHost) SetTimers(q *timers.Queue) *OverlayHost {
 // this (e.g. ToolTipArea's tip) — see the type doc comment's "Modal vs
 // non-modal popups" paragraph.
 // A popup shown this way does NOT trap keyboard focus — see the type doc
-// comment's "Focus trapping" paragraph, and showPopupTrapFocus for the
+// comment's "Focus trapping" paragraph, and ShowModalPopup for the
 // dialog-shaped popup that does.
 func (h *OverlayHost) ShowPopup(popup core.Widget, anchor render.Rect, onDismiss func()) {
 	h.showPopup(popup, anchor, onDismiss, true, false)
@@ -276,6 +276,37 @@ func (h *OverlayHost) ShowPopupNonModal(popup core.Widget, anchor render.Rect, o
 	h.showPopup(popup, anchor, onDismiss, false, false)
 }
 
+// ShowModalPopup opens popup as a MODAL popup that ALSO TRAPS KEYBOARD FOCUS
+// for as long as it is open. Placement, stacking, the light-dismiss capture
+// and the onDismiss-fires-once-on-close contract are all exactly ShowPopup's
+// (see its doc comment); the difference is entirely the focus trap: a focus
+// scope rooted at popup is pushed on the wired router (see SetRouter) when it
+// opens and popped again when it closes, so while it is up, Tab/Shift+Tab
+// cycle only popup's own focusable widgets, widgets behind it are not
+// keyboard-reachable (no key event dispatches into the content, even if
+// something out there is still focused), and Escape reaches popup itself —
+// pushing the scope also homes focus onto popup, which is what makes it the
+// key target even when it holds no focusable widget at all. Closing it
+// returns focus to whatever held it when the popup opened (typically the
+// control that opened it), per the focus-scope contract — see
+// input.Router.PushFocusScope/PopFocusScope for the exact rules, including
+// what happens when that opener is gone by the time it closes.
+//
+// Which of the three to use:
+//
+//   - ShowPopup — modal, does NOT trap focus. For a popup whose keyboard
+//     handling lives on the OPENER outside it (a ComboBox dropdown, a MenuBar
+//     menu) — see the type doc comment's "Focus trapping" paragraph for why
+//     trapping those would strand their Escape/arrow keys.
+//   - ShowPopupNonModal — neither modal nor trapping (a tooltip).
+//   - ShowModalPopup — both, for a dialog-shaped surface: nothing behind it
+//     should be reachable until it closes. ShowDialog is the ready-made one
+//     built on this; call ShowModalPopup directly to trap focus in a
+//     scrim-backed modal surface of your own.
+func (h *OverlayHost) ShowModalPopup(popup core.Widget, anchor render.Rect, onDismiss func()) {
+	h.showPopupTrapFocus(popup, anchor, onDismiss)
+}
+
 // showPopupTrapFocus opens popup as a MODAL popup that ALSO traps keyboard
 // focus for as long as it is open: the wired router (see SetRouter) gets a
 // focus scope rooted at popup pushed on it here and popped again by
@@ -284,11 +315,11 @@ func (h *OverlayHost) ShowPopupNonModal(popup core.Widget, anchor render.Rect, o
 // (see input.Router.PushFocusScope for the full contract, including its
 // focusing popup itself on push). Everything else is exactly ShowPopup.
 //
-// Unexported on purpose: the only surface in v0 that wants this is a dialog
-// (ShowDialog), whose whole point is that nothing behind it is reachable
-// until it closes. The other modal popups in this package must NOT trap —
-// see the type doc comment's "Focus trapping" paragraph for why keeping
-// focus on the opener is load-bearing for ComboBox and MenuBar.
+// Shared by the two surfaces that want a trap: ShowModalPopup (the public
+// spelling of it) and ShowDialog, whose whole point is that nothing behind it
+// is reachable until it closes. The other modal popups in this package must
+// NOT trap — see the type doc comment's "Focus trapping" paragraph for why
+// keeping focus on the opener is load-bearing for ComboBox and MenuBar.
 func (h *OverlayHost) showPopupTrapFocus(popup core.Widget, anchor render.Rect, onDismiss func()) {
 	h.showPopup(popup, anchor, onDismiss, true, true)
 }
