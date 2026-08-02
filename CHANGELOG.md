@@ -8,6 +8,17 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.15.7] - 2026-08-02
+
+### Added
+
+- **Modal dialogs trap keyboard focus.** While a `ShowDialog` modal is open, Tab
+  cycles only within the dialog, keys can't reach or activate the widgets behind
+  it, and a button-less dialog stays closable with Escape. Focus returns to the
+  control that opened the dialog when it closes. Non-modal popups (menus, combo
+  boxes, tooltips) are unaffected. New `Router.PushFocusScope` / `PopFocusScope`
+  expose the focus-scope stack for building other modal surfaces.
+
 ## [0.15.6] - 2026-08-02
 
 ### Changed
