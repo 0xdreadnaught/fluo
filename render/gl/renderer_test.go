@@ -1150,6 +1150,141 @@ func TestMenuOpen(t *testing.T) {
 	})
 }
 
+// TestMenuBarHoveredCell is the hovered-menu-bar-cell golden, the one
+// branch of MenuBar.Render no other golden reaches. menu_open.png shows the
+// OPEN cell's sunken look and (inside the popup) a hovered ROW's navy band,
+// but every cell in its bar is either open or at rest — the bar's own hover
+// state, where a cell that is merely pointed at fills Highlight and flips
+// its title to HighlightText, appears nowhere.
+//
+// A bar of three menus ("File", "Edit", "View") with NO menu open and the
+// pointer resting a few px inside the leftmost cell, in a 260x40 frame.
+// "File" should read as white-on-navy against its two plain
+// WindowText-on-ButtonFace neighbours. The hover is driven through a real
+// router.PointerMove (matching TestMenuOpen's router-driven approach) rather
+// than by reaching into MenuBar's unexported hover state; no menu is opened
+// first, precisely because an open popup would take the pointer capture and
+// the Move would never reach the bar at all.
+func TestMenuBarHoveredCell(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "menu_hover", 260, 40, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		bar := controls.NewMenuBar(face)
+		bar.AddMenu("File").Add("New", nil)
+		bar.AddMenu("Edit").Add("Undo", nil)
+		bar.AddMenu("View").Add("Zoom", nil)
+		bar.SetAlign(core.Start, core.Start) // top-left; never stretched
+
+		host := controls.NewOverlayHost()
+		router := input.NewRouter()
+		host.SetRouter(router)
+		host.SetContent(bar)
+		router.SetRoot(host)
+
+		frame := render.Rect{X: 0, Y: 0, W: 260, H: 40}
+		r.FillRect(frame, th.Color.ButtonFace)
+
+		core.MeasureWidget(host, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(host, frame)
+
+		// A few px in from the bar's own left edge lands comfortably inside
+		// "File"'s hit zone whatever its exact measured width — the same
+		// trick TestMenuOpen uses to click that cell.
+		barBounds := core.BoundsOf(bar)
+		router.PointerMove(render.Point{X: barBounds.X + 5, Y: barBounds.Y + barBounds.H/2}, 0)
+
+		core.RenderWidget(host, r)
+	})
+}
+
+// TestDataGridOverlay is the DataGrid overlay-chrome golden: everything
+// DataGrid.RenderOverlay draws, in one frame. datagrid_hscroll.png already
+// shows both scroll thumbs, but nothing in the suite has ever rendered a
+// FOCUSED virtualized control, so the focus ring — the last thing
+// RenderOverlay paints, above both thumbs — has no pixel coverage at all.
+//
+// A 240x120 grid of three Px columns (120+140+120 = 380, well past the
+// viewport, the deliberate Px-only overflow shape that forces a horizontal
+// thumb — a Star column would resolve to exactly the viewport width and
+// never overflow) over 30 rows, scrolled right AND down so both thumbs sit
+// off their minimum, with focus taken through the real router (matching
+// TestComboOpen/TestMenuOpen's router-driven approach) rather than by
+// calling OnFocusChanged directly. The golden should show the classic
+// 1px Highlight focus rectangle running just inside the grid's sunken outer
+// well, unbroken along all four edges and crossing OVER both thumb gutters
+// rather than stopping at them, with row 2's Highlight selection band
+// visible in the body behind it.
+func TestDataGridOverlay(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "datagrid_overlay", 260, 140, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		dg := controls.NewDataGrid(face)
+		dg.SetColumns(
+			controls.Column{Title: "Name", Width: controls.Px(120), Value: func(row int) string {
+				return fmt.Sprintf("User %d", row)
+			}},
+			controls.Column{Title: "Email", Width: controls.Px(140), Value: func(row int) string {
+				return fmt.Sprintf("u%d@example.com", row)
+			}},
+			controls.Column{Title: "Age", Width: controls.Px(120), Value: func(row int) string {
+				return fmt.Sprintf("%d", 20+row)
+			}},
+		)
+		dg.SetRowCount(30)
+		dg.SetWidth(240)
+		dg.SetHeight(120)
+		dg.SetSelectedIndex(2)
+		dg.ScrollToX(90)
+
+		root := controls.NewCanvas().Add(dg, 10, 10)
+
+		router := input.NewRouter()
+		router.SetRoot(root)
+
+		frame := render.Rect{X: 0, Y: 0, W: 260, H: 140}
+		r.FillRect(frame, th.Color.ButtonFace)
+
+		// First layout pass: gives the grid real bounds, so the wheel below
+		// hit-tests into its body and the ring has a real rect to trace.
+		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(root, frame)
+
+		// Scroll down a notch through the real wheel path (DataGrid has no
+		// public vertical ScrollTo — see its ScrollToX/OffsetX pair), so the
+		// vertical thumb sits off the top of its track rather than pinned to
+		// it, and row 2's selection band stays visible near the top.
+		gridBounds := core.BoundsOf(dg)
+		router.PointerWheel(
+			render.Point{Y: -1},
+			render.Point{X: gridBounds.X + gridBounds.W/2, Y: gridBounds.Y + gridBounds.H/2},
+			0,
+		)
+		router.Focus(dg) // fires OnFocusChanged(true): the ring is drawn
+
+		// Second layout pass: re-realizes the body cells at the new offset.
+		core.MeasureWidget(root, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(root, frame)
+
+		core.RenderWidget(root, r)
+	})
+}
+
 // TestMenuDisabledItem is the disabled-menu-row golden: an "Edit" menu
 // ("Copy", a disabled "Paste" via AddDisabled, "Cut") opened through the
 // real router-driven input path (matching TestMenuOpen's own approach),
