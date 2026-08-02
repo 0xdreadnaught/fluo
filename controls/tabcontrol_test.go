@@ -466,3 +466,40 @@ func TestTabControlAddTabNilContent(t *testing.T) {
 		t.Fatalf("SelectedIndex = %d, want 0", got)
 	}
 }
+
+// TestTabStripRenderAfterAddTabWithoutMeasure pins the bounds check Render
+// was missing. cellWidths is only refreshed by MeasureContent, so between an
+// AddTab and the next measure pass it is SHORTER than owner.tabs — and Render
+// indexed it by tab position with no guard, unlike cellAt and cellRect, which
+// have always defended against exactly that. Rendering straight after adding
+// a tab (what a golden/screenshot harness does) panicked.
+func TestTabStripRenderAfterAddTabWithoutMeasure(t *testing.T) {
+	f, err := text.Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	face := text.NewFace(f, 14)
+
+	tc := NewTabControl(face)
+	tc.AddTab("One", NewFixed(50, 20, render.RGB(1, 2, 3)))
+	core.MeasureWidget(tc, render.Size{W: 300, H: 200})
+	core.ArrangeWidget(tc, render.Rect{X: 0, Y: 0, W: 300, H: 200})
+
+	// A second tab, and NO measure pass before rendering: cellWidths still
+	// holds one entry while tabs holds two.
+	tc.AddTab("Two", NewFixed(50, 20, render.RGB(4, 5, 6)))
+	if len(tc.strip.cellWidths) >= len(tc.tabs) {
+		t.Fatalf("cellWidths len = %d, tabs len = %d — expected a short cache for this test to mean anything",
+			len(tc.strip.cellWidths), len(tc.tabs))
+	}
+
+	core.RenderWidget(tc, &recordRenderer{}) // must not panic
+
+	// After a fresh measure the new tab draws normally.
+	core.MeasureWidget(tc, render.Size{W: 300, H: 200})
+	core.ArrangeWidget(tc, render.Rect{X: 0, Y: 0, W: 300, H: 200})
+	if len(tc.strip.cellWidths) != 2 {
+		t.Fatalf("cellWidths len after re-measure = %d, want 2", len(tc.strip.cellWidths))
+	}
+	core.RenderWidget(tc, &recordRenderer{})
+}
