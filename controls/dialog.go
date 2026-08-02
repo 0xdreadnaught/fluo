@@ -74,21 +74,37 @@ type DialogSpec struct {
 // implements none — see its own doc comment) and goes nowhere: a documented
 // v0 no-op, not a bug and not light-dismiss under a different name.
 //
-// Escape closes the dialog with DialogDismissed. Reaching it depends on
-// keyboard focus: ShowDialog explicitly focuses the scrim widget itself
-// (not a button) the moment the popup opens — see input.Router.Focus, which
-// accepts any core.Widget, focusable or not — so input.Router.dispatchKey's
-// focused-widget bubble always reaches the scrim's own OnKey regardless of
-// whether Primary/Secondary exist or which one (if any) a subsequent click
-// happens to focus. (A button click does NOT itself steal focus away here:
-// input.Router.PointerButton only runs its ordinary press-to-focus path
-// when nothing is captured, and this dialog's very presence as an open
-// modal popup means OverlayHost already holds that capture — see
-// OverlayHost's own type doc comment.)
+// Keyboard input is TRAPPED inside the dialog for as long as it is open:
+// the popup is opened via OverlayHost.showPopupTrapFocus, which pushes an
+// input.Router focus scope rooted at the scrim (and pops it on close). So
+// Tab/Shift+Tab cycle only the card's own buttons — wrapping between them
+// rather than stepping out into the content the dialog is covering, which is
+// still in the tree and would otherwise still be in the tab order — and no
+// key reaches a widget behind the dialog, so Space/Enter can't activate a
+// button it is covering. Pushing the scope also focuses the scrim widget
+// itself (not a button — see input.Router.Focus, which accepts any
+// core.Widget, focusable or not), which is what makes the FIRST Tab land on
+// the card's first button, and what keeps the scrim focused when the card
+// has no buttons at all.
+//
+// Escape closes the dialog with DialogDismissed, and reaching it falls out
+// of that same arrangement: input.Router.dispatchKey bubbles from the scrim
+// (or from whichever in-scope button Tab/a click has since focused, through
+// the scrim on its way up) to the scrim's own OnKey, regardless of whether
+// Primary/Secondary exist. The button-less dialog — DialogSpec with both
+// labels empty, whose ONLY close path is Escape — is the case this scoping
+// exists for: with no focusable widget inside, focus stays on the scrim,
+// Tab moves nothing, and Escape still arrives. (A button click does NOT
+// steal focus away either: input.Router.PointerButton only runs its ordinary
+// press-to-focus path when nothing is captured, and this dialog's very
+// presence as an open modal popup means OverlayHost already holds that
+// capture — see OverlayHost's own type doc comment.)
 //
 // CAUTION: The dialog steals keyboard focus to its scrim and does NOT
-// restore prior focus on close (v0). Callers needing focus restoration
-// must track and re-apply the prior focused widget themselves.
+// restore prior focus on close (v0) — closing it pops the focus scope, so
+// ordinary tab traversal over the content behind resumes, but focus itself
+// is left cleared rather than put back where it was. Callers needing focus
+// restoration must track and re-apply the prior focused widget themselves.
 //
 // A card button click closes the dialog (via OverlayHost.ClosePopup) and
 // records the matching result (DialogPrimary/DialogSecondary) before doing
@@ -164,10 +180,10 @@ func ShowDialog(host *OverlayHost, face *text.Face, d DialogSpec) {
 	}
 
 	anchor := core.BoundsOf(host)
-	host.ShowPopup(scrim, anchor, fire)
-	if host.router != nil {
-		host.router.Focus(scrim)
-	}
+	// Trapping variant, not plain ShowPopup: this is the one popup family in
+	// the package that must own the keyboard outright while it's up, and the
+	// push is also what focuses the scrim (see the doc comment above).
+	host.showPopupTrapFocus(scrim, anchor, fire)
 }
 
 // dialogScrim is a Dialog's outer popup widget: a Border-like decorator
