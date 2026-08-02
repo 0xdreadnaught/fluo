@@ -1,6 +1,7 @@
 package controls
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -1062,5 +1063,157 @@ func TestComboBoxPopupKeepsKeysOnTheField(t *testing.T) {
 	r.KeyDown(input.KeyEscape, 0, 0)
 	if combo.IsOpen() {
 		t.Fatal("combo.IsOpen() = true after Escape, want false (the field's own OnKey must still receive it)")
+	}
+}
+
+// trapPopupFixture is the shape the ShowModalPopup focus tests share: a host
+// whose CONTENT holds two focusable widgets, plus a popup — not shown yet, so
+// each test picks how to open it — holding two focusable widgets of its own.
+// Both sides need their own tab order for a trap assertion to mean anything:
+// "Tab stayed inside the popup" and "Tab walked out into the background" are
+// only distinguishable when there is somewhere out there for it to walk to.
+type trapPopupFixture struct {
+	host  *OverlayHost
+	r     *input.Router
+	bg    []*ovProbe // in the content, BEHIND the popup
+	inner []*ovProbe // inside the popup
+	popup core.Widget
+}
+
+func newTrapPopupFixture() *trapPopupFixture {
+	probe := func() *ovProbe {
+		p := &ovProbe{focusable: true}
+		p.SetWidth(50)
+		p.SetHeight(20)
+		return p
+	}
+	f := &trapPopupFixture{
+		bg:    []*ovProbe{probe(), probe()},
+		inner: []*ovProbe{probe(), probe()},
+	}
+	f.popup = NewStackPanel(Vertical).Add(f.inner[0], f.inner[1])
+
+	f.host = NewOverlayHost()
+	f.r = input.NewRouter()
+	f.host.SetRouter(f.r)
+	f.host.SetContent(NewStackPanel(Vertical).Add(f.bg[0], f.bg[1]))
+	f.r.SetRoot(f.host)
+	return f
+}
+
+// label names one of the fixture's widgets for a focus assertion's failure
+// message. Printing an ovProbe with %v dumps its embedded core.Element, which
+// buries the one thing the assertion is about: which of four otherwise
+// identical probes focus actually landed on.
+func (f *trapPopupFixture) label(w core.Widget) string {
+	switch w {
+	case nil:
+		return "<nil>"
+	case core.Widget(f.bg[0]):
+		return "background #1"
+	case core.Widget(f.bg[1]):
+		return "background #2"
+	case core.Widget(f.inner[0]):
+		return "popup child #1"
+	case core.Widget(f.inner[1]):
+		return "popup child #2"
+	case f.popup:
+		return "the popup itself"
+	}
+	return fmt.Sprintf("%T", w)
+}
+
+// isBackground reports whether focus has escaped onto either content widget —
+// the failure a focus trap exists to prevent.
+func (f *trapPopupFixture) isBackground(w core.Widget) bool {
+	return w == core.Widget(f.bg[0]) || w == core.Widget(f.bg[1])
+}
+
+func TestShowModalPopupTrapsTabWithinThePopup(t *testing.T) {
+	f := newTrapPopupFixture()
+
+	f.host.ShowModalPopup(f.popup, render.Rect{X: 10, Y: 10}, nil)
+	layoutOverlay(f.host, 300, 300)
+
+	if got := f.r.Focused(); got != f.popup {
+		t.Fatalf("Focused() after ShowModalPopup = %s, want the popup (the focus scope homes focus onto its root)", f.label(got))
+	}
+
+	// Tab enters the popup, crosses it, and WRAPS inside it — the content
+	// behind is never reached, though it is still visible and focusable.
+	want := []core.Widget{f.inner[0], f.inner[1], f.inner[0], f.inner[1]}
+	for i, w := range want {
+		f.r.KeyDown(input.KeyTab, 0, 0)
+		got := f.r.Focused()
+		if f.isBackground(got) {
+			t.Fatalf("Tab #%d escaped the popup onto %s", i+1, f.label(got))
+		}
+		if got != w {
+			t.Fatalf("Focused() after Tab #%d = %s, want %s", i+1, f.label(got), f.label(w))
+		}
+	}
+
+	// Shift+Tab is trapped the same way, stepping backward within the popup.
+	back := []core.Widget{f.inner[0], f.inner[1], f.inner[0]}
+	for i, w := range back {
+		f.r.KeyDown(input.KeyTab, 0, input.ModShift)
+		if got := f.r.Focused(); got != w {
+			t.Fatalf("Focused() after Shift+Tab #%d = %s, want %s", i+1, f.label(got), f.label(w))
+		}
+	}
+}
+
+func TestShowModalPopupCloseRestoresFocusToItsOpener(t *testing.T) {
+	// Closing a trapping popup must put focus back on the control that opened
+	// it, not leave it dangling on a popup that is no longer in the tree — and
+	// must hand ordinary (unrestricted) tab traversal back to the content.
+	f := newTrapPopupFixture()
+
+	f.r.Focus(f.bg[0]) // the control the user was on when the popup opened
+	f.host.ShowModalPopup(f.popup, render.Rect{X: 10, Y: 10}, nil)
+	layoutOverlay(f.host, 300, 300)
+
+	if got := f.r.Focused(); got != f.popup {
+		t.Fatalf("Focused() with the popup open = %s, want the popup", f.label(got))
+	}
+	f.r.KeyDown(input.KeyTab, 0, 0) // move around inside it first
+	if got := f.r.Focused(); got != core.Widget(f.inner[0]) {
+		t.Fatalf("Focused() after Tab inside the popup = %s, want %s", f.label(got), f.label(f.inner[0]))
+	}
+
+	f.host.ClosePopup(f.popup)
+
+	if got := f.host.PopupCount(); got != 0 {
+		t.Fatalf("PopupCount after ClosePopup = %d, want 0", got)
+	}
+	if got := f.r.Focused(); got != core.Widget(f.bg[0]) {
+		t.Fatalf("Focused() after the popup closed = %s, want the opener (%s)", f.label(got), f.label(f.bg[0]))
+	}
+	f.r.KeyDown(input.KeyTab, 0, 0)
+	if got := f.r.Focused(); got != core.Widget(f.bg[1]) {
+		t.Fatalf("Focused() after Tab once the popup closed = %s, want %s (traversal is unrestricted again)", f.label(got), f.label(f.bg[1]))
+	}
+}
+
+func TestShowPopupWithFocusablesStillDoesNotTrap(t *testing.T) {
+	// The A/B against ShowModalPopup above, on the same fixture, and a case
+	// TestModalPopupDoesNotTrapFocus cannot make with its inert popup: a plain
+	// ShowPopup leaves its OWN focusable children in the whole tree's tab
+	// order (they are ordinary widgets in an ordinary subtree) rather than
+	// confining traversal to them, so Tab walks straight out of the popup and
+	// back into the content behind it.
+	f := newTrapPopupFixture()
+
+	f.host.ShowPopup(f.popup, render.Rect{X: 10, Y: 10}, nil)
+	layoutOverlay(f.host, 300, 300)
+
+	f.r.Focus(f.bg[0])
+	// Document order is [content..., popups...] — see OverlayHost.Children.
+	want := []core.Widget{f.bg[1], f.inner[0], f.inner[1], f.bg[0]}
+	for i, w := range want {
+		f.r.KeyDown(input.KeyTab, 0, 0)
+		if got := f.r.Focused(); got != w {
+			t.Fatalf("Focused() after Tab #%d with a non-trapping modal popup open = %s, want %s", i+1, f.label(got), f.label(w))
+		}
 	}
 }
