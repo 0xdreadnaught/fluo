@@ -8,6 +8,28 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.15.9] - 2026-08-02
+
+### Added
+
+- **Mouse wheel scrolls a multi-line `TextBox`.** A wheel notch scrolls the view
+  vertically (Shift+wheel horizontally), independent of the caret — the same feel
+  as dragging the thumb. A notch at an end stop, or on a box with nothing to
+  scroll, is left unhandled so it bubbles to an enclosing scroller instead of
+  dying in a dead zone. Single-line boxes are unaffected. Previously the wheel did
+  nothing over a `TextBox` and the only way to scroll was to drag the thumb.
+
+### Fixed
+
+- **Word-wrap-OFF multi-line `TextBox` no longer draws text under the vertical
+  scrollbar.** The thumb's gutter was reserved for the scroll *decision* but not
+  at render, so a long line (word-wrap off, horizontal scroll) drew straight under
+  the thumb, and a horizontally scrolled line could draw over the line-number
+  gutter. The text is now clipped to the content width, so it stops at the thumb's
+  edge on the right and the gutter rule on the left; scrolling still reveals the
+  full line. Word-wrap-on boxes are pixel-identical (their text already fits the
+  content width).
+
 ## [0.15.8] - 2026-08-02
 
 ### Added

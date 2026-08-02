@@ -3872,3 +3872,175 @@ func TestComputeVisualRowsSingleRuneWiderThanWidth(t *testing.T) {
 		t.Fatalf("last row %+v is empty; the text is already fully covered by the rows before it", last)
 	}
 }
+
+// --- Word-wrap-OFF multi-line scroll: mousewheel + text clip (v0.15.9) ---
+//
+// The exact config the augment SOURCE editor uses (multi-line, word-wrap OFF,
+// line numbers on, taller than one screen) exercised two paths no earlier
+// test covered: (1) the wheel never scrolled a TextBox at all (OnPointer had
+// no Wheel case), and (2) the right vscroll gutter was reserved for the
+// scroll DECISION (contentWidth) but not at RENDER, so a long line drew under
+// the thumb. Every WORKING box uses word-wrap ON, which incidentally wraps at
+// contentWidth and never reaches the edge — so only this fixture reproduces
+// the bug.
+
+// newLongLineOverflowingTextBox builds a focused multi-line (word-wrap OFF)
+// TextBox with line numbers on, one very long first line, and enough short
+// lines after it to overflow the viewport height (so the vertical thumb —
+// and thus its reserved gutter — is shown). This is the source-editor config.
+func newLongLineOverflowingTextBox(t *testing.T) *TextBox {
+	t.Helper()
+	long := strings.Repeat("wwwwwwwwww ", 20) // ~220 cols, far wider than the box: horizontal overflow with wrap OFF
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true)
+	tb.SetLineNumbers(true)
+	tb.SetText(long + "\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9")
+	tb.SetWidth(200)
+	tb.SetHeight(50)
+	core.MeasureWidget(tb, render.Size{W: 200, H: 50})
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50})
+	return tb
+}
+
+// TestTextBoxMultilineWordWrapOffClipsTextToContentWidth proves the render
+// clip that keeps a word-wrap-OFF long line off the thumb: the text is drawn
+// inside textClipRect, whose RIGHT edge is exactly the thumb track's left
+// edge (contentWidth, gutter reserved) and whose LEFT edge is the line-number
+// gutter's right edge — so nothing the pass paints lands under the thumb or
+// over the line numbers. Before the fix the text clipped only to the full
+// bounds, so long lines drew straight under the scrollbar.
+func TestTextBoxMultilineWordWrapOffClipsTextToContentWidth(t *testing.T) {
+	tb := newLongLineOverflowingTextBox(t)
+	if !tb.vScrollShown {
+		t.Fatal("vScrollShown = false, want true (content overflows; the gutter must be reserved to test the clip)")
+	}
+	// A selection across the whole long first line forces a fill that, unclipped,
+	// would run far past the right edge — the clip must crop it. Anchor at the
+	// line end with the caret at 0 keeps hscroll pinned at 0 (updateHScroll
+	// follows the caret), so the fill starts at the gutter and runs the full
+	// line width off the right — the exact overflow the clip must crop.
+	tb.Select(len([]rune(strings.Repeat("wwwwwwwwww ", 20))), 0)
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50})
+
+	bounds := tb.Bounds()
+	clip := tb.textClipRect(bounds)
+	pad := tb.metrics.PaddingM
+
+	track, ok := tb.vScrollTrack()
+	if !ok {
+		t.Fatal("vScrollTrack ok = false, want true")
+	}
+	if clip.Right() != track.X {
+		t.Fatalf("textClipRect right edge = %v, want %v (== thumb track left edge: text must stop at the gutter, not under the thumb)", clip.Right(), track.X)
+	}
+	if wantX := bounds.X + pad + tb.gutterWidth(); clip.X != wantX {
+		t.Fatalf("textClipRect left edge = %v, want %v (== line-number gutter right edge)", clip.X, wantX)
+	}
+
+	rr := newClipRecorder()
+	tb.Render(rr)
+
+	found := false
+	for _, cr := range rr.clips {
+		if cr == clip {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no PushClip recorded at the text clip rect %+v; clips = %v", clip, rr.clips)
+	}
+	// Check the TEXT-layer fill (the selection highlight) specifically — the
+	// sunken well and bevel are chrome drawn at full bounds OUTSIDE the text
+	// clip and legitimately span the whole width, so they're not the subject.
+	sawSel := false
+	for _, p := range rr.painted {
+		if p.color != tb.colors.Highlight || p.rect.W <= 0 || p.rect.H <= 0 {
+			continue
+		}
+		sawSel = true
+		if p.rect.Right() > clip.Right()+0.01 {
+			t.Fatalf("the selection fill painted to x = %v, past the text clip right edge %v (drawing under the thumb)", p.rect.Right(), clip.Right())
+		}
+	}
+	if !sawSel {
+		t.Fatal("no selection fill was painted; the overflow-under-thumb case was not actually exercised")
+	}
+}
+
+// TestTextBoxMultilineWheelScrollsVerticallyAndBubblesAtEnd proves the wheel
+// scrolls the multi-line view vertically (independent of the caret, mirroring
+// the thumb drag) and is Handled only when the clamped offset actually moved
+// — so a notch at the bottom stop leaves the event unhandled and bubbles to
+// an enclosing scroller instead of dying in a dead zone.
+func TestTextBoxMultilineWheelScrollsVerticallyAndBubblesAtEnd(t *testing.T) {
+	tb := newOverflowingMultilineTextBox(t)
+	tb.SetCaret(0)
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50}) // updateVScroll snaps to the top
+	if tb.vscroll != 0 {
+		t.Fatalf("vscroll = %v after caret-to-start, want 0", tb.vscroll)
+	}
+
+	down := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -1}}
+	tb.OnPointer(down)
+	if !down.Handled {
+		t.Fatal("wheel down on scrollable content: Handled = false, want true")
+	}
+	if tb.vscroll <= 0 {
+		t.Fatalf("vscroll = %v after a wheel-down notch, want > 0", tb.vscroll)
+	}
+
+	maxScroll := tb.totalContentHeight() - tb.contentHeight()
+	tb.vscroll = maxScroll
+	past := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -1}}
+	tb.OnPointer(past)
+	if past.Handled {
+		t.Fatal("wheel down at the bottom stop: Handled = true, want false (must bubble to an enclosing scroller)")
+	}
+	if tb.vscroll != maxScroll {
+		t.Fatalf("vscroll = %v after a no-op notch, want unchanged %v", tb.vscroll, maxScroll)
+	}
+}
+
+// TestTextBoxMultilineShiftWheelScrollsHorizontally proves Shift+Wheel scrolls
+// a word-wrap-OFF box horizontally (bounded by the same caret-line width the
+// caret-follow uses), and is Handled only when it moved.
+func TestTextBoxMultilineShiftWheelScrollsHorizontally(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true)
+	tb.SetText(strings.Repeat("wwwwwwwwww ", 20)) // one long line, wrap OFF
+	tb.SetWidth(200)
+	tb.SetHeight(50)
+	core.MeasureWidget(tb, render.Size{W: 200, H: 50})
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50})
+	tb.SetCaret(0)
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50}) // updateHScroll snaps to the left
+	if tb.hscroll != 0 {
+		t.Fatalf("hscroll = %v after caret-to-start, want 0", tb.hscroll)
+	}
+
+	e := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -1}, Mods: input.ModShift}
+	tb.OnPointer(e)
+	if !e.Handled {
+		t.Fatal("shift+wheel on an overflowing long line: Handled = false, want true")
+	}
+	if tb.hscroll <= 0 {
+		t.Fatalf("hscroll = %v after a shift+wheel notch, want > 0", tb.hscroll)
+	}
+}
+
+// TestTextBoxSingleLineWheelBubbles proves a single-line box (the AppliesTo
+// config) has nothing to wheel-scroll and leaves the event unhandled so it
+// bubbles — the wheel behavior is scoped to the multi-line path.
+func TestTextBoxSingleLineWheelBubbles(t *testing.T) {
+	tb := NewTextBox(buttonFace(t))
+	tb.SetText("hello")
+	tb.SetWidth(200)
+	tb.SetHeight(24)
+	core.MeasureWidget(tb, render.Size{W: 200, H: 24})
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 24})
+
+	e := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -1}}
+	tb.OnPointer(e)
+	if e.Handled {
+		t.Fatal("single-line wheel: Handled = true, want false (nothing to scroll; must bubble)")
+	}
+}

@@ -771,6 +771,43 @@ func TestTextBoxGutter(t *testing.T) {
 	})
 }
 
+// TestTextBoxSourceEditor is the v0.15.9 golden: the augment source-editor
+// config — multi-line, word-wrap OFF (so long lines horizontally scroll
+// rather than wrapping), line numbers on, and taller content than the frame
+// so the vertical thumb (and its reserved gutter) shows. The FIRST line is
+// far wider than the box; before the fix its text drew straight under the
+// thumb (the render clipped only to the full bounds while the gutter was
+// reserved only for the scroll decision). This golden captures the fix: the
+// long line stops at the thumb's left edge, and — because the caret sits at
+// the start (hscroll 0) — the line also stops cleanly at the line-number
+// gutter on the left. Short lines (which fit) are unchanged, matching
+// textbox_gutter.
+func TestTextBoxSourceEditor(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "textbox_source_editor", 220, 120, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tb := controls.NewTextBox(face).SetMultiline(true).SetLineNumbers(true)
+		tb.SetText("def handle(request, context, options, retries, deadline):\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10")
+		tb.OnFocusChanged(true)
+		tb.SetCaret(0) // hscroll pinned at the start so the long line shows from column 0
+
+		frame := render.Rect{X: 0, Y: 0, W: 220, H: 120}
+		r.FillRect(frame, th.Color.ButtonFace)
+
+		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(tb, frame)
+		core.RenderWidget(tb, r)
+	})
+}
+
 // TestSliderProgress is the Phase 5 Task 7 golden: a Slider at 0.6 (over the
 // default [0,1] range) stacked above a ProgressBar at 0.3, in a vertical
 // StackPanel gapped by PaddingM, filling a 200x60 frame.

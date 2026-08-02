@@ -1637,6 +1637,31 @@ func (t *TextBox) contentWidth() float32 {
 	return w
 }
 
+// textClipRect is the clip rectangle the multi-line text (glyphs, selection
+// fill, and caret) is drawn inside — the content area with BOTH gutters
+// carved off: the left line-number gutter (gutterWidth) and the right
+// vertical-scroll thumb gutter (contentWidth already has ScrollGutter
+// subtracted whenever the thumb shows). So a word-wrap-OFF long line stops at
+// the thumb's left edge instead of drawing under it, and text scrolled left
+// (hscroll > 0) stops at the gutter rule instead of drawing over the line
+// numbers — neither hscroll/vscroll nor their max clamps are touched, the
+// full line is still reachable by scrolling, only the on-screen strip is
+// bounded. The thumb and the line numbers are drawn by the caller OUTSIDE
+// this rect (see renderMultiline / renderLineNumbers), so neither is clipped
+// away. Vertically it spans the full bounds (same extent the outer widget
+// clip already imposed), so this narrows only the horizontal reach — wrapping
+// text, which already fits inside contentWidth, is pixel-identical. Mirrors
+// the dedicated PushClip DataGrid uses around its cells (see datagrid.go).
+func (t *TextBox) textClipRect(bounds render.Rect) render.Rect {
+	pad := t.metrics.PaddingM
+	return render.Rect{
+		X: bounds.X + pad + t.gutterWidth(),
+		Y: bounds.Y,
+		W: t.contentWidth(),
+		H: bounds.H,
+	}
+}
+
 // totalContentHeight returns the current total (unclipped) content height:
 // row/line count times lineHeight, using the visual-rows count while
 // wrapping (at the current, gutter-aware contentWidth — safe to call here,
@@ -2308,6 +2333,60 @@ func (t *TextBox) dragVScroll(posY float32) {
 	t.vscroll = scrollDragOffset(track.Y, track.H, thumb.H, posY, t.vDragGrab, maxOffset)
 }
 
+// wheelScrollV scrolls the multi-line view vertically by dy logical px,
+// clamped to [0, totalContentHeight - viewport] — the SAME bound the thumb
+// drag uses (dragVScroll's maxOffset), so wheel and drag agree on the end
+// stops — and deliberately NOT recentered on the caret (a wheel scroll moves
+// the view, it does not move the caret; the caret-follow in updateVScroll
+// only fires when a caret move leaves the caret off-screen). Reports whether
+// the clamped offset actually changed. Single-line boxes have nothing to
+// scroll and always report false so the notch bubbles.
+func (t *TextBox) wheelScrollV(dy float32) bool {
+	if !t.multiline {
+		return false
+	}
+	maxScroll := t.totalContentHeight() - t.contentHeight()
+	if maxScroll <= 0 {
+		return false
+	}
+	old := t.vscroll
+	v := t.vscroll + dy
+	if v < 0 {
+		v = 0
+	}
+	if v > maxScroll {
+		v = maxScroll
+	}
+	t.vscroll = v
+	return v != old
+}
+
+// wheelScrollH scrolls the multi-line view horizontally by dx logical px,
+// clamped to the same [0, caretLineWidth - viewport] bound updateHScroll
+// enforces (hscroll is one shared offset keyed off the caret's line — see
+// updateHScroll), so a Shift+wheel and the caret-follow can't disagree on the
+// max. Word-wrap pins hscroll at 0, so wrapping boxes report false (the notch
+// bubbles). Reports whether the clamped offset actually changed.
+func (t *TextBox) wheelScrollH(dx float32) bool {
+	if !t.multiline || t.wrapping() {
+		return false
+	}
+	maxScroll := t.caretLineWidth() - t.contentWidth()
+	if maxScroll <= 0 {
+		return false
+	}
+	old := t.hscroll
+	h := t.hscroll + dx
+	if h < 0 {
+		h = 0
+	}
+	if h > maxScroll {
+		h = maxScroll
+	}
+	t.hscroll = h
+	return h != old
+}
+
 // ClipRect implements core.ClipProvider, clipping to the textbox's own full
 // bounds (the entire chrome rect, stroke included) — the same rect Render
 // itself clips text/selection/caret drawing to (see Render).
@@ -2484,23 +2563,29 @@ func (t *TextBox) renderMultiline(r render.Renderer, bounds render.Rect) {
 	pad := t.metrics.PaddingM
 	lh := t.lineHeight()
 	textX := bounds.X + pad + t.gutterWidth() - t.hscroll
+	textClip := t.textClipRect(bounds)
 
 	s, color := t.displayText()
 
 	if t.composing {
 		lines := strings.Split(s, "\n")
 		t.renderLineNumbers(r, bounds, false)
+		r.PushClip(textClip)
 		t.renderComposingMultiline(r, bounds, textX, lh, lines, color)
+		r.PopClip()
 		return
 	}
 
 	if t.wrapping() && len(t.runes) > 0 {
 		t.renderLineNumbers(r, bounds, true)
+		r.PushClip(textClip)
 		t.renderMultilineWrapped(r, bounds, color)
+		r.PopClip()
 		return
 	}
 
 	t.renderLineNumbers(r, bounds, false)
+	r.PushClip(textClip)
 
 	lines := strings.Split(s, "\n")
 	start, end := t.Selection()
@@ -2571,6 +2656,8 @@ func (t *TextBox) renderMultiline(r render.Renderer, bounds render.Rect) {
 		cy := bounds.Y + pad - t.vscroll + float32(line)*lh
 		r.FillRect(render.Rect{X: cx, Y: cy, W: caretWidth, H: lh}, c.WindowText)
 	}
+
+	r.PopClip()
 }
 
 // renderMultilineWrapped is renderMultiline's body while wrapping (see
@@ -3068,6 +3155,24 @@ func (t *TextBox) OnPointer(e *input.PointerEvent) {
 		return
 	}
 	switch e.Action {
+	case input.Wheel:
+		// Wheel scrolls the multi-line view by scrollWheelStep px per notch,
+		// vertically by default and horizontally with Shift — INDEPENDENT of
+		// the caret (mirrors the thumb drag; only a caret move recenters, via
+		// updateVScroll/updateHScroll). Handled only when the clamped offset
+		// actually moved, so a notch at an end stop (or on a box with nothing
+		// to scroll) leaves the event unhandled and bubbles to an enclosing
+		// scroller instead of dying in a dead zone.
+		delta := -e.Delta.Y * scrollWheelStep
+		var moved bool
+		if e.Mods&input.ModShift != 0 {
+			moved = t.wheelScrollH(delta)
+		} else {
+			moved = t.wheelScrollV(delta)
+		}
+		if moved {
+			e.Handled = true
+		}
 	case input.Press:
 		if rect, ok := t.vScrollThumbRect(); ok && rect.Contains(e.Pos) {
 			t.vDragging = true
