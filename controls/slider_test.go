@@ -224,6 +224,71 @@ func TestSliderArrowKeysStepByOneAndTenPercentWhenFocused(t *testing.T) {
 	}
 }
 
+// TestSliderVerticalArrowKeysStepAlongMainAxis pins the orientation branch
+// OnKey used to be missing: the handler only ever looked at Left/Right, so a
+// focused VERTICAL slider — whose thumb travels up and down — could not be
+// moved with the arrow keys that point along its own track, while the two
+// that point across it worked. Up is the increasing direction, since Max sits
+// at the top of a vertical track.
+func TestSliderVerticalArrowKeysStepAlongMainAxis(t *testing.T) {
+	s := NewSlider().SetOrientation(Vertical).SetRange(0, 100)
+	layoutSlider(s, render.Rect{X: 0, Y: 0, W: 24, H: 160})
+	s.SetValue(50)
+
+	r := input.NewRouter()
+	r.SetRoot(s)
+	r.Focus(s)
+
+	r.KeyDown(input.KeyUp, 0, 0)
+	if s.Value() != 51 {
+		t.Fatalf("Value() after Up = %v, want 51 (+1%%, Up moves toward Max at the top)", s.Value())
+	}
+
+	r.KeyDown(input.KeyDown, 0, 0)
+	if s.Value() != 50 {
+		t.Fatalf("Value() after Down = %v, want 50 (-1%%)", s.Value())
+	}
+
+	r.KeyDown(input.KeyUp, 0, input.ModShift)
+	if s.Value() != 60 {
+		t.Fatalf("Value() after Shift+Up = %v, want 60 (+10%%)", s.Value())
+	}
+
+	r.KeyDown(input.KeyDown, 0, input.ModShift)
+	if s.Value() != 50 {
+		t.Fatalf("Value() after Shift+Down = %v, want 50 (-10%%)", s.Value())
+	}
+}
+
+// TestSliderArrowKeysIgnoreTheOffAxisPair proves each orientation answers
+// only the arrow pair running along its own track, leaving the other pair
+// unhandled so it keeps bubbling to whatever else might want it.
+func TestSliderArrowKeysIgnoreTheOffAxisPair(t *testing.T) {
+	vert := NewSlider().SetOrientation(Vertical).SetRange(0, 100)
+	layoutSlider(vert, render.Rect{X: 0, Y: 0, W: 24, H: 160})
+	vert.SetValue(50)
+
+	for _, k := range []input.Key{input.KeyLeft, input.KeyRight} {
+		e := &input.KeyEvent{Action: input.Press, Key: k}
+		vert.OnKey(e)
+		if vert.Value() != 50 || e.Handled {
+			t.Fatalf("vertical slider after %v: Value()=%v Handled=%v, want 50 and unhandled", k, vert.Value(), e.Handled)
+		}
+	}
+
+	horiz := NewSlider().SetRange(0, 100)
+	layoutSlider(horiz, render.Rect{X: 0, Y: 0, W: 160, H: 24})
+	horiz.SetValue(50)
+
+	for _, k := range []input.Key{input.KeyUp, input.KeyDown} {
+		e := &input.KeyEvent{Action: input.Press, Key: k}
+		horiz.OnKey(e)
+		if horiz.Value() != 50 || e.Handled {
+			t.Fatalf("horizontal slider after %v: Value()=%v Handled=%v, want 50 and unhandled", k, horiz.Value(), e.Handled)
+		}
+	}
+}
+
 func TestSliderArrowKeysIgnoredWhenNotFocused(t *testing.T) {
 	s := NewSlider().SetRange(0, 100)
 	s.SetValue(50)

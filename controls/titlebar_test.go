@@ -1,6 +1,7 @@
 package controls
 
 import (
+	"math"
 	"testing"
 
 	"golang.org/x/image/font/gofont/goregular"
@@ -144,4 +145,50 @@ func TestTitleBarNilCallbacksAreSilentNoop(t *testing.T) {
 	p := render.Point{X: b.X + b.W/2, Y: b.Y + b.H/2}
 	r.PointerButton(input.ButtonLeft, true, p, 0)
 	r.PointerButton(input.ButtonLeft, false, p, 0) // must not panic with no OnClose set
+}
+
+// TestTitleBarMeasureFiniteUnderInfiniteWidth pins the core.Widget contract
+// MeasureContent used to break: it returned available.W unchanged, so an
+// unbounded offer (+Inf, which every horizontal StackPanel/SplitPanel and
+// every Auto/Star grid track makes) came straight back as an infinite desired
+// width — and the parent then arranged the bar, and every sibling after it,
+// at X=+Inf. The reported width must be finite and must actually account for
+// the three caption cells the bar always draws.
+func TestTitleBarMeasureFiniteUnderInfiniteWidth(t *testing.T) {
+	tb := NewTitleBar(titleBarFace(t), "fluo")
+
+	inf := float32(math.Inf(1))
+	got := tb.MeasureContent(render.Size{W: inf, H: 32})
+
+	if math.IsInf(float64(got.W), 0) || math.IsNaN(float64(got.W)) {
+		t.Fatalf("MeasureContent(+Inf).W = %v, want a finite width", got.W)
+	}
+	if got.W < 3*captionButtonWidth {
+		t.Fatalf("MeasureContent(+Inf).W = %v, want at least the three caption cells (%v)", got.W, 3*captionButtonWidth)
+	}
+	if got.H != titleBarHeight {
+		t.Fatalf("MeasureContent(+Inf).H = %v, want %v", got.H, titleBarHeight)
+	}
+}
+
+// TestTitleBarInHorizontalStackMeasuresFinite is the same contract seen from
+// the caller's side: a horizontal StackPanel measures its children with an
+// unbounded main axis, so a TitleBar inside one used to poison the whole
+// panel's desired width (and hence every sibling's arranged X).
+func TestTitleBarInHorizontalStackMeasuresFinite(t *testing.T) {
+	tb := NewTitleBar(titleBarFace(t), "fluo")
+	sibling := NewFixed(40, 20, render.RGB(1, 2, 3))
+
+	stack := NewStackPanel(Horizontal)
+	stack.Add(tb, sibling)
+
+	core.MeasureWidget(stack, render.Size{W: 800, H: 200})
+	if d := core.DesiredSizeOf(stack); math.IsInf(float64(d.W), 0) || math.IsNaN(float64(d.W)) {
+		t.Fatalf("stack desired width = %v, want finite", d.W)
+	}
+
+	core.ArrangeWidget(stack, render.Rect{X: 0, Y: 0, W: 800, H: 200})
+	if b := core.BoundsOf(sibling); math.IsInf(float64(b.X), 0) || math.IsNaN(float64(b.X)) {
+		t.Fatalf("sibling arranged at X = %v, want a finite offset", b.X)
+	}
 }

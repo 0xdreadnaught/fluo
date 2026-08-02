@@ -152,6 +152,14 @@ func (s *tabStrip) cellAt(pos render.Point) (idx int, ok bool) {
 // into the body panel beneath it: the classic "merged" selected tab. Skipped
 // entirely with a nil face, matching TextBlock/TreeView's own
 // nil-face-renders-nothing convention.
+//
+// The cellWidths lookup is bounds-checked, exactly as cellAt's and cellRect's
+// are: the cache is only refreshed by MeasureContent, so between an AddTab and
+// the next measure pass it is SHORTER than owner.tabs — and a caller that
+// renders straight after adding a tab (a golden/screenshot harness does
+// precisely this) would otherwise index past its end and panic. Cells with no
+// cached width have no geometry yet, so there is nothing to draw for them or
+// for anything after them; they appear on the very next pass.
 func (s *tabStrip) Render(r render.Renderer) {
 	if s.face == nil {
 		return
@@ -163,6 +171,9 @@ func (s *tabStrip) Render(r render.Renderer) {
 
 	var x float32
 	for i, tab := range s.owner.tabs {
+		if i >= len(s.cellWidths) {
+			break
+		}
 		w := s.cellWidths[i]
 		rect := render.Rect{X: bounds.X + x, Y: bounds.Y, W: w, H: cellH}
 

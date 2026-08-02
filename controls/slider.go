@@ -385,12 +385,21 @@ func (s *Slider) OnPointer(e *input.PointerEvent) {
 	}
 }
 
-// OnKey implements input.KeyHandler: Left/Right nudge the value by
-// (Max-Min)/100, or (Max-Min)/10 with Shift held, on Press. OnKey is only
-// ever invoked while this slider is focused or an ancestor of the focused
-// widget (input.Router's key dispatch walks up from the focused widget), so
-// there is no separate focused check here — matching Button/CheckBox's
-// enabled-only guard.
+// OnKey implements input.KeyHandler: the arrow keys along the slider's own
+// MAIN axis nudge the value by (Max-Min)/100, or (Max-Min)/10 with Shift
+// held, on Press. Horizontal uses Left/Right (Right toward Max); Vertical
+// uses Up/Down, and UP is the increasing direction — Max is at the TOP of a
+// vertical track (see the type doc comment), so the key that moves the thumb
+// up is the one that raises the value. The off-axis pair is left alone
+// entirely (unhandled, so it keeps bubbling): a vertical slider ignores
+// Left/Right just as a horizontal one ignores Up/Down, matching how every
+// other Slider method branches on orientation rather than serving both axes
+// at once.
+//
+// OnKey is only ever invoked while this slider is focused or an ancestor of
+// the focused widget (input.Router's key dispatch walks up from the focused
+// widget), so there is no separate focused check here — matching
+// Button/CheckBox's enabled-only guard.
 func (s *Slider) OnKey(e *input.KeyEvent) {
 	if !s.enabled || e.Action != input.Press {
 		return
@@ -399,11 +408,17 @@ func (s *Slider) OnKey(e *input.KeyEvent) {
 	if e.Mods&input.ModShift != 0 {
 		step = (s.max - s.min) / 10
 	}
+
+	decKey, incKey := input.KeyLeft, input.KeyRight
+	if s.orientation == Vertical {
+		decKey, incKey = input.KeyDown, input.KeyUp
+	}
+
 	switch e.Key {
-	case input.KeyLeft:
+	case decKey:
 		s.setValue(s.value - step)
 		e.Handled = true
-	case input.KeyRight:
+	case incKey:
 		s.setValue(s.value + step)
 		e.Handled = true
 	}

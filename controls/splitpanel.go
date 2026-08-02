@@ -95,25 +95,36 @@ func NewSplitPanel(orientation Orientation) *SplitPanel {
 // Horizontal, top for Vertical — re-parenting it and invalidating measure.
 // Any previously set First is detached (its parent cleared), matching the
 // Border/ScrollViewer SetChild convention.
+//
+// w may be nil, which simply CLEARS the pane: measure/arrange/Render and
+// Children all already treat a missing pane as an empty slot (the divider
+// stays where the ratio puts it, with nothing on that side), and the nil is
+// kept away from core.SetParent, which dereferences its child argument.
+// Same nil handling as ScrollViewer.SetChild.
 func (s *SplitPanel) SetFirst(w core.Widget) *SplitPanel {
 	if s.first != nil {
 		core.SetParent(s.first, nil)
 	}
 	s.first = w
-	core.SetParent(w, s)
+	if w != nil {
+		core.SetParent(w, s)
+	}
 	s.InvalidateMeasure()
 	return s
 }
 
 // SetSecond sets (replacing any existing) the trailing pane — right for
 // Horizontal, bottom for Vertical — re-parenting it and invalidating
-// measure, mirroring SetFirst.
+// measure, mirroring SetFirst. w may be nil to clear the pane, exactly as
+// for SetFirst.
 func (s *SplitPanel) SetSecond(w core.Widget) *SplitPanel {
 	if s.second != nil {
 		core.SetParent(s.second, nil)
 	}
 	s.second = w
-	core.SetParent(w, s)
+	if w != nil {
+		core.SetParent(w, s)
+	}
 	s.InvalidateMeasure()
 	return s
 }
@@ -359,6 +370,15 @@ func (s *SplitPanel) Cursor() input.Cursor {
 // invalidates arrange and fires OnSplitChanged with the new ratio. A no-op
 // (ratio left unchanged, callback not fired) when there's no room to split
 // (available <= 0), matching dragTo/dragToX's own no-room no-op.
+//
+// ALSO a no-op when the clamped result equals the ratio already stored: once
+// clampPaneLen has pinned the divider at either min-pane ceiling, every
+// further Move in that direction produces the very same ratio, and firing the
+// callback for each of them would report a stream of "changes" that never
+// changed anything (a listener persisting the layout would write on every
+// mouse move against a wall). Gating on a real change matches every other
+// user-driven notification in this package — Slider.setValue,
+// TabControl.selectUser.
 func (s *SplitPanel) dragTo(pos render.Point) {
 	bounds := s.Bounds()
 
@@ -378,7 +398,11 @@ func (s *SplitPanel) dragTo(pos render.Point) {
 	}
 
 	firstLen = clampPaneLen(firstLen, available, s.minPane)
-	s.ratio = firstLen / available
+	ratio := firstLen / available
+	if ratio == s.ratio {
+		return
+	}
+	s.ratio = ratio
 	s.InvalidateArrange()
 	if s.onSplitChanged != nil {
 		s.onSplitChanged(s.ratio)

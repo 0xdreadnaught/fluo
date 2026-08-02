@@ -106,6 +106,62 @@ func TestMenuItemClickFiresAndClosesAll(t *testing.T) {
 	}
 }
 
+// TestMenuItemClickOpeningDialogSurvives pins the close-then-fire order
+// buildMenuPopup's item handler uses. An item whose onClick opens a popup of
+// its own — here a ShowDialog scrim, but a ShowContextMenu popup or a
+// ComboBox dropdown hit the same path — used to have it destroyed on the
+// spot: the handler ran onClick first and CloseAllPopups second, so the
+// just-opened dialog (now topmost on the host's stack) was the FIRST thing
+// that close swept away, firing a phantom DialogDismissed for a dialog the
+// user never got to see. Closing first leaves the stack empty before onClick
+// runs, so the dialog it opens is the only popup left standing.
+func TestMenuItemClickOpeningDialogSurvives(t *testing.T) {
+	face := buttonFace(t)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+
+	var results []DialogResult
+	bar := NewMenuBar(face)
+	bar.AddMenu("Help").Add("About", func() {
+		ShowDialog(host, face, DialogSpec{
+			Title:    "About",
+			Body:     "fluo",
+			Primary:  "OK",
+			OnResult: func(res DialogResult) { results = append(results, res) },
+		})
+	})
+
+	host.SetContent(bar)
+	r.SetRoot(host)
+	layoutOverlay(host, 300, 300)
+
+	clickAt(r, rectCenter(bar.cellRect(0))) // opens Help
+	layoutOverlay(host, 300, 300)           // arrange the popup + its rows
+
+	rows := menuPopupStackRows(t, bar.popup)
+	aboutRow, ok := rows[0].(*menuItemRow)
+	if !ok {
+		t.Fatalf("rows[0] type = %T, want *menuItemRow", rows[0])
+	}
+
+	clickAt(r, rectCenter(core.BoundsOf(aboutRow)))
+
+	if host.PopupCount() != 1 {
+		t.Fatalf("PopupCount after item click = %d, want 1 (the dialog the item opened)", host.PopupCount())
+	}
+	if _, ok := host.popups[0].w.(*dialogScrim); !ok {
+		t.Fatalf("remaining popup type = %T, want *dialogScrim", host.popups[0].w)
+	}
+	if len(results) != 0 {
+		t.Fatalf("OnResult fired %v, want no result yet (the dialog is still open)", results)
+	}
+	if bar.openIdx != -1 {
+		t.Fatalf("openIdx after item click = %d, want -1 (the menu itself did close)", bar.openIdx)
+	}
+}
+
 func TestMenuSeparatorClickInert(t *testing.T) {
 	bar, host, r, clicks := newTestMenuBar(t)
 
