@@ -351,6 +351,19 @@ func TestArrangeInvalidationDuringPassClimbsToParent(t *testing.T) {
 	}
 }
 
+// TestClampMinWinsOverSmallerMax locks C3: when min > max on an axis, min wins
+// (WPF gives MinWidth/MinHeight priority), so a 100 min against a 50 max
+// yields 100, not 50.
+func TestClampMinWinsOverSmallerMax(t *testing.T) {
+	s := &stub{contentW: 50, contentH: 50}
+	s.SetMinSize(100, 100)
+	s.SetMaxSize(50, 50)
+	MeasureWidget(s, render.Size{W: 200, H: 200})
+	if got := s.DesiredSize(); got != (render.Size{W: 100, H: 100}) {
+		t.Fatalf("desired=%v, want 100x100 (min must win over a smaller max)", got)
+	}
+}
+
 func TestIsVisible(t *testing.T) {
 	s := &stub{contentW: 50, contentH: 20}
 	if !IsVisible(s) {

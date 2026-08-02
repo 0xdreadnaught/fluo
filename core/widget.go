@@ -80,15 +80,20 @@ func ParentOf(w Widget) Widget {
 // be +Inf; Inf compared against a finite max simply clamps down to that max,
 // and Inf minus a finite value stays Inf — no Inf-Inf subtraction ever
 // occurs here, so no NaN can arise.
+//
+// When min > max (a contradictory constraint, e.g. SetMinSize(100) with
+// SetMaxSize(50)), MIN wins: the max clamp is applied first, then the min
+// clamp, so the result is min. This matches WPF's FrameworkElement, which
+// gives MinWidth/MinHeight priority over MaxWidth/MaxHeight.
 func clampAxis(v, min, max float32) float32 {
 	if max <= 0 {
 		max = float32(math.Inf(1))
 	}
-	if v < min {
-		v = min
-	}
 	if v > max {
 		v = max
+	}
+	if v < min {
+		v = min
 	}
 	return v
 }
