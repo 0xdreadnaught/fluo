@@ -713,10 +713,14 @@ func (l *ListView) OnFocusChanged(focused bool) {
 //
 // Wheel scrolls vertically (row scroll) by scrollWheelStep logical px per
 // notch by default, and horizontally instead when Shift is held (matching
-// ScrollViewer's Shift+Wheel convention) — always handled, exactly as
-// before Task 4 for the plain-wheel case. Unlike ScrollViewer, a plain wheel
+// ScrollViewer's Shift+Wheel convention). Unlike ScrollViewer, a plain wheel
 // never falls back to X even when only X overflows: a ListView's rows are
-// its primary scroll axis, so plain wheel always means row scroll.
+// its primary scroll axis, so plain wheel always means row scroll. A notch
+// is handled only when it actually moved the clamped offset (see
+// virtualizer.scrollBy) — a list whose rows already fit, or one pinned at
+// the end stop the notch pushes toward, leaves the event unhandled so
+// input.Bubble carries it out to an enclosing ScrollViewer rather than
+// swallowing it into a dead zone.
 //
 // A Press inside the current vertical thumb rect starts a vertical drag,
 // checked first (matching the original single-axis priority); otherwise a
@@ -731,10 +735,14 @@ func (l *ListView) OnPointer(e *input.PointerEvent) {
 	switch e.Action {
 	case input.Wheel:
 		delta := -e.Delta.Y * scrollWheelStep
+		var moved bool
 		if e.Mods&input.ModShift != 0 {
-			l.scrollByX(delta)
+			moved = l.scrollByX(delta)
 		} else {
-			l.scrollBy(delta)
+			moved = l.scrollBy(delta)
+		}
+		if !moved {
+			return
 		}
 		l.InvalidateArrange()
 		e.Handled = true

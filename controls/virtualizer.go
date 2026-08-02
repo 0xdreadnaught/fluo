@@ -184,17 +184,36 @@ func (v *virtualizer) thumbRect() (render.Rect, bool) {
 }
 
 // scrollBy requests a relative change to the vertical offset, clamped on the
-// next layout call like ScrollViewer.ScrollBy. Callers (ListView.OnPointer)
-// must still invalidate arrange themselves — virtualizer has no Element to
-// invalidate.
-func (v *virtualizer) scrollBy(dy float32) {
+// next layout call like ScrollViewer.ScrollBy, and reports whether that
+// clamped offset will actually move. Callers (ListView.OnPointer) must still
+// invalidate arrange themselves — virtualizer has no Element to invalidate.
+//
+// The "did it move" answer has to come back now rather than after the next
+// layout pass, because the wheel handler that asks has to decide right here
+// whether to mark the event Handled: a notch that lands on the offset we are
+// already at scrolls nothing, and consuming it would stop input.Bubble at
+// this control instead of letting an enclosing scroller have it. So the
+// clamp is predicted with the same clampScrollOffset layout will apply,
+// against the same totalHeight and viewport, and rawOffset is left untouched
+// when the answer is no — which also keeps a stalled wheel from piling up a
+// raw offset far past the end.
+func (v *virtualizer) scrollBy(dy float32) bool {
+	if clampScrollOffset(v.rawOffset+dy, v.totalHeight(), v.viewport.H) == v.offset {
+		return false
+	}
 	v.rawOffset += dy
+	return true
 }
 
 // scrollByX requests a relative change to the horizontal offset, clamped on
-// the next layout call, mirroring scrollBy on the X axis.
-func (v *virtualizer) scrollByX(dx float32) {
+// the next layout call, mirroring scrollBy on the X axis (against contentW
+// rather than totalHeight).
+func (v *virtualizer) scrollByX(dx float32) bool {
+	if clampScrollOffset(v.rawOffsetX+dx, v.contentW, v.viewport.W) == v.offsetX {
+		return false
+	}
 	v.rawOffsetX += dx
+	return true
 }
 
 // thumbGeometryX returns the horizontal thumb's track (the bottom gutter

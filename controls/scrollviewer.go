@@ -512,6 +512,34 @@ func (s *ScrollViewer) canScrollY() bool {
 	return ok
 }
 
+// wheelBy applies a wheel notch to the vertical offset and reports whether
+// the CLAMPED offset actually moved — i.e. whether this ScrollViewer really
+// consumed the notch. It predicts the clamp (the same clampScrollOffset
+// ArrangeContent will apply on the next pass, against the same childH and
+// viewport.H) rather than waiting for that pass, because OnPointer has to
+// decide Handled now: a notch that would land on the offset the viewer is
+// already at scrolls nothing, and marking it Handled would stop input.Bubble
+// dead at this viewer instead of letting an outer scroller take it. Leaves
+// rawOffset untouched (and skips the invalidate) in that case, so a stalled
+// wheel can't accumulate a raw offset far past the end either.
+func (s *ScrollViewer) wheelBy(dy float32) bool {
+	if clampScrollOffset(s.rawOffset+dy, s.childH, s.viewport.H) == s.offset {
+		return false
+	}
+	s.ScrollBy(dy)
+	return true
+}
+
+// wheelByX is wheelBy's X-axis counterpart, clamping against childW and
+// viewport.W.
+func (s *ScrollViewer) wheelByX(dx float32) bool {
+	if clampScrollOffset(s.rawOffsetX+dx, s.childW, s.viewport.W) == s.offsetX {
+		return false
+	}
+	s.ScrollByX(dx)
+	return true
+}
+
 // OnPointer implements input.PointerHandler:
 //
 // Wheel scrolls vertically by scrollWheelStep logical px per notch by
@@ -520,7 +548,11 @@ func (s *ScrollViewer) canScrollY() bool {
 // instead, and a plain Wheel scrolls horizontally too when there is no
 // vertical content to scroll to but there IS horizontal content (so a
 // purely horizontally-overflowing ScrollViewer is still wheel-scrollable
-// without requiring Shift). Wheel is always handled, exactly as before.
+// without requiring Shift). A wheel notch is handled only when it actually
+// moved the clamped offset (see wheelBy): a viewer whose content already
+// fits, or that is already pinned at the end stop the notch pushes toward,
+// leaves the event unhandled so input.Bubble carries it on out to an
+// enclosing scroller instead of swallowing it into a dead zone.
 //
 // A Press inside the current vertical thumb rect starts a vertical drag,
 // checked first (matching the original single-axis priority); otherwise a
@@ -533,15 +565,18 @@ func (s *ScrollViewer) OnPointer(e *input.PointerEvent) {
 	switch e.Action {
 	case input.Wheel:
 		delta := -e.Delta.Y * scrollWheelStep
+		var moved bool
 		switch {
 		case e.Mods&input.ModShift != 0:
-			s.ScrollByX(delta)
+			moved = s.wheelByX(delta)
 		case s.canScrollY():
-			s.ScrollBy(delta)
+			moved = s.wheelBy(delta)
 		default:
-			s.ScrollByX(delta)
+			moved = s.wheelByX(delta)
 		}
-		e.Handled = true
+		if moved {
+			e.Handled = true
+		}
 	case input.Press:
 		if rect, ok := s.thumbRect(); ok && rect.Contains(e.Pos) {
 			s.dragGrabY = e.Pos.Y - rect.Y

@@ -610,7 +610,10 @@ func (g *DataGrid) OnFocusChanged(focused bool) {
 // Wheel scrolls vertically (row scroll) by scrollWheelStep logical px per
 // notch by default, and horizontally instead when Shift is held — mirroring
 // ListView.OnPointer's own Wheel handling exactly, including never falling
-// back to X on a plain wheel. Always handled.
+// back to X on a plain wheel, and including handling the notch only when it
+// actually moved the clamped offset (see virtualizer.scrollBy) so a grid
+// that can't scroll any further passes the wheel out to an enclosing
+// scroller instead of swallowing it.
 //
 // A Press inside the current vertical thumb rect starts a vertical drag
 // (checked first, matching the original priority); otherwise a Press inside
@@ -631,16 +634,22 @@ func (g *DataGrid) OnPointer(e *input.PointerEvent) {
 	switch e.Action {
 	case input.Wheel:
 		delta := -e.Delta.Y * scrollWheelStep
+		var moved bool
 		if e.Mods&input.ModShift != 0 {
-			g.scrollByX(delta)
+			moved = g.scrollByX(delta)
 		} else {
-			g.scrollBy(delta)
+			moved = g.scrollBy(delta)
+		}
+		if !moved {
+			return
 		}
 		// The offset just moved but this isn't a Move (no fresh pointer
 		// position to re-hit-test against), so whatever row hoverRow named
 		// no longer necessarily sits under the pointer on screen — clear it
 		// rather than leave it naming the wrong row (see the row hover doc
-		// comment on hoverRow's field).
+		// comment on hoverRow's field). A notch that scrolled nothing is
+		// returned from above before reaching here: the rows didn't move, so
+		// hoverRow still names the row under the pointer.
 		g.hoverRow = -1
 		g.InvalidateArrange()
 		e.Handled = true

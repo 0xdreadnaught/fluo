@@ -291,6 +291,69 @@ func TestListViewWheelScrollsAndHandles(t *testing.T) {
 	}
 }
 
+// TestListViewWheelBubblesToOuterScrollerWhenRowsFit pins the nested-scroller
+// dead zone. A ListView whose rows already fit its own viewport scrolls
+// nothing, so it has to leave the notch unhandled — input.Bubble stops at the
+// first handler that sets Handled, so consuming it regardless (marking every
+// wheel handled, as this did) turned a ScrollViewer wrapping a short list
+// into a region where the wheel moved neither one.
+func TestListViewWheelBubblesToOuterScrollerWhenRowsFit(t *testing.T) {
+	// 2 rows of 48 = 96px of content inside the ListView's own 240px default
+	// desired height (what the viewer arranges it at, measuring it with
+	// unbounded height), inside a 50px-tall viewer: the list has nothing to
+	// scroll, the viewer has 190px of it.
+	items := newFakeListItems("a", "b")
+	l := NewListView(nil, items).SetRowHeight(48)
+	s := NewScrollViewer().SetChild(l)
+	layoutScrollViewer(s, 0, 0, 100, 50)
+
+	if _, ok := l.thumbRect(); ok {
+		t.Fatal("fixture: the inner list must fit its own viewport (no thumb)")
+	}
+	if !s.canScrollY() {
+		t.Fatal("fixture: the outer viewer must have room to scroll")
+	}
+
+	e := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -1}, Router: input.NewRouter()}
+	input.Bubble([]core.Widget{s, l}, e)
+	if !e.Handled {
+		t.Fatal("wheel over ScrollViewer{ListView} went unhandled by both")
+	}
+
+	layoutScrollViewer(s, 0, 0, 100, 50)
+	if got := l.offset; got != 0 {
+		t.Fatalf("inner list offset = %v, want 0 (nothing to scroll)", got)
+	}
+	if got := s.OffsetY(); got != scrollWheelStep {
+		t.Fatalf("outer viewer offset = %v, want %v — the inner list swallowed a notch it could not act on", got, scrollWheelStep)
+	}
+}
+
+// TestListViewWheelAtEndStopNotHandled is the same rule at the other end of
+// the range: a list scrolled to its last row must not keep consuming
+// downward notches, while a notch back up is still its own.
+func TestListViewWheelAtEndStopNotHandled(t *testing.T) {
+	items := newFakeListItems(make([]string, 4)...)
+	l := NewListView(nil, items).SetRowHeight(48)
+	l.rawOffset = 4*48 - 96 // exactly the end stop: content 192, viewport 96
+	layoutListView(l, 0, 0, 100, 100)
+	if got := l.offset; got != 96 {
+		t.Fatalf("fixture: offset = %v, want the 96 end stop", got)
+	}
+
+	down := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -1}, Router: input.NewRouter()}
+	l.OnPointer(down)
+	if down.Handled {
+		t.Fatal("a downward notch at the bottom end stop was consumed, scrolling nothing")
+	}
+
+	up := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: 1}, Router: input.NewRouter()}
+	l.OnPointer(up)
+	if !up.Handled {
+		t.Fatal("a notch back up from the end stop must still be handled")
+	}
+}
+
 // --- List mutation via granular channel ---
 
 func TestListViewAddReflectsAfterRelayout(t *testing.T) {

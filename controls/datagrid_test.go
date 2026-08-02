@@ -352,6 +352,38 @@ func TestDataGridHoverClearedOnWheel(t *testing.T) {
 	}
 }
 
+// TestDataGridWheelNotHandledWhenRowsFit pins the same wheel-consumed-but-
+// nothing-moved rule ListView and ScrollViewer follow: a grid whose rows all
+// fit scrolls nothing, so the notch must stay unhandled for an enclosing
+// scroller (input.Bubble stops at the first handler that sets Handled).
+// Nothing moved, so the hovered row is still the hovered row.
+func TestDataGridWheelNotHandledWhenRowsFit(t *testing.T) {
+	g := NewDataGrid(nil)
+	g.SetColumns(Column{Width: Px(50)})
+	g.SetRowCount(2)
+	g.rowH = 48
+
+	layoutDataGrid(g, 0, 0, 100, 400) // headerH=48, 96px of rows, way short of the body
+	if _, ok := g.thumbRect(); ok {
+		t.Fatal("fixture: the grid must fit its own viewport (no thumb)")
+	}
+
+	r := input.NewRouter()
+	g.OnPointer(&input.PointerEvent{Action: input.Move, Pos: render.Point{X: 10, Y: 48 + 10}, Router: r})
+	if g.hoverRow != 0 {
+		t.Fatalf("fixture: hoverRow after Move = %d, want 0", g.hoverRow)
+	}
+
+	wheel := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -1}, Router: r}
+	g.OnPointer(wheel)
+	if wheel.Handled {
+		t.Fatal("wheel over a grid with nothing to scroll was marked Handled")
+	}
+	if g.hoverRow != 0 {
+		t.Fatalf("hoverRow after a wheel that scrolled nothing = %d, want 0 (the rows did not move)", g.hoverRow)
+	}
+}
+
 // TestDataGridHoverClearedOnThumbDrag mirrors the Wheel case above for the
 // other offset-changing-without-a-fresh-hit-test path: dragging the thumb.
 func TestDataGridHoverClearedOnThumbDrag(t *testing.T) {

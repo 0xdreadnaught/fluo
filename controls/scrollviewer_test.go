@@ -134,6 +134,49 @@ func TestScrollViewerWheelScrollsAndHandles(t *testing.T) {
 	}
 }
 
+// TestScrollViewerWheelNotHandledWhenNothingToScroll pins the wheel-consumed-
+// but-nothing-moved bug: a viewer whose child fits on both axes scrolls
+// nothing, and input.Bubble stops at the first handler that sets Handled, so
+// consuming the notch anyway would make this viewer a dead zone for any
+// enclosing scroller.
+func TestScrollViewerWheelNotHandledWhenNothingToScroll(t *testing.T) {
+	child := NewFixed(80, 10, render.RGB(1, 2, 3)) // fits both axes of the 100x50 viewer
+	s := NewScrollViewer().SetChild(child)
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	e := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -2}, Router: input.NewRouter()}
+	s.OnPointer(e)
+	if e.Handled {
+		t.Fatal("wheel over a viewer with nothing to scroll was marked Handled")
+	}
+}
+
+// TestScrollViewerWheelAtEndStopNotHandled is the same rule at the end of the
+// range rather than for a non-scrolling viewer: further notches into the end
+// stop move nothing and must bubble, while a notch back off it is still this
+// viewer's own.
+func TestScrollViewerWheelAtEndStopNotHandled(t *testing.T) {
+	child := NewFixed(80, 200, render.RGB(1, 2, 3))
+	s := NewScrollViewer().SetChild(child)
+	s.ScrollTo(150) // exactly the end stop: childH 200, viewport H 50
+	layoutScrollViewer(s, 10, 20, 100, 50)
+	if got := s.OffsetY(); got != 150 {
+		t.Fatalf("fixture: offset = %v, want the 150 end stop", got)
+	}
+
+	down := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -1}, Router: input.NewRouter()}
+	s.OnPointer(down)
+	if down.Handled {
+		t.Fatal("a downward notch at the bottom end stop was consumed, scrolling nothing")
+	}
+
+	up := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: 1}, Router: input.NewRouter()}
+	s.OnPointer(up)
+	if !up.Handled {
+		t.Fatal("a notch back up off the end stop must still be handled")
+	}
+}
+
 func TestScrollViewerThumbDragViaCapture(t *testing.T) {
 	child := NewFixed(80, 200, render.RGB(1, 2, 3))
 	s := NewScrollViewer().SetChild(child)
