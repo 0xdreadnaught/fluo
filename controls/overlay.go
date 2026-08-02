@@ -10,16 +10,24 @@ import (
 // popupEntry is one entry in an OverlayHost's popup stack: the popup widget
 // itself, the screen-space anchor rect it was opened against (re-used every
 // arrange pass to recompute its position), the callback (may be nil) to fire
-// when it's dismissed, and whether it's MODAL (opened via ShowPopup) or not
+// when it's dismissed, whether it's MODAL (opened via ShowPopup) or not
 // (opened via ShowPopupNonModal) — see the type doc comment's "Modal vs
-// non-modal popups" paragraph. Every OTHER aspect of a popup (rendering,
-// hit-testing z-order, Detach-on-close) is identical regardless of modal;
-// only capture engagement and light-dismiss depend on it.
+// non-modal popups" paragraph — and whether it TRAPS KEYBOARD FOCUS for as
+// long as it's open (see the "Focus trapping" paragraph). Every OTHER aspect
+// of a popup (rendering, hit-testing z-order, Detach-on-close) is identical
+// regardless of either flag; only capture engagement and light-dismiss
+// depend on modal, and only the router's focus-scope stack depends on
+// focusScope.
 type popupEntry struct {
 	w         core.Widget
 	anchor    render.Rect
 	onDismiss func()
 	modal     bool
+
+	// focusScope records that showPopup pushed an input.Router focus scope
+	// for this popup, so ClosePopup knows to pop it again — see
+	// showPopupTrapFocus.
+	focusScope bool
 }
 
 // OverlayHost hosts the app content plus a stack of popups rendered above it.
@@ -47,6 +55,22 @@ type popupEntry struct {
 // were modal for the purpose of EVENT delivery: the modal capture governs
 // all pointer routing regardless of which popup happens to be topmost, per
 // the paragraph below.
+//
+// Focus trapping is a SEPARATE opt-in from modality, and a narrower one:
+// showPopupTrapFocus (used by ShowDialog, and the only user of it in v0)
+// pushes an input.Router focus scope rooted at the popup, so Tab/Shift+Tab
+// cycle only the popup's own focusable widgets and keys never dispatch into
+// the content behind it; ClosePopup pops that scope again. Being modal is
+// NOT enough to trap focus, because the two modal popup families this
+// package already ships deliberately keep focus on their OPENER, which sits
+// outside the popup: a ComboBox's dropdown leaves the ComboBox field focused
+// for the popup's whole lifetime (that is how its Esc/arrow keys keep
+// working — see ComboBox's own type doc comment), and a MenuBar likewise
+// stays focused while its menu popup is open. Trapping focus inside those
+// popups would strand their keyboard handling in a subtree that has no
+// handler for it. A dialog is the opposite case: nothing outside it should
+// be keyboard-reachable while it's up, and its Escape-to-close lives on the
+// popup itself.
 //
 // Light dismiss (see OnPointer) needs a way to stop a stray press from
 // reaching content underneath an open MODAL popup, and content's own
@@ -231,8 +255,11 @@ func (h *OverlayHost) SetTimers(q *timers.Queue) *OverlayHost {
 // h→w→h). Use ShowPopupNonModal for a popup that should NOT engage any of
 // this (e.g. ToolTipArea's tip) — see the type doc comment's "Modal vs
 // non-modal popups" paragraph.
+// A popup shown this way does NOT trap keyboard focus — see the type doc
+// comment's "Focus trapping" paragraph, and showPopupTrapFocus for the
+// dialog-shaped popup that does.
 func (h *OverlayHost) ShowPopup(popup core.Widget, anchor render.Rect, onDismiss func()) {
-	h.showPopup(popup, anchor, onDismiss, true)
+	h.showPopup(popup, anchor, onDismiss, true, false)
 }
 
 // ShowPopupNonModal opens popup exactly like ShowPopup — same placement,
@@ -246,16 +273,35 @@ func (h *OverlayHost) ShowPopup(popup core.Widget, anchor render.Rect, onDismiss
 // EVERY popup regardless of which is topmost — see the type doc comment's
 // "Modal vs non-modal popups" paragraph.
 func (h *OverlayHost) ShowPopupNonModal(popup core.Widget, anchor render.Rect, onDismiss func()) {
-	h.showPopup(popup, anchor, onDismiss, false)
+	h.showPopup(popup, anchor, onDismiss, false, false)
 }
 
-// showPopup is ShowPopup/ShowPopupNonModal's shared implementation: append
-// the entry (recording modal so ClosePopup's capture-release decision and
-// hasModalPopup can tell modal and non-modal popups apart), re-parent, reset
-// the stale popupHover (see the field's doc comment and popupHoverGen's),
-// invalidate measure, and — modal only — capture the wired router.
-func (h *OverlayHost) showPopup(popup core.Widget, anchor render.Rect, onDismiss func(), modal bool) {
-	h.popups = append(h.popups, popupEntry{w: popup, anchor: anchor, onDismiss: onDismiss, modal: modal})
+// showPopupTrapFocus opens popup as a MODAL popup that ALSO traps keyboard
+// focus for as long as it is open: the wired router (see SetRouter) gets a
+// focus scope rooted at popup pushed on it here and popped again by
+// ClosePopup, so while it's up, Tab/Shift+Tab cycle only popup's own
+// focusable widgets and no key event dispatches into the content behind it
+// (see input.Router.PushFocusScope for the full contract, including its
+// focusing popup itself on push). Everything else is exactly ShowPopup.
+//
+// Unexported on purpose: the only surface in v0 that wants this is a dialog
+// (ShowDialog), whose whole point is that nothing behind it is reachable
+// until it closes. The other modal popups in this package must NOT trap —
+// see the type doc comment's "Focus trapping" paragraph for why keeping
+// focus on the opener is load-bearing for ComboBox and MenuBar.
+func (h *OverlayHost) showPopupTrapFocus(popup core.Widget, anchor render.Rect, onDismiss func()) {
+	h.showPopup(popup, anchor, onDismiss, true, true)
+}
+
+// showPopup is ShowPopup/ShowPopupNonModal/showPopupTrapFocus's shared
+// implementation: append the entry (recording modal so ClosePopup's
+// capture-release decision and hasModalPopup can tell modal and non-modal
+// popups apart, and trapFocus so ClosePopup knows whether it owes a
+// PopFocusScope), re-parent, reset the stale popupHover (see the field's doc
+// comment and popupHoverGen's), invalidate measure, and — modal only —
+// capture the wired router, plus push its focus scope when trapping.
+func (h *OverlayHost) showPopup(popup core.Widget, anchor render.Rect, onDismiss func(), modal, trapFocus bool) {
+	h.popups = append(h.popups, popupEntry{w: popup, anchor: anchor, onDismiss: onDismiss, modal: modal, focusScope: trapFocus})
 	core.SetParent(popup, h)
 	// popup is now topmost: whatever popupHover was tracking (if anything)
 	// belonged to the previous topmost (or nothing, if this is the first
@@ -268,6 +314,15 @@ func (h *OverlayHost) showPopup(popup core.Widget, anchor render.Rect, onDismiss
 	h.popupHoverGen++
 	if modal && h.router != nil {
 		h.router.Capture(h)
+	}
+	// Pushed AFTER the capture and BEFORE notifyModalOpen, so an observer
+	// that reacts by closing its own (non-modal, non-trapping) popup sees the
+	// same fully-engaged state a later event would. PushFocusScope also homes
+	// focus onto popup itself when focus was outside it — which is what makes
+	// the first Tab enter the popup and Escape reach it even when it holds no
+	// focusable widget at all (see input.Router.PushFocusScope).
+	if trapFocus && h.router != nil {
+		h.router.PushFocusScope(popup)
 	}
 	h.InvalidateMeasure()
 	// A modal popup has just captured the router, silencing the hover diffing
@@ -340,7 +395,9 @@ func (h *OverlayHost) hasModalPopup() bool {
 // does one that still holds non-modal popups, e.g. a tooltip left open),
 // and this host currently holds the router's pointer capture (see
 // ShowPopup), the capture is released so ordinary hit-testing into content
-// resumes.
+// resumes. A popup that pushed a focus scope when it opened (see
+// showPopupTrapFocus) has it popped here, restoring whatever scope — or
+// unrestricted traversal — was in effect beneath it.
 func (h *OverlayHost) ClosePopup(popup core.Widget) {
 	idx := -1
 	for i, p := range h.popups {
@@ -362,6 +419,16 @@ func (h *OverlayHost) ClosePopup(popup core.Widget) {
 	// skip its own now-stale final write.
 	h.popupHover = nil
 	h.popupHoverGen++
+
+	// A trapping popup's focus scope ends with the popup. Popped BEFORE the
+	// Detach below so that, when an OUTER scope is restored (a nested dialog
+	// closing), PopFocusScope's own re-homing runs while the closing popup
+	// still holds focus: focus lands on the surface beneath, and Detach then
+	// finds nothing of its own left to clear. With no outer scope the pop
+	// changes no focus at all and Detach clears it exactly as it always did.
+	if entry.focusScope && h.router != nil {
+		h.router.PopFocusScope()
+	}
 
 	core.SetParent(popup, nil)
 

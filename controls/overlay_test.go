@@ -989,3 +989,78 @@ func TestClosingStackedPopupRefocusesSurvivor(t *testing.T) {
 		t.Fatalf("PopupCount after second Esc = %d, want 0", got)
 	}
 }
+
+// --- focus trapping is opt-in, not a property of modality ---------------
+
+func TestModalPopupDoesNotTrapFocus(t *testing.T) {
+	// Regression lock for the popup families that are modal but must NOT trap
+	// focus (see OverlayHost's "Focus trapping" paragraph): a plain
+	// ShowPopup leaves tab traversal over the content behind it alone.
+	first := &ovProbe{focusable: true}
+	first.SetWidth(50)
+	first.SetHeight(20)
+	second := &ovProbe{focusable: true}
+	second.SetWidth(50)
+	second.SetHeight(20)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(NewStackPanel(Vertical).Add(first, second))
+	r.SetRoot(host)
+
+	host.ShowPopup(NewFixed(30, 15, render.RGB(1, 2, 3)), render.Rect{X: 10, Y: 10}, nil)
+	layoutOverlay(host, 300, 300)
+
+	r.Focus(first)
+	r.KeyDown(input.KeyTab, 0, 0)
+	if got := r.Focused(); got != core.Widget(second) {
+		t.Fatalf("Focused() after Tab with a modal popup open = %v, want the second content widget", got)
+	}
+	r.KeyDown(input.KeyTab, 0, 0)
+	if got := r.Focused(); got != core.Widget(first) {
+		t.Fatalf("Focused() after the wrapping Tab = %v, want the first content widget", got)
+	}
+}
+
+func TestComboBoxPopupKeepsKeysOnTheField(t *testing.T) {
+	// The concrete reason focus trapping is opt-in: a ComboBox's dropdown is
+	// a MODAL popup, but the ComboBox FIELD — which is outside it — stays
+	// focused for the popup's whole lifetime, and is the thing that handles
+	// Escape. Trapping focus inside the popup would strand that.
+	combo := NewComboBox(buttonFace(t))
+	combo.SetItems([]string{"one", "two"})
+	combo.SetWidth(120)
+	combo.SetHeight(32)
+	other := &ovProbe{focusable: true}
+	other.SetWidth(50)
+	other.SetHeight(20)
+
+	host := NewOverlayHost()
+	r := input.NewRouter()
+	host.SetRouter(r)
+	host.SetContent(NewStackPanel(Vertical).Add(combo, other))
+	r.SetRoot(host)
+	layoutOverlay(host, 300, 300)
+
+	r.Focus(combo)
+	r.KeyDown(input.KeyDown, 0, 0) // opens the dropdown from the keyboard
+	if !combo.IsOpen() {
+		t.Fatal("combo.IsOpen() = false after KeyDown, want true")
+	}
+	if got := r.Focused(); got != core.Widget(combo) {
+		t.Fatalf("Focused() with the dropdown open = %v, want the combo field", got)
+	}
+
+	// Tab is not trapped in the dropdown either.
+	r.KeyDown(input.KeyTab, 0, 0)
+	if got := r.Focused(); got != core.Widget(other) {
+		t.Fatalf("Focused() after Tab with the dropdown open = %v, want the sibling widget", got)
+	}
+
+	r.Focus(combo)
+	r.KeyDown(input.KeyEscape, 0, 0)
+	if combo.IsOpen() {
+		t.Fatal("combo.IsOpen() = true after Escape, want false (the field's own OnKey must still receive it)")
+	}
+}
