@@ -8,6 +8,22 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.15.10] - 2026-08-02
+
+### Added
+
+- **`TextBox.TextViewportRect() (render.Rect, bool)`** — the rectangle a
+  multi-line box actually draws text inside: the content area with the
+  line-number gutter (left) and the vertical-scroll thumb gutter (right) carved
+  off. It is the render-time clip the box pushes around its glyphs, exposed as a
+  ground-truth observability signal (in the same spirit as `CaretScreenRect`).
+  Deliberately distinct from `ClipRect`, which is the widget's outer clip and
+  always the full bounds so the thumb and line numbers can draw in their gutters
+  — a harness asking "does the text stop before the thumb?" must read
+  `TextViewportRect` (narrower than the bounds whenever a gutter is reserved),
+  not `ClipRect` (whose width equals the bounds width unconditionally). `ok` is
+  false for a single-line box.
+
 ## [0.15.9] - 2026-08-02
 
 ### Added

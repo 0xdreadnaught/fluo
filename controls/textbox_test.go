@@ -4240,3 +4240,65 @@ func TestTextBoxSourceEditorRealArrangementReservesGutter(t *testing.T) {
 		t.Fatal("no selection fill painted; the overflow-under-thumb draw case was not exercised")
 	}
 }
+
+// TestTextBoxSourceEditorInSplitPanelStillNarrows closes the last fluo-side
+// embedding gap: the real augment box isn't just in a StackPanel, it's in a
+// StackPanel that is the SECOND pane of a Horizontal SplitPanel (fluo_augment
+// .go's split.SetSecond(right)). The split changes only the box's WIDTH; the
+// gutter reservation keys off VERTICAL overflow (SetHeight(460) vs 80 lines),
+// so it must still fire and the text viewport must still narrow.
+func TestTextBoxSourceEditorInSplitPanelStillNarrows(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 80; i++ {
+		lines = append(lines, "    step = compute(i)")
+	}
+	tb := NewTextBox(buttonFace(t))
+	tb.SetMultiline(true)
+	tb.SetTabInserts(true)
+	tb.SetLineNumbers(true)
+	tb.SetText(strings.Join(lines, "\n"))
+	tb.SetHeight(460)
+
+	right := NewStackPanel(Vertical).SetGap(4)
+	right.Add(NewTextBlock(buttonFace(t), "Source"))
+	right.Add(tb)
+	left := NewStackPanel(Vertical)
+	left.Add(NewTextBlock(buttonFace(t), "left"))
+
+	split := NewSplitPanel(Horizontal)
+	split.SetFirst(left)
+	split.SetSecond(right)
+	split.SetSplitRatio(0.35)
+	split.SetWidth(900)
+	core.MeasureWidget(split, render.Size{W: 900, H: 900})
+	core.ArrangeWidget(split, render.Rect{X: 0, Y: 0, W: 900, H: 900})
+
+	b := tb.Bounds()
+	if b.W == 0 || b.H == 0 {
+		t.Fatalf("box not arranged inside the SplitPanel: %+v", b)
+	}
+	if b.H != 460 {
+		t.Fatalf("box height inside split = %v, want 460 (SetHeight honored)", b.H)
+	}
+	if !tb.vScrollShown {
+		t.Fatal("vScrollShown = false inside a SplitPanel, want true (vertical overflow is split-independent)")
+	}
+	vp, ok := tb.TextViewportRect()
+	if !ok || vp.W >= b.W {
+		t.Fatalf("TextViewportRect = %+v ok=%v, want narrowed below bounds width %v (split embedding must not defeat the gutter)", vp, ok, b.W)
+	}
+
+	// Draw-time: the narrowed viewport is actually pushed while embedded.
+	rr := newClipRecorder()
+	tb.Render(rr)
+	found := false
+	for _, cr := range rr.clips {
+		if cr == vp {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("renderMultiline did not PushClip %+v inside the SplitPanel; clips = %v", vp, rr.clips)
+	}
+}
