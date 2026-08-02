@@ -285,6 +285,85 @@ func TestRenderWidgetOverlayAfterChildren(t *testing.T) {
 	}
 }
 
+// arrangeInvalidator raises InvalidateArrange on itself from inside its own
+// ArrangeContent — the pattern a widget uses when arranging its children
+// reveals it needs another arrange pass (a scroll viewer discovering its
+// content overflowed, say). The engine must not lose that invalidation.
+type arrangeInvalidator struct{ Element }
+
+func (a *arrangeInvalidator) ArrangeContent(render.Rect) { a.InvalidateArrange() }
+
+// measureInvalidator raises InvalidateMeasure on itself from inside its own
+// MeasureContent, the measure-pass analogue of arrangeInvalidator.
+type measureInvalidator struct{ Element }
+
+func (m *measureInvalidator) MeasureContent(render.Size) render.Size {
+	m.InvalidateMeasure()
+	return render.Size{}
+}
+
+// TestArrangeInvalidationDuringPassSurvives locks C1 for arrange: an
+// InvalidateArrange raised while ArrangeContent runs must still be visible
+// after ArrangeWidget returns (NeedsLayout() == true), not clobbered by the
+// engine stamping arrangeClean = true after the callout.
+func TestArrangeInvalidationDuringPassSurvives(t *testing.T) {
+	a := &arrangeInvalidator{}
+	MeasureWidget(a, render.Size{W: 100, H: 100})
+	ArrangeWidget(a, render.Rect{W: 100, H: 100})
+	if !a.NeedsLayout() {
+		t.Fatal("InvalidateArrange raised during ArrangeContent was lost (arrangeClean clobbered)")
+	}
+}
+
+// TestMeasureInvalidationDuringPassSurvives is the measure-pass counterpart.
+func TestMeasureInvalidationDuringPassSurvives(t *testing.T) {
+	m := &measureInvalidator{}
+	MeasureWidget(m, render.Size{W: 100, H: 100})
+	if !m.NeedsLayout() {
+		t.Fatal("InvalidateMeasure raised during MeasureContent was lost (measureClean clobbered)")
+	}
+}
+
+// TestArrangeInvalidationDuringPassClimbsToParent shows the invalidation-
+// propagation invariant still holds under the C1 ordering: an invalidation
+// raised inside a child's ArrangeContent both survives on the child AND climbs
+// to a parent that was already clean, so the whole tree reports NeedsLayout.
+func TestArrangeInvalidationDuringPassClimbsToParent(t *testing.T) {
+	parent := &stub{contentW: 100, contentH: 100}
+	child := &arrangeInvalidator{}
+	SetParent(child, parent)
+
+	// Bring both to a clean state first (stub arranges nothing, so no
+	// invalidation is raised for the parent).
+	MeasureWidget(parent, render.Size{W: 200, H: 200})
+	ArrangeWidget(parent, render.Rect{W: 200, H: 200})
+	if parent.NeedsLayout() {
+		t.Fatal("parent should be clean after its own layout")
+	}
+
+	MeasureWidget(child, render.Size{W: 100, H: 100})
+	ArrangeWidget(child, render.Rect{W: 100, H: 100})
+	if !child.NeedsLayout() {
+		t.Fatal("child's own invalidation was lost")
+	}
+	if !parent.NeedsLayout() {
+		t.Fatal("invalidation must climb to the (already-clean) parent")
+	}
+}
+
+// TestClampMinWinsOverSmallerMax locks C3: when min > max on an axis, min wins
+// (WPF gives MinWidth/MinHeight priority), so a 100 min against a 50 max
+// yields 100, not 50.
+func TestClampMinWinsOverSmallerMax(t *testing.T) {
+	s := &stub{contentW: 50, contentH: 50}
+	s.SetMinSize(100, 100)
+	s.SetMaxSize(50, 50)
+	MeasureWidget(s, render.Size{W: 200, H: 200})
+	if got := s.DesiredSize(); got != (render.Size{W: 100, H: 100}) {
+		t.Fatalf("desired=%v, want 100x100 (min must win over a smaller max)", got)
+	}
+}
+
 func TestIsVisible(t *testing.T) {
 	s := &stub{contentW: 50, contentH: 20}
 	if !IsVisible(s) {

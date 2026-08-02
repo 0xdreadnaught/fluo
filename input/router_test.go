@@ -1440,3 +1440,48 @@ func TestPointerEventTimeStamped(t *testing.T) {
 		}
 	}
 }
+
+// TestClickRunScopedToWidget locks the multi-click widget-scope fix: two quick
+// clicks that straddle the seam between two abutting widgets each read as a
+// standalone single click (ClickCount 1), because the second lands on a
+// DIFFERENT widget than the first — even though the two positions are within
+// MultiClickDistance (2px apart) and MultiClickInterval of one another and so
+// would, position-only, have chained into a double-click. Two clicks on the
+// SAME widget within those thresholds still climb to 2.
+func TestClickRunScopedToWidget(t *testing.T) {
+	clock := 0.0
+
+	a := &clickProbe{}
+	a.SetWidth(100)
+	a.SetHeight(50)
+	b := &clickProbe{}
+	b.SetWidth(100)
+	b.SetHeight(50)
+	// A covers x in [0,100), B covers x in [100,200): they abut at x=100.
+	root := controls.NewCanvas().Add(a, 0, 0).Add(b, 100, 0)
+	layout(root, 300, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+	r.SetTimeSource(func() float64 { return clock })
+
+	// Click just inside A, then just inside B, only 2px apart and well within
+	// the double-click interval.
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 99, Y: 10}, 0)
+	clock += 0.1
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 101, Y: 10}, 0)
+
+	if len(a.pressCounts) != 1 || a.pressCounts[0] != 1 {
+		t.Fatalf("A press counts = %v, want [1]", a.pressCounts)
+	}
+	if len(b.pressCounts) != 1 || b.pressCounts[0] != 1 {
+		t.Fatalf("B press counts = %v, want [1] (hitting a different widget must reset the run)", b.pressCounts)
+	}
+
+	// A second click on B itself, still within threshold, continues the run.
+	clock += 0.1
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 102, Y: 10}, 0)
+	if got := b.pressCounts[len(b.pressCounts)-1]; got != 2 {
+		t.Fatalf("second press on B = %d, want 2 (same widget continues the run)", got)
+	}
+}

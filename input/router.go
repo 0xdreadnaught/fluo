@@ -56,15 +56,21 @@ type Router struct {
 	// uses. Set via SetTimeSource; read only through timeNow.
 	now func() float64
 
-	// lastPressTime/lastPressPos/lastPressButton/lastClickCount are the
-	// running click-run state PointerButton derives PointerEvent.ClickCount
-	// from: the previous press's timestamp, position, and button, plus the
-	// count it was assigned. lastClickCount is 0 until the first press, which
-	// is also what makes that first press start a run rather than continue a
-	// phantom one anchored at the zero position. See clickCountFor.
+	// lastPressTime/lastPressPos/lastPressButton/lastPressTarget/
+	// lastClickCount are the running click-run state PointerButton derives
+	// PointerEvent.ClickCount from: the previous press's timestamp, position,
+	// button, and the widget it was delivered to, plus the count it was
+	// assigned. lastClickCount is 0 until the first press, which is also what
+	// makes that first press start a run rather than continue a phantom one
+	// anchored at the zero position. lastPressTarget scopes a run to a single
+	// widget: a press only continues a run when it lands on the SAME widget as
+	// the press before it, so two clicks that straddle the seam between two
+	// abutting controls each read as a fresh single click rather than a
+	// double-click on the second one. See clickCountFor.
 	lastPressTime   float64
 	lastPressPos    render.Point
 	lastPressButton Button
+	lastPressTarget core.Widget
 	lastClickCount  int
 }
 
@@ -135,26 +141,30 @@ func absF32(v float32) float32 {
 	return v
 }
 
-// clickCountFor assigns a press at (b, p, t) its position within a click run
-// and records it as the new previous press: 1 when it starts a fresh run,
-// otherwise one more than the press before it. A press continues the previous
-// run only when all three of the button, the elapsed time (within
-// MultiClickInterval), and the distance (within MultiClickDistance on each
-// axis) match — any one of them failing starts over at 1, which is what makes
-// a slow second click, a click that drifted, and a right-click following a
-// left-click all read as standalone presses.
+// clickCountFor assigns a press at (b, p, t) landing on widget target its
+// position within a click run and records it as the new previous press: 1 when
+// it starts a fresh run, otherwise one more than the press before it. A press
+// continues the previous run only when all four of the receiving widget (same
+// identity as the previous press's target), the button, the elapsed time
+// (within MultiClickInterval), and the distance (within MultiClickDistance on
+// each axis) match — any one of them failing starts over at 1, which is what
+// makes a slow second click, a click that drifted, a right-click following a
+// left-click, and a click that landed on a DIFFERENT widget than the last all
+// read as standalone presses. Scoping to target is what keeps two clicks that
+// straddle the boundary between two abutting controls from double-clicking the
+// second one: it hit a different widget, so its count resets to 1.
 //
 // With no time source installed every press would otherwise share the same
 // timestamp 0 and so appear infinitely fast, turning any two same-position
 // clicks into a double-click no matter how far apart in real time; a clockless
 // router therefore short-circuits to 1 and leaves the run state untouched,
 // preserving the pre-multi-click behavior for hosts that never opt in.
-func (r *Router) clickCountFor(b Button, p render.Point, t float64) int {
+func (r *Router) clickCountFor(b Button, p render.Point, t float64, target core.Widget) int {
 	if r.now == nil {
 		return 1
 	}
 	n := 1
-	if r.lastClickCount > 0 && b == r.lastPressButton &&
+	if r.lastClickCount > 0 && target == r.lastPressTarget && b == r.lastPressButton &&
 		t-r.lastPressTime <= MultiClickInterval &&
 		absF32(p.X-r.lastPressPos.X) <= MultiClickDistance &&
 		absF32(p.Y-r.lastPressPos.Y) <= MultiClickDistance {
@@ -163,6 +173,7 @@ func (r *Router) clickCountFor(b Button, p render.Point, t float64) int {
 	r.lastPressTime = t
 	r.lastPressPos = p
 	r.lastPressButton = b
+	r.lastPressTarget = target
 	r.lastClickCount = n
 	return n
 }
@@ -454,11 +465,15 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 		action = Press
 	}
 	e := &PointerEvent{Action: action, Pos: p, Button: b, Mods: mods, Time: r.timeNow(), Router: r}
-	if press {
-		e.ClickCount = r.clickCountFor(b, p, e.Time)
-	}
 
-	if r.Captured() != nil {
+	// ClickCount is assigned once the receiving widget is known, so a
+	// multi-click run stays scoped to that one widget (see clickCountFor). The
+	// receiving widget is the captured widget while a capture is active, else
+	// the leaf of the hit-test path.
+	if top := r.Captured(); top != nil {
+		if press {
+			e.ClickCount = r.clickCountFor(b, p, e.Time, top)
+		}
 		r.deliverCaptured(e)
 		return true
 	}
@@ -469,6 +484,11 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 
 	path := HitPath(r.root, p)
 	if press {
+		var target core.Widget
+		if len(path) > 0 {
+			target = path[len(path)-1]
+		}
+		e.ClickCount = r.clickCountFor(b, p, e.Time, target)
 		r.focusFromPath(path)
 	}
 	Bubble(path, e)
