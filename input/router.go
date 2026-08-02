@@ -47,15 +47,15 @@ type Router struct {
 	focusing bool
 
 	// focusScopes is the focus-trap stack: the last element (if any) is the
-	// ACTIVE scope root, and every element before it is a scope that was
-	// itself active when a later PushFocusScope nested over it (a dialog
-	// opened from a dialog). While it is non-empty, Tab/Shift+Tab cycle only
-	// within the active root's own subtree and key events never dispatch
-	// into a widget outside it — see PushFocusScope/PopFocusScope, focusables
-	// and dispatchKey. Empty (the zero value, and the state for an app with
-	// no modal surface open) means no restriction at all: every focus path
-	// below behaves exactly as it did before scopes existed.
-	focusScopes []core.Widget
+	// ACTIVE scope, and every element before it is a scope that was itself
+	// active when a later PushFocusScope nested over it (a dialog opened from
+	// a dialog). While it is non-empty, Tab/Shift+Tab cycle only within the
+	// active root's own subtree and key events never dispatch into a widget
+	// outside it — see PushFocusScope/PopFocusScope, focusables and
+	// dispatchKey. Empty (the zero value, and the state for an app with no
+	// modal surface open) means no restriction at all: every focus path below
+	// behaves exactly as it did before scopes existed.
+	focusScopes []focusScopeEntry
 
 	// clipboard is the host-provided system clipboard access, or nil if the
 	// host hasn't wired one (e.g. headless/test routers). Set via
@@ -83,6 +83,15 @@ type Router struct {
 	lastPressButton Button
 	lastPressTarget core.Widget
 	lastClickCount  int
+}
+
+// focusScopeEntry is one entry on a Router's focus-scope stack: the widget
+// focus is confined to (root) and the widget that held focus at the moment
+// the scope was pushed (prior, nil when nothing did), which PopFocusScope
+// restores focus to on the way out. See PushFocusScope/PopFocusScope.
+type focusScopeEntry struct {
+	root  core.Widget
+	prior core.Widget
 }
 
 // NewRouter creates an empty Router. Call SetRoot before dispatching events.
@@ -616,12 +625,21 @@ func (r *Router) Focused() core.Widget {
 // routing the modal's own Escape into the widgets it is supposed to be
 // trapping input away from.
 //
+// FOCUS RESTORE: the scope also REMEMBERS whichever widget held focus at the
+// moment it was pushed (nil counts, and is remembered as such), and
+// PopFocusScope puts focus back there — so a dialog opened from a button
+// returns focus to that button when it closes, rather than leaving it on the
+// scope root of a surface that no longer exists. See PopFocusScope for what
+// happens when the remembered widget is no longer a usable target.
+//
 // A nil root is ignored (there is nothing to confine focus to).
 func (r *Router) PushFocusScope(root core.Widget) {
 	if root == nil {
 		return
 	}
-	r.focusScopes = append(r.focusScopes, root)
+	// prior is captured BEFORE the re-homing below, so it records what the
+	// user was actually on rather than the root this call is about to focus.
+	r.focusScopes = append(r.focusScopes, focusScopeEntry{root: root, prior: r.focused})
 	if !inFocusScope(root, r.focused) {
 		r.Focus(root)
 	}
@@ -633,12 +651,25 @@ func (r *Router) PushFocusScope(root core.Widget) {
 // unwound, focus traversal and key dispatch are unrestricted again, exactly
 // as they are for a router that never had a scope pushed.
 //
-// If a scope remains active afterward and focus is now OUTSIDE it (it was
-// inside the scope just popped, which is the normal case when a nested modal
-// closes), focus moves to the newly active scope root — the same re-homing
-// PushFocusScope does, keeping the invariant that an active scope always
-// holds the focus rather than leaving it stranded in a surface that is on
-// its way out of the tree.
+// FOCUS RESTORE: focus goes back to whatever the popped scope remembered
+// holding it at push time (see PushFocusScope) — the control that opened the
+// modal — instead of being left on the scope root of a surface that is on
+// its way out of the tree. Two things can override that:
+//
+//   - The remembered widget is no longer a usable target: it is nil, it has
+//     since been removed from this router's tree, or it now sits in a hidden
+//     subtree (see canRestoreFocus). Focus is CLEARED rather than handed to a
+//     widget the user can't see or reach — the same conclusion dispatchKey
+//     reaches for focus stranded in a hidden subtree.
+//   - A scope is still active underneath and the remembered widget is not
+//     inside it (focus was moved out from under the nested modal while it was
+//     up). The still-active scope's own root wins, since a scope that is back
+//     in charge must hold the focus for its trap to mean anything.
+//
+// In the ordinary nested case neither applies: the widget a nested modal
+// remembers was focused while the outer scope was already active, so it is
+// inside that outer scope by construction, and restoring it hands both focus
+// and the trap back to the surface beneath in one step.
 //
 // CAVEAT: this pops the TOP of the stack, so scopes must be popped in push
 // order. A caller that pushes A then B and pops while B is still open leaves
@@ -654,10 +685,19 @@ func (r *Router) PopFocusScope() {
 	if len(r.focusScopes) == 0 {
 		return
 	}
+	popped := r.focusScopes[len(r.focusScopes)-1]
 	r.focusScopes = r.focusScopes[:len(r.focusScopes)-1]
-	if scope := r.focusScope(); scope != nil && !inFocusScope(scope, r.focused) {
-		r.Focus(scope)
+
+	target := popped.prior
+	if !r.canRestoreFocus(target) {
+		target = nil
 	}
+	// inFocusScope is false for a nil target against a non-nil scope, so this
+	// also covers "nothing left to restore, but a scope is still in charge".
+	if scope := r.focusScope(); scope != nil && !inFocusScope(scope, target) {
+		target = scope
+	}
+	r.Focus(target)
 }
 
 // focusScope returns the ACTIVE focus-scope root (top of the stack — see
@@ -666,14 +706,51 @@ func (r *Router) focusScope() core.Widget {
 	if len(r.focusScopes) == 0 {
 		return nil
 	}
-	return r.focusScopes[len(r.focusScopes)-1]
+	return r.focusScopes[len(r.focusScopes)-1].root
 }
 
-// inFocusScope reports whether w is scope itself or one of its descendants,
-// walking w's core.ParentOf ancestor chain (the same chain key events bubble
-// along) rather than descending scope's Children — so it answers the
-// question at the point of use, for one widget, without materializing the
-// scope's whole subtree.
+// canRestoreFocus reports whether w is still a usable target for
+// PopFocusScope's focus restore. A modal can be open for arbitrarily long,
+// and nothing tells the router when the widget it remembered goes away, so
+// this is checked at restore time — the same "ask at the point of use"
+// arrangement dispatchKey uses for hidden focus:
+//
+//   - nil is not restorable (nothing was focused when the scope was pushed);
+//   - w must still hang off this router's root, so a widget removed from the
+//     tree while the modal was up (its parent cleared, its whole panel
+//     swapped out) is not focused back into a tree it no longer belongs to.
+//     A router with no root set skips this half — there is no tree to be
+//     absent from;
+//   - w and every ancestor must still be visible (inVisibleSubtree), so a
+//     widget hidden while the modal was up (tab switched, expander
+//     collapsed) doesn't get focus back invisibly.
+func (r *Router) canRestoreFocus(w core.Widget) bool {
+	if w == nil {
+		return false
+	}
+	if r.root != nil && !isDescendantOf(r.root, w) {
+		return false
+	}
+	return inVisibleSubtree(w)
+}
+
+// isDescendantOf reports whether w is ancestor itself or one of its
+// descendants, walking w's core.ParentOf chain (the same chain key events
+// bubble along) rather than descending ancestor's Children — so it answers
+// the question for one widget, at the point of use, without materializing
+// the whole subtree.
+func isDescendantOf(ancestor, w core.Widget) bool {
+	for w != nil {
+		if w == ancestor {
+			return true
+		}
+		w = core.ParentOf(w)
+	}
+	return false
+}
+
+// inFocusScope reports whether w is inside scope — scope itself or one of
+// its descendants (isDescendantOf).
 //
 // A nil scope means no scope is active and everything is therefore in scope:
 // that is what makes every caller below collapse to its pre-scope behavior
@@ -682,13 +759,7 @@ func inFocusScope(scope, w core.Widget) bool {
 	if scope == nil {
 		return true
 	}
-	for w != nil {
-		if w == scope {
-			return true
-		}
-		w = core.ParentOf(w)
-	}
-	return false
+	return isDescendantOf(scope, w)
 }
 
 // dispatchComposition delivers e to the focused widget's OnComposition, if
@@ -822,6 +893,14 @@ func indexOfIdentity(list []core.Widget, w core.Widget) int {
 // focusable list unless it happens to be focusable) is not in the list, so
 // the first Tab lands on the scope's first focusable — and a scope with no
 // focusable descendant at all leaves focus exactly where it is.
+//
+// Both degenerate scoped lists are safe, and neither is special-cased: an
+// EMPTY one returns before touching focus (a dialog with no buttons keeps
+// its scope root focused, and repeated Tabs simply do nothing), and a
+// SINGLE-entry one wraps to itself — (idx+1)%1 is idx — so Tab lands back on
+// the one button a one-button dialog has, which Focus then treats as the
+// no-op it is. There is no path here that spins or indexes out of range on
+// either.
 func (r *Router) FocusNext() {
 	list := r.focusables()
 	if len(list) == 0 {

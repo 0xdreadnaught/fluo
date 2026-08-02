@@ -398,11 +398,13 @@ func TestButtonlessDialogStaysClosableWithEscapeAfterTab(t *testing.T) {
 func TestDialogBlocksKeyboardActivationOfBackgroundButton(t *testing.T) {
 	host, r, bg, clicks := newTestDialogHostWithBackground(t)
 
+	r.Focus(bg) // the control the user was on when the dialog opened
 	ShowDialog(host, buttonFace(t), DialogSpec{Title: "Busy", Body: "Please wait."})
 	layoutOverlay(host, 300, 300)
 
-	// Even with the background button explicitly focused (whatever focus a
-	// caller may have left behind it), it must not see Space or Enter.
+	// Even with the background button explicitly focused again (whatever
+	// focus a caller may leave behind the dialog), it must not see Space or
+	// Enter.
 	r.Focus(bg)
 	r.KeyDown(input.KeySpace, ' ', 0)
 	r.KeyDown(input.KeyEnter, 0, 0)
@@ -421,6 +423,59 @@ func TestDialogBlocksKeyboardActivationOfBackgroundButton(t *testing.T) {
 	r.KeyDown(input.KeySpace, ' ', 0)
 	if *clicks != 1 {
 		t.Fatalf("background clicks after the dialog closed = %d, want 1", *clicks)
+	}
+}
+
+func TestDialogCloseRestoresFocusToItsOpener(t *testing.T) {
+	// Closing a dialog must put focus back on the control that opened it,
+	// not leave it dangling on a scrim that is no longer in the tree.
+	host, r, bg, _ := newTestDialogHostWithBackground(t)
+
+	r.Focus(bg)
+	ShowDialog(host, buttonFace(t), DialogSpec{Title: "Delete?", Body: "Gone forever.", Primary: "OK"})
+	layoutOverlay(host, 300, 300)
+
+	scrim := topPopup(t, host)
+	if got := r.Focused(); got != scrim {
+		t.Fatalf("Focused() with the dialog open = %s, want the scrim", focusLabel(got))
+	}
+
+	r.KeyDown(input.KeyTab, 0, 0) // move around inside the dialog first
+	r.KeyDown(input.KeyEscape, 0, 0)
+
+	if got := host.PopupCount(); got != 0 {
+		t.Fatalf("PopupCount after Escape = %d, want 0", got)
+	}
+	if got := r.Focused(); got != core.Widget(bg) {
+		t.Fatalf("Focused() after the dialog closed = %s, want the opener", focusLabel(got))
+	}
+}
+
+func TestDialogWithOneButtonKeepsTabOnThatButton(t *testing.T) {
+	// A single-focusable scope: Tab must cycle to the one button and stay
+	// there, never wrapping out to the background.
+	host, r, bg, _ := newTestDialogHostWithBackground(t)
+
+	ShowDialog(host, buttonFace(t), DialogSpec{Title: "Done", Body: "All finished.", Primary: "OK"})
+	layoutOverlay(host, 300, 300)
+
+	buttons := dialogPopupButtons(t, host)
+	if len(buttons) != 1 {
+		t.Fatalf("len(buttons) = %d, want 1 (Primary only)", len(buttons))
+	}
+
+	for i := 0; i < 3; i++ {
+		r.KeyDown(input.KeyTab, 0, 0)
+		if got := r.Focused(); got != core.Widget(buttons[0]) {
+			t.Fatalf("Focused() after Tab #%d = %s, want the single button", i+1, focusLabel(got))
+		}
+		r.KeyDown(input.KeyTab, 0, input.ModShift)
+		if got := r.Focused(); got != core.Widget(buttons[0]) {
+			t.Fatalf("Focused() after Shift+Tab #%d = %s, want the single button", i+1, focusLabel(got))
+		}
+	}
+	if got := r.Focused(); got == core.Widget(bg) {
+		t.Fatal("focus escaped a single-button dialog onto the background button")
 	}
 }
 
@@ -489,6 +544,14 @@ func TestNestedDialogsTrapTheTopmost(t *testing.T) {
 	}
 	if len(outerResults) != 0 {
 		t.Fatalf("outerResults = %v, want [] (the outer dialog is still open)", outerResults)
+	}
+
+	// Focus came back to the OUTER dialog (where it was when the nested one
+	// opened), not to the background and not to nothing: the trap is the
+	// outer scope's again, not "no scope".
+	outerScrim := topPopup(t, host)
+	if got := r.Focused(); got != outerScrim {
+		t.Fatalf("Focused() after the inner dialog closed = %s, want the outer scrim", focusLabel(got))
 	}
 
 	for i := 0; i < 2; i++ {
