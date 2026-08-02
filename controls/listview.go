@@ -1,8 +1,6 @@
 package controls
 
 import (
-	"math"
-
 	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/input"
 	"github.com/0xdreadnaught/fluo/render"
@@ -320,7 +318,7 @@ func (l *ListView) rowAt(pos render.Point) (idx int, ok bool) {
 	if l.rowH <= 0 || !l.viewport.Contains(pos) {
 		return 0, false
 	}
-	idx = int(math.Floor(float64((pos.Y - l.viewport.Y + l.offset) / l.rowH)))
+	idx = l.rowIndexAt(pos.Y)
 	if idx < 0 || idx >= l.count() {
 		return 0, false
 	}
@@ -619,7 +617,7 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 		}
 		rowRect := render.Rect{
 			X: viewport.X + lpad - l.offsetX,
-			Y: viewport.Y + float32(idx)*l.rowH - l.offset,
+			Y: l.rowTop(idx),
 			W: rowW,
 			H: l.rowH,
 		}
@@ -665,7 +663,7 @@ func (l *ListView) Render(r render.Renderer) {
 	// above the content area.
 	rowRect := render.Rect{
 		X: l.viewport.X,
-		Y: l.viewport.Y + float32(l.selected)*l.rowH - l.offset,
+		Y: l.rowTop(l.selected),
 		W: l.viewport.W,
 		H: l.rowH,
 	}.Intersect(l.viewport)

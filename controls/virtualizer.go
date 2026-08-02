@@ -151,6 +151,39 @@ func (v *virtualizer) visibleRange() (first, last int) {
 	return first, last
 }
 
+// rowTop returns the y-coordinate of row idx's top edge in the owner's
+// coordinate space (viewport-relative, minus the current vertical scroll
+// offset) — the single source of truth for where a uniform row is drawn, so
+// ListView/DataGrid's arrange and render can't drift apart from each other or
+// from rowIndexAt's inverse.
+//
+// The idx*rowH term is accumulated in float64 and only then narrowed to
+// float32: a float32 idx can no longer represent consecutive integers past
+// 2^24, so at very large counts float32(idx)*rowH quantizes — adjacent rows
+// round to the same top and overlap, and a click hit-tests to the wrong row.
+// float64 stays exact well past any realistic row count. At idx < 2^24 this is
+// bit-identical to the old float32(idx)*rowH (both are the one correctly
+// rounded float32 of the real product idx*rowH — float64(idx)*float64(rowH) is
+// itself exact there, ≤ 48 significant bits), so nothing changes — no visible
+// shift, no golden churn — at normal counts.
+func (v *virtualizer) rowTop(idx int) float32 {
+	return v.viewport.Y + float32(float64(idx)*float64(v.rowH)) - v.offset
+}
+
+// rowIndexAt returns the row index whose band contains y (same coordinate
+// space as rowTop) — the exact inverse of rowTop, floor((y - viewport.Y +
+// offset) / rowH) computed entirely in float64 so it stays consistent with
+// rowTop past idx 2^24 rather than quantizing on its own. A non-positive rowH
+// reports 0. The result is unclamped (it can be negative, or >= count for a y
+// outside the realized band); callers range-check it themselves, exactly as
+// the prior inline hit-test math did.
+func (v *virtualizer) rowIndexAt(y float32) int {
+	if v.rowH <= 0 {
+		return 0
+	}
+	return int(math.Floor((float64(y) - float64(v.viewport.Y) + float64(v.offset)) / float64(v.rowH)))
+}
+
 // thumbGeometry returns the thumb's track (the right gutter strip) and its
 // height, independent of the current scroll offset, or ok==false when there
 // is no content or the content fits entirely within the viewport (nothing to
