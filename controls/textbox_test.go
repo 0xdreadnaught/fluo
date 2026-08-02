@@ -234,6 +234,73 @@ func TestTextBoxCaretIndexRunningPenMatchesPrefixMeasure(t *testing.T) {
 	}
 }
 
+// TestTextBoxMultilineCullsOffscreenLines pins the P4 speedup: a tall
+// multi-line box scrolled so most lines sit outside its bounds must draw only
+// the lines whose row actually intersects the viewport. With the whole text
+// selected, every drawn line emits one Highlight FillRect, so counting those
+// (by color) reveals exactly which lines were drawn — the off-screen ones
+// must be skipped, and no highlight may land outside the clip bounds.
+func TestTextBoxMultilineCullsOffscreenLines(t *testing.T) {
+	tb := NewTextBox(buttonFace(t))
+	tb.SetMultiline(true)
+
+	const total = 50
+	var sb strings.Builder
+	for i := 0; i < total; i++ {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString("wxyz") // non-empty so a fully-selected line highlights
+	}
+	tb.SetText(sb.String())
+	tb.SetWidth(200)
+	tb.SetHeight(60)
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: 200, H: 60})
+
+	// Select everything so each drawn line paints its highlight, then scroll
+	// well down so the top lines fall off the top edge and the bottom lines
+	// off the bottom — leaving only a middle band on screen.
+	tb.Select(0, len([]rune(tb.Text())))
+	lh := tb.lineHeight()
+	if lh <= 0 {
+		t.Fatalf("test setup: lineHeight = %v, want > 0", lh)
+	}
+	tb.vscroll = 15 * lh
+
+	rr := &recordRenderer{}
+	core.RenderWidget(tb, rr)
+
+	bounds := tb.Bounds()
+	pad := tb.metrics.PaddingM
+	viewTop, viewBot := bounds.Y, bounds.Y+bounds.H
+
+	// Independently compute which line indices the row intersects the viewport.
+	wantVisible := 0
+	for i := 0; i < total; i++ {
+		lineY := bounds.Y + pad - tb.vscroll + float32(i)*lh
+		if lineY+lh > viewTop && lineY < viewBot {
+			wantVisible++
+		}
+	}
+	if wantVisible == 0 || wantVisible >= total {
+		t.Fatalf("test setup: wantVisible = %d, want a small nonzero band (< %d)", wantVisible, total)
+	}
+
+	got := 0
+	for _, f := range rr.fills {
+		if f.color != tb.colors.Highlight {
+			continue
+		}
+		got++
+		if f.rect.Y+lh <= viewTop || f.rect.Y >= viewBot {
+			t.Errorf("highlight fill drawn off-screen at Y=%v (viewport %v..%v)", f.rect.Y, viewTop, viewBot)
+		}
+	}
+	if got != wantVisible {
+		t.Fatalf("drew %d highlighted lines, want exactly %d visible (off-screen lines not culled)", got, wantVisible)
+	}
+}
+
 func TestTextBoxHScrollKeepsCaretVisible(t *testing.T) {
 	tb := NewTextBox(buttonFace(t))
 	tb.SetText("this is a much longer line of text than the box") // caret ends at len (end)

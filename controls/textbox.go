@@ -2508,9 +2508,47 @@ func (t *TextBox) renderMultiline(r render.Renderer, bounds render.Rect) {
 	lines := strings.Split(s, "\n")
 	start, end := t.Selection()
 
+	// Resolve every logical line's [lo, hi) span in ONE pass instead of the
+	// old per-line lineStart()+lineEnd() rescans (each O(n), so O(lines*n) per
+	// frame). starts[i] is line i's first rune; the terminating '\n' of line i
+	// sits at starts[i+1]-1, so hi is that (or len(runes) for the last line) —
+	// exactly what lineStart(i)/lineEnd(i) returned, including the out-of-range
+	// case (i past the last line -> empty [n, n) span), which arises only when
+	// the displayed string has more '\n'-lines than the buffer (e.g. a
+	// multi-line placeholder over empty runes).
+	starts := logicalLineStarts(t.runes)
+	nRunes := len(t.runes)
+	lineSpan := func(i int) (lo, hi int) {
+		if i < 0 {
+			i = 0
+		}
+		if i >= len(starts) {
+			return nRunes, nRunes
+		}
+		lo = starts[i]
+		if i+1 < len(starts) {
+			hi = starts[i+1] - 1
+		} else {
+			hi = nRunes
+		}
+		return lo, hi
+	}
+
+	viewTop, viewBot := bounds.Y, bounds.Y+bounds.H
+
 	for i, line := range lines {
 		lineY := bounds.Y + pad - t.vscroll + float32(i)*lh
-		lo, hi := t.lineStart(i), t.lineEnd(i)
+
+		// Viewport culling: a line whose whole row height lies above or below
+		// the clip rect (Render clips to bounds — see ClipRect) drew nothing
+		// visible, so skip its selection fill and glyph draw entirely. Guarded
+		// by lh > 0 so a degenerate/nil face (zero line height) keeps its
+		// original draw path unchanged.
+		if lh > 0 && (lineY+lh <= viewTop || lineY >= viewBot) {
+			continue
+		}
+
+		lo, hi := lineSpan(i)
 
 		selStart, selEnd := clampInt(start, lo, hi), clampInt(end, lo, hi)
 		hasSel := selStart < selEnd
