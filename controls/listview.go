@@ -94,17 +94,31 @@ type ListView struct {
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
 
+	// cachedContentW memoizes contentWidth()'s result and cachedContentWOK
+	// says whether it may be read: measuring the widest row costs one
+	// face.Measure per item (each of which locks the source font per glyph),
+	// and ArrangeContent asks for it on EVERY pass — so without this, one
+	// wheel notch re-measures the whole list, which is exactly the O(rows)
+	// cost the row pool exists to avoid. Named apart from the embedded
+	// virtualizer's own contentW (the value layout was last handed) so the
+	// two never shadow each other. See invalidateContentWidth for when the
+	// memo is dropped, and contentWidth's doc comment for the staleness
+	// contract that makes memoizing safe.
+	cachedContentW   float32
+	cachedContentWOK bool
+
 	cancel func()
 }
 
 // NewListView returns a ListView rendering items (v0: plain strings) with
 // face, styled from theme.Active() at construction (rebuild to re-theme).
 // It subscribes to items.OnChange (the granular channel) so that any list
-// mutation invalidates measure+arrange; v0 does not use the Change payload
-// for incremental updates (a full re-layout recomputes the visible range
-// and re-texts the pool from scratch) — per-row incrementalism is a later
-// phase. Callers MUST call Dispose() when done with the ListView (e.g. from
-// a rebuild's cancel path) to release this subscription — see Dispose.
+// mutation invalidates measure+arrange and drops the memoized content width
+// (see contentWidth); v0 does not use the Change payload for incremental
+// updates (a full re-layout recomputes the visible range and re-texts the
+// pool from scratch) — per-row incrementalism is a later phase. Callers
+// MUST call Dispose() when done with the ListView (e.g. from a rebuild's
+// cancel path) to release this subscription — see Dispose.
 // items may be nil, matching the nil-face convention: the ListView builds
 // and lays out as a permanently empty list rather than panicking.
 func NewListView(face *text.Face, items ListItems) *ListView {
@@ -123,7 +137,10 @@ func NewListView(face *text.Face, items ListItems) *ListView {
 	// contentWidth both already treat it as zero-length): there is nothing
 	// to subscribe to, so cancel stays nil and Dispose becomes a no-op.
 	if items != nil {
-		l.cancel = items.OnChange(func(ListChange) { l.InvalidateMeasure() })
+		l.cancel = items.OnChange(func(ListChange) {
+			l.invalidateContentWidth()
+			l.InvalidateMeasure()
+		})
 	}
 	return l
 }
@@ -371,7 +388,36 @@ func (l *ListView) MeasureContent(available render.Size) render.Size {
 // triggers horizontal scrolling, keeping every existing nil-face ListView
 // (every current behavior test, and the existing listview.png golden, which
 // uses a real face but text far narrower than its viewport) byte-identical.
+//
+// The result is memoized (see cachedContentW) because ArrangeContent asks
+// for it every pass while the full measure is O(items) face.Measure calls;
+// measureContentWidth below does the real work, and only ever runs again
+// after invalidateContentWidth drops the memo.
+//
+// STALENESS CONTRACT: the memo assumes a row's measured width can only
+// change through the item source's granular change channel (ListItems.
+// OnChange — the same notifications that already drive re-layout). That
+// holds for the source ListView is written against (*bind.List[string],
+// whose Add/Insert/RemoveAt/Set/Replace all notify), but a hand-written
+// ListItems whose At(i) silently starts returning a different (wider)
+// string without notifying would leave this width stale until the next
+// real change. Detecting arbitrary in-place mutation would mean re-measuring
+// everything every pass, i.e. exactly the cost being removed here — so such
+// a source must announce the edit (a Replace/Reset notification) like any
+// other, which is also already required for the row text itself to be
+// re-realized.
 func (l *ListView) contentWidth() float32 {
+	if !l.cachedContentWOK {
+		l.cachedContentW = l.measureContentWidth()
+		l.cachedContentWOK = true
+	}
+	return l.cachedContentW
+}
+
+// measureContentWidth is contentWidth's uncached body: the full measure pass
+// over every item. Never call it directly from layout code — go through
+// contentWidth so the result is memoized.
+func (l *ListView) measureContentWidth() float32 {
 	if l.face == nil || l.items == nil {
 		return 0
 	}
@@ -385,6 +431,17 @@ func (l *ListView) contentWidth() float32 {
 	lpad := 2 * l.metrics.PaddingS
 	rpad := l.metrics.PaddingS
 	return maxW + lpad + rpad
+}
+
+// invalidateContentWidth drops the memoized content width so the next
+// contentWidth() re-measures. Called from the items subscription installed
+// in NewListView — the single point at which the item set can change under a
+// ListView (there is no SetItems: an existing ListView stays bound to the
+// source it was constructed with, and neither the face nor the padding
+// metrics can change after construction either, so no other invalidation
+// point exists to miss). See contentWidth's staleness contract.
+func (l *ListView) invalidateContentWidth() {
+	l.cachedContentWOK = false
 }
 
 // contentBounds returns l's own bounds inset by the 2px sunken bevel (see
