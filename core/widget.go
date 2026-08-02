@@ -146,10 +146,18 @@ func MeasureWidget(w Widget, available render.Size) {
 	inner.W = clampAxis(inner.W, e.minW, e.maxW)
 	inner.H = clampAxis(inner.H, e.minH, e.maxH)
 
-	// 5: ask the widget for its content's desired size.
+	// 5: mark clean BEFORE the content callout (WPF ordering). MeasureContent
+	// may recurse into descendants whose own measure raises InvalidateMeasure
+	// on this element (or a descendant) — that walk sets measureClean = false
+	// here. Stamping clean afterward would clobber such an invalidation and the
+	// next frame would never re-run it; stamping it first lets the invalidation
+	// survive to the end of the pass (NeedsLayout stays true).
+	e.measureClean = true
+
+	// 6: ask the widget for its content's desired size.
 	content := w.MeasureContent(inner)
 
-	// 6: explicit size wins again on the resulting content size, then
+	// 7: explicit size wins again on the resulting content size, then
 	// re-clamp to [min, max].
 	if e.width > 0 {
 		content.W = e.width
@@ -160,12 +168,11 @@ func MeasureWidget(w Widget, available render.Size) {
 	content.W = clampAxis(content.W, e.minW, e.maxW)
 	content.H = clampAxis(content.H, e.minH, e.maxH)
 
-	// 7: desired = content + margins.
+	// 8: desired = content + margins.
 	e.desired = render.Size{
 		W: content.W + e.margin.Left + e.margin.Right,
 		H: content.H + e.margin.Top + e.margin.Bottom,
 	}
-	e.measureClean = true
 }
 
 // ArrangeWidget is the only entry point that runs a widget's arrange pass.
@@ -232,10 +239,14 @@ func ArrangeWidget(w Widget, final render.Rect) {
 		}
 	}
 
-	// 5: bounds is absolute; arrange content within it, then clear dirty.
+	// 5: bounds is absolute. Mark clean BEFORE the content callout (WPF
+	// ordering): ArrangeContent may raise InvalidateArrange on this element (or
+	// a descendant), whose walk sets arrangeClean = false here. Stamping clean
+	// afterward would clobber that invalidation and the next frame would never
+	// re-arrange; stamping it first lets the invalidation survive the pass.
 	e.bounds = render.Rect{X: x, Y: y, W: w2, H: h2}
-	w.ArrangeContent(e.bounds)
 	e.arrangeClean = true
+	w.ArrangeContent(e.bounds)
 }
 
 // ClipProvider is an optional interface for widgets that clip their
