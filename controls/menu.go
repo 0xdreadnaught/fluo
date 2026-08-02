@@ -75,10 +75,12 @@ func newMenuItems(face *text.Face, colors theme.ColorTokens, metrics theme.Metri
 	return &MenuItems{face: face, colors: colors, metrics: metrics}
 }
 
-// Add appends a clickable, ENABLED item with the given label, firing onClick
-// (may be nil) when the user clicks its row — which ALSO closes every open
-// menu popup, per the package's normative "item click fires + closes ALL
-// menus" rule (see buildMenuPopup). Returns mi for chaining further Add/
+// Add appends a clickable, ENABLED item with the given label. Clicking its
+// row closes every open menu popup and THEN fires onClick (may be nil), per
+// the package's normative "item click closes ALL menus, then fires" rule —
+// that order is what lets onClick itself open a dialog, a context menu, or
+// any other popup without it being torn down again on the spot (see
+// buildMenuPopup). Returns mi for chaining further Add/
 // AddDisabled/AddSeparator/AddSub calls onto the SAME menu.
 func (mi *MenuItems) Add(label string, onClick func()) *MenuItems {
 	mi.entries = append(mi.entries, &menuEntry{kind: menuEntryItem, label: label, onClick: onClick, enabled: true})
@@ -132,6 +134,16 @@ func (mi *MenuItems) AddSub(label string) *MenuItems {
 // call, so a click anywhere in an arbitrarily deep submenu chain collapses
 // the whole chain in one call — see the package doc's "item click closes ALL
 // menus" normative rule.
+//
+// ORDER IS NORMATIVE: closeAll runs FIRST, then the entry's own onClick.
+// closeAll is OverlayHost.CloseAllPopups, which closes every popup currently
+// on the host — so running it after onClick would tear down whatever that
+// callback had just opened (a ShowDialog scrim, a ShowContextMenu popup, a
+// ComboBox dropdown), popping it the instant it appeared and firing its
+// dismiss callback for a dialog the user never saw. Closing first leaves the
+// stack empty before onClick runs, so anything it opens survives. onClick is
+// a captured closure (and so is everything it closes over), so it safely
+// outlives the row widget closeAll has just detached.
 func buildMenuPopup(items *MenuItems, closeAll func()) *menuPopupCard {
 	stack := NewStackPanel(Vertical)
 	card := newMenuPopupCard(stack, items.colors, items.metrics)
@@ -141,10 +153,10 @@ func buildMenuPopup(items *MenuItems, closeAll func()) *menuPopupCard {
 		case menuEntryItem:
 			onClick := e.onClick
 			row := newMenuItemRow(items.face, e.label, e.enabled, items.colors, items.metrics, func() {
+				closeAll()
 				if onClick != nil {
 					onClick()
 				}
-				closeAll()
 			})
 			stack.Add(row)
 		case menuEntrySeparator:
@@ -302,8 +314,8 @@ func (card *menuPopupCard) openSub(row *menuSubRow, sub *MenuItems, closeAll fun
 
 // menuItemRow is one clickable item row inside an open menu popup: a
 // left-aligned TextBlock, filled the classic navy Highlight on hover, firing
-// onClick (which, per buildMenuPopup, both runs the entry's own callback and
-// closes every open menu popup) on a release-inside click. A DISABLED row
+// onClick (which, per buildMenuPopup, closes every open menu popup and then
+// runs the entry's own callback) on a release-inside click. A DISABLED row
 // (enabled false, see MenuItems.AddDisabled) is inert: OnPointer skips the
 // embedded ClickBehavior entirely (so it never hovers, never fires onClick,
 // and the pointer event is left unhandled to keep bubbling — matching
@@ -864,8 +876,8 @@ func (m *MenuBar) OnKey(e *input.KeyEvent) {
 // an oversight.
 //
 // A no-op if owner isn't (yet) attached beneath an OverlayHost. Each click on
-// a resulting item row fires that item's own onClick and then closes every
-// open popup (see buildMenuPopup) — same as any other menu popup. The popup
+// a resulting item row closes every open popup and then fires that item's own
+// onClick (see buildMenuPopup) — same as any other menu popup. The popup
 // itself is opened with a nil onDismiss: unlike MenuBar (which resets
 // openIdx/popup on dismiss) or ComboBox (which resets open/popup),
 // ShowContextMenu keeps no state of its own to reset — every call is a fresh,
