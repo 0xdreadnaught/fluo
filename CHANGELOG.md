@@ -8,6 +8,17 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.15.8] - 2026-08-02
+
+### Added
+
+- **`OverlayHost.ShowModalPopup`** — opens a modal popup that also traps keyboard
+  focus (Tab cycles within it, background widgets are unreachable, Escape reaches
+  it, and focus returns to the opener on close), the same focus containment
+  `ShowDialog` uses. Complements `ShowPopup` (modal, non-trapping — dropdowns and
+  menus) and `ShowPopupNonModal` (tooltips), so an app with its own scrim-backed
+  modal surface can trap focus without going through `ShowDialog`.
+
 ## [0.15.7] - 2026-08-02
 
 ### Added
