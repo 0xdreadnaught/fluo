@@ -170,6 +170,161 @@ func TestTextBoxXOfMatchesFaceMeasurePrefixMultibyte(t *testing.T) {
 	}
 }
 
+// oldCaretIndexAtX is the pre-running-pen O(n²) hit-test: for each rune
+// boundary it recomputes xOf(i) = Measure(runes[:i]) from scratch and compares
+// x against the midpoint (xOf(i)+xOf(i+1))/2. Kept in the test as the exact
+// reference the O(n) caretIndexInRunes must reproduce byte-for-byte.
+func oldCaretIndexAtX(tb *TextBox, x float32) int {
+	n := len(tb.runes)
+	for i := 0; i < n; i++ {
+		mid := (tb.xOf(i) + tb.xOf(i+1)) / 2
+		if x < mid {
+			return i
+		}
+	}
+	return n
+}
+
+// TestTextBoxCaretIndexRunningPenMatchesPrefixMeasure pins the P3 speedup:
+// the O(n) running-pen hit-test must return the identical caret index as the
+// old O(n²) prefix-Measure scan for every x — including x on and around each
+// glyph midpoint, on a kerned/mixed multibyte string — and index->x->index
+// must round-trip. Covers the single-line path (caretIndexAtX) and, via
+// colAtX, the per-line path with the same helper.
+func TestTextBoxCaretIndexRunningPenMatchesPrefixMeasure(t *testing.T) {
+	face := buttonFace(t)
+	for _, s := range []string{"AVAWaToVoTaWATATaYoP.", "héllo wörld", "The quick brown fox", "iiiWWWmmm"} {
+		tb := NewTextBox(face)
+		tb.SetText(s)
+		runes := []rune(s)
+
+		// Full x-domain: negatives (left of text), 0, every boundary and each
+		// boundary's exact midpoint and a hair either side, past the end.
+		var xs []float32
+		xs = append(xs, -100, -1, -0.001, 0)
+		for i := 0; i <= len(runes); i++ {
+			xi := tb.xOf(i)
+			xs = append(xs, xi-0.001, xi, xi+0.001)
+			if i < len(runes) {
+				mid := (tb.xOf(i) + tb.xOf(i+1)) / 2
+				xs = append(xs, mid-0.001, mid, mid+0.001)
+			}
+		}
+		xs = append(xs, tb.xOf(len(runes))+100)
+
+		for _, x := range xs {
+			want := oldCaretIndexAtX(tb, x)
+			if got := tb.caretIndexAtX(x); got != want {
+				t.Fatalf("caretIndexAtX(%v) on %q = %d, want %d (old prefix-Measure)", x, s, got, want)
+			}
+			// colAtX over the single logical line (line 0) shares the helper
+			// and must agree with the whole-buffer scan for a newline-free string.
+			if got := tb.colAtX(0, x); got != want {
+				t.Fatalf("colAtX(0,%v) on %q = %d, want %d", x, s, got, want)
+			}
+		}
+
+		// index -> x -> index round-trips: clicking exactly at a boundary's x
+		// resolves back to that boundary (its own midpoint region).
+		for i := 0; i <= len(runes); i++ {
+			if got := tb.caretIndexAtX(tb.xOf(i)); got != i {
+				t.Fatalf("round-trip on %q: caretIndexAtX(xOf(%d)=%v) = %d, want %d", s, i, tb.xOf(i), got, i)
+			}
+		}
+	}
+}
+
+// TestTextBoxCaretIndexAtXNilFace locks the nil-face hit-test outcome, which
+// the running pen short-circuits rather than walking: with no face there are
+// no glyphs to click between, xOf reports 0 for every boundary, so every
+// midpoint is 0 — a click left of the text lands at 0 and anything from 0
+// rightward falls through to the end.
+func TestTextBoxCaretIndexAtXNilFace(t *testing.T) {
+	tb := NewTextBox(nil)
+	tb.SetText("hello")
+	n := len(tb.runes)
+	for _, tc := range []struct {
+		x    float32
+		want int
+	}{{-100, 0}, {-0.001, 0}, {0, n}, {0.001, n}, {500, n}} {
+		if got := tb.caretIndexAtX(tc.x); got != tc.want {
+			t.Errorf("nil face: caretIndexAtX(%v) = %d, want %d", tc.x, got, tc.want)
+		}
+	}
+
+	empty := NewTextBox(nil)
+	if got := empty.caretIndexAtX(-1); got != 0 {
+		t.Errorf("nil face, empty text: caretIndexAtX(-1) = %d, want 0", got)
+	}
+}
+
+// TestTextBoxMultilineCullsOffscreenLines pins the P4 speedup: a tall
+// multi-line box scrolled so most lines sit outside its bounds must draw only
+// the lines whose row actually intersects the viewport. With the whole text
+// selected, every drawn line emits one Highlight FillRect, so counting those
+// (by color) reveals exactly which lines were drawn — the off-screen ones
+// must be skipped, and no highlight may land outside the clip bounds.
+func TestTextBoxMultilineCullsOffscreenLines(t *testing.T) {
+	tb := NewTextBox(buttonFace(t))
+	tb.SetMultiline(true)
+
+	const total = 50
+	var sb strings.Builder
+	for i := 0; i < total; i++ {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString("wxyz") // non-empty so a fully-selected line highlights
+	}
+	tb.SetText(sb.String())
+	tb.SetWidth(200)
+	tb.SetHeight(60)
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: 200, H: 60})
+
+	// Select everything so each drawn line paints its highlight, then scroll
+	// well down so the top lines fall off the top edge and the bottom lines
+	// off the bottom — leaving only a middle band on screen.
+	tb.Select(0, len([]rune(tb.Text())))
+	lh := tb.lineHeight()
+	if lh <= 0 {
+		t.Fatalf("test setup: lineHeight = %v, want > 0", lh)
+	}
+	tb.vscroll = 15 * lh
+
+	rr := &recordRenderer{}
+	core.RenderWidget(tb, rr)
+
+	bounds := tb.Bounds()
+	pad := tb.metrics.PaddingM
+	viewTop, viewBot := bounds.Y, bounds.Y+bounds.H
+
+	// Independently compute which line indices the row intersects the viewport.
+	wantVisible := 0
+	for i := 0; i < total; i++ {
+		lineY := bounds.Y + pad - tb.vscroll + float32(i)*lh
+		if lineY+lh > viewTop && lineY < viewBot {
+			wantVisible++
+		}
+	}
+	if wantVisible == 0 || wantVisible >= total {
+		t.Fatalf("test setup: wantVisible = %d, want a small nonzero band (< %d)", wantVisible, total)
+	}
+
+	got := 0
+	for _, f := range rr.fills {
+		if f.color != tb.colors.Highlight {
+			continue
+		}
+		got++
+		if f.rect.Y+lh <= viewTop || f.rect.Y >= viewBot {
+			t.Errorf("highlight fill drawn off-screen at Y=%v (viewport %v..%v)", f.rect.Y, viewTop, viewBot)
+		}
+	}
+	if got != wantVisible {
+		t.Fatalf("drew %d highlighted lines, want exactly %d visible (off-screen lines not culled)", got, wantVisible)
+	}
+}
+
 func TestTextBoxHScrollKeepsCaretVisible(t *testing.T) {
 	tb := NewTextBox(buttonFace(t))
 	tb.SetText("this is a much longer line of text than the box") // caret ends at len (end)

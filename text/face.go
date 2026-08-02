@@ -209,6 +209,39 @@ func (fa *Face) Ascent() float32 {
 	return ascent
 }
 
+// PrefixWidths returns the pen width at every rune boundary of runes:
+// len(runes)+1 values, [0] always 0 and [i] the width of the first i
+// runes — so PrefixWidths(runes)[i] is exactly what Measure reports for
+// string(runes[:i]), for every i. It walks the same left-to-right pen
+// Measure does (resolveGlyph per rune, kerning added only between two
+// glyphs from the same source font, then that glyph's advance), just
+// emitting each partial sum instead of only the last one, so the two
+// agree bit-for-bit by construction — kerning included, which matters
+// for any font that carries a kern table, where summing advances alone
+// would drift from the positions Draw actually puts the glyphs at.
+//
+// It exists for callers that need every boundary of a run rather than
+// one width — caret hit-testing walking a click across a line, say —
+// and gives them all of them in a single O(n) pass instead of
+// re-measuring an ever-growing prefix per boundary.
+func (fa *Face) PrefixWidths(runes []rune) []float32 {
+	widths := make([]float32, len(runes)+1)
+	var w float32
+	var prevFont *Font
+	var prev sfnt.GlyphIndex
+	hasPrev := false
+	for i, r := range runes {
+		srcFont, gi := fa.resolveGlyph(r)
+		if hasPrev && prevFont == srcFont {
+			w += prevFont.kern(prev, gi, fa.SizePx)
+		}
+		w += srcFont.advance(gi, fa.SizePx)
+		prevFont, prev, hasPrev = srcFont, gi, true
+		widths[i+1] = w
+	}
+	return widths
+}
+
 // Measure returns the size s occupies when drawn with fa: width is the
 // sum of glyph advances plus kerning between consecutive glyphs, height
 // is LineHeight (text is laid out on a single line for now; LineHeight

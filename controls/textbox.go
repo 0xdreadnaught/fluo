@@ -1209,10 +1209,36 @@ func (t *TextBox) xOf(i int) float32 {
 // to len(runes) instead — deliberately not special-cased, since a nil-face
 // TextBox has no glyphs to click between anyway).
 func (t *TextBox) caretIndexAtX(x float32) int {
-	n := len(t.runes)
+	return t.caretIndexInRunes(t.runes, x)
+}
+
+// caretIndexInRunes is the shared O(n) hit-test behind caretIndexAtX, colAtX,
+// and colAtXInRow: it returns the boundary index within runes (0..len(runes))
+// nearest local x-coordinate x, applying the SAME midpoint rule those three
+// used with their per-prefix Measure — for each boundary i, compare x against
+// (xOf(i)+xOf(i+1))/2 and return the first i whose midpoint x sits left of,
+// else len(runes) (past the last rune). The old form recomputed xOf(i) =
+// Measure(runes[:i]) from scratch every step, so each scan was O(n²) in the
+// range length and re-ran on every pointer Move of a drag-select. Here one
+// Face.PrefixWidths pass walks the run once and hands back every boundary's
+// pen width, widths[i] being exactly Measure(runes[:i]).W — same glyph
+// resolution, same kerning between same-font neighbors, same float32 order
+// of accumulation — so every midpoint and every returned index match the old
+// scan for every input, on kerned and kern-free fonts alike. A nil face has
+// no pen to walk: xOf returned 0 for every boundary there, so every midpoint
+// was 0 and the old scan yielded 0 for x<0 and len(runes) otherwise, which is
+// what this reproduces directly.
+func (t *TextBox) caretIndexInRunes(runes []rune, x float32) int {
+	n := len(runes)
+	if t.face == nil {
+		if x < 0 {
+			return 0
+		}
+		return n
+	}
+	widths := t.face.PrefixWidths(runes)
 	for i := 0; i < n; i++ {
-		mid := (t.xOf(i) + t.xOf(i+1)) / 2
-		if x < mid {
+		if x < (widths[i]+widths[i+1])/2 {
 			return i
 		}
 	}
@@ -1818,14 +1844,8 @@ func (t *TextBox) rowAtY(windowY float32) int {
 // idx nearest local x-coordinate x, using the same "compare against each
 // boundary's midpoint" rule, bounded to idx's own rune count.
 func (t *TextBox) colAtXInRow(idx int, x float32) int {
-	n := t.rowEnd(idx) - t.rowStart(idx)
-	for i := 0; i < n; i++ {
-		mid := (t.xOfInRow(idx, i) + t.xOfInRow(idx, i+1)) / 2
-		if x < mid {
-			return i
-		}
-	}
-	return n
+	start, end := t.rowStart(idx), t.rowEnd(idx)
+	return t.caretIndexInRunes(t.runes[start:end], x)
 }
 
 // xOfInLine returns the x-offset (logical px, from the start of line's own
@@ -1967,14 +1987,8 @@ func (t *TextBox) lineAtY(windowY float32) int {
 // rule, but bounded to line's own rune count via xOfInLine instead of the
 // whole buffer.
 func (t *TextBox) colAtX(line int, x float32) int {
-	n := t.lineEnd(line) - t.lineStart(line)
-	for i := 0; i < n; i++ {
-		mid := (t.xOfInLine(line, i) + t.xOfInLine(line, i+1)) / 2
-		if x < mid {
-			return i
-		}
-	}
-	return n
+	start, end := t.lineStart(line), t.lineEnd(line)
+	return t.caretIndexInRunes(t.runes[start:end], x)
 }
 
 // caretIndexAtPos resolves a pointer event's window-space position to a
@@ -2491,9 +2505,47 @@ func (t *TextBox) renderMultiline(r render.Renderer, bounds render.Rect) {
 	lines := strings.Split(s, "\n")
 	start, end := t.Selection()
 
+	// Resolve every logical line's [lo, hi) span in ONE pass instead of the
+	// old per-line lineStart()+lineEnd() rescans (each O(n), so O(lines*n) per
+	// frame). starts[i] is line i's first rune; the terminating '\n' of line i
+	// sits at starts[i+1]-1, so hi is that (or len(runes) for the last line) —
+	// exactly what lineStart(i)/lineEnd(i) returned, including the out-of-range
+	// case (i past the last line -> empty [n, n) span), which arises only when
+	// the displayed string has more '\n'-lines than the buffer (e.g. a
+	// multi-line placeholder over empty runes).
+	starts := logicalLineStarts(t.runes)
+	nRunes := len(t.runes)
+	lineSpan := func(i int) (lo, hi int) {
+		if i < 0 {
+			i = 0
+		}
+		if i >= len(starts) {
+			return nRunes, nRunes
+		}
+		lo = starts[i]
+		if i+1 < len(starts) {
+			hi = starts[i+1] - 1
+		} else {
+			hi = nRunes
+		}
+		return lo, hi
+	}
+
+	viewTop, viewBot := bounds.Y, bounds.Y+bounds.H
+
 	for i, line := range lines {
 		lineY := bounds.Y + pad - t.vscroll + float32(i)*lh
-		lo, hi := t.lineStart(i), t.lineEnd(i)
+
+		// Viewport culling: a line whose whole row height lies above or below
+		// the clip rect (Render clips to bounds — see ClipRect) drew nothing
+		// visible, so skip its selection fill and glyph draw entirely. Guarded
+		// by lh > 0 so a degenerate/nil face (zero line height) keeps its
+		// original draw path unchanged.
+		if lh > 0 && (lineY+lh <= viewTop || lineY >= viewBot) {
+			continue
+		}
+
+		lo, hi := lineSpan(i)
 
 		selStart, selEnd := clampInt(start, lo, hi), clampInt(end, lo, hi)
 		hasSel := selStart < selEnd
