@@ -33,12 +33,26 @@ const (
 // comment for why).
 type Change = controls.ListChange
 
+// subEntry pairs a coarse OnChanged subscriber with the id its cancel closes
+// over. Subscribers are held in registration order (a slice, not a map) so
+// notify delivers to them deterministically — see notify.
+type subEntry struct {
+	id int
+	fn func()
+}
+
+// granSubEntry is subEntry's granular (OnChange) counterpart.
+type granSubEntry struct {
+	id int
+	fn func(Change)
+}
+
 // List is an observable slice for collection binding. Not goroutine-safe.
 type List[T any] struct {
 	items      []T
-	subs       map[int]func()
+	subs       []subEntry
 	nextID     int
-	granSubs   map[int]func(Change)
+	granSubs   []granSubEntry
 	granNextID int
 }
 
@@ -81,9 +95,20 @@ func (l *List[T]) Add(items ...T) {
 	startIndex := len(l.items)
 	l.items = append(l.items, items...)
 	l.notify()
-	for i := range items {
-		l.notifyGran(Change{Kind: ChangeAdd, Index: startIndex + i})
+	if len(items) == 1 {
+		l.notifyGran(Change{Kind: ChangeAdd, Index: startIndex})
+		return
 	}
+	// A multi-item Add coalesces into ONE Reset rather than one ChangeAdd per
+	// appended item. Firing them in a loop meant a subscriber that mutates on
+	// an early event (e.g. a cap-enforcing RemoveAt(0)) shifted every later
+	// index out from under the remaining Change{Index} events, so they named
+	// the wrong rows — or an out-of-range one a consumer's At would panic on.
+	// A single Reset carries no index to go stale and tells consumers to
+	// rebuild from the final list state, which is exactly what the in-tree
+	// consumer (ListView) already does for any change. Single Add/Remove/Set
+	// keep their precise granular event (see Insert/RemoveAt/Set below).
+	l.notifyGran(Change{Kind: ChangeReset, Index: -1})
 }
 
 // Insert inserts item at index i. Panics if i is out of range.
@@ -128,49 +153,68 @@ func (l *List[T]) Replace(items ...T) {
 // OnChanged registers a subscriber to be called when the list changes.
 // Returns a cancel function that removes the subscriber (idempotent).
 func (l *List[T]) OnChanged(f func()) (cancel func()) {
-	if l.subs == nil {
-		l.subs = make(map[int]func())
-	}
 	id := l.nextID
 	l.nextID++
-	l.subs[id] = f
+	l.subs = append(l.subs, subEntry{id: id, fn: f})
 
 	cancel = func() {
-		delete(l.subs, id)
+		for i := range l.subs {
+			if l.subs[i].id == id {
+				l.subs = append(l.subs[:i], l.subs[i+1:]...)
+				return
+			}
+		}
 	}
 	return
 }
 
 // OnChange registers a subscriber to be called with granular change details.
 // Granular events fire after the coarse OnChanged notification, and only after
-// the mutation is fully applied — a subscriber processing the first event of a
-// multi-item Add already observes the final list state.
+// the mutation is fully applied — a subscriber processing a change already
+// observes the final list state. A single-item Add/Insert/RemoveAt/Set emits
+// one precise Change; a multi-item Add emits a single ChangeReset (see Add) so
+// no index can go stale if the subscriber mutates the list mid-notification.
+// Subscribers are notified in registration order (see notify/notifyGran).
 // Returns a cancel function that removes the subscriber (idempotent).
 func (l *List[T]) OnChange(f func(Change)) (cancel func()) {
-	if l.granSubs == nil {
-		l.granSubs = make(map[int]func(Change))
-	}
 	id := l.granNextID
 	l.granNextID++
-	l.granSubs[id] = f
+	l.granSubs = append(l.granSubs, granSubEntry{id: id, fn: f})
 
 	cancel = func() {
-		delete(l.granSubs, id)
+		for i := range l.granSubs {
+			if l.granSubs[i].id == id {
+				l.granSubs = append(l.granSubs[:i], l.granSubs[i+1:]...)
+				return
+			}
+		}
 	}
 	return
 }
 
-// notify calls all registered subscribers.
+// notify calls all registered subscribers in stable registration order.
+// It walks a snapshot copy of the subscriber slice, not the live one: a
+// subscriber may add or cancel subscribers while this runs — including
+// reentrantly, via a nested list mutation whose own notify recurses — and
+// the copy keeps that from corrupting this walk (a cancel rewrites the live
+// slice's backing array in place) or making delivery order depend on which
+// subscribers a mid-walk mutation happened to add.
 func (l *List[T]) notify() {
-	for _, f := range l.subs {
-		f()
+	subs := make([]subEntry, len(l.subs))
+	copy(subs, l.subs)
+	for _, s := range subs {
+		s.fn()
 	}
 }
 
-// notifyGran calls all registered granular subscribers with a Change event.
+// notifyGran calls all registered granular subscribers with a Change event,
+// in stable registration order and over a snapshot copy for the same
+// reentrancy/ordering reasons as notify (see its doc comment).
 func (l *List[T]) notifyGran(c Change) {
-	for _, f := range l.granSubs {
-		f(c)
+	subs := make([]granSubEntry, len(l.granSubs))
+	copy(subs, l.granSubs)
+	for _, s := range subs {
+		s.fn(c)
 	}
 }
 
