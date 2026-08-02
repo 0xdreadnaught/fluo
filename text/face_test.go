@@ -1,6 +1,7 @@
 package text
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"testing"
@@ -333,6 +334,187 @@ func TestMeasure(t *testing.T) {
 	}
 	if fa.Measure("").W != 0 {
 		t.Error("empty string width != 0")
+	}
+}
+
+// TestMeasureCaches is the memoization test: Measure returns a stable Size
+// across repeated calls, populates measureCache with exactly the value it
+// returned, and — proven by poisoning the cached entry and seeing the
+// poisoned value come back — reads that entry on a hit instead of
+// recomputing. A never-cached string still computes the same result the
+// uncached path would, so a hit and a miss agree to the byte.
+func TestMeasureCaches(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := NewFace(f, 16)
+	const s = "Hi fluo"
+
+	first := fa.Measure(s)
+	if again := fa.Measure(s); again != first {
+		t.Fatalf("Measure not stable across calls: %v vs %v", again, first)
+	}
+
+	fa.measureMu.Lock()
+	cached, ok := fa.measureCur[s]
+	fa.measureMu.Unlock()
+	if !ok {
+		t.Fatal("measure cache not populated after Measure")
+	}
+	if cached != first {
+		t.Fatalf("cached %v != returned %v", cached, first)
+	}
+
+	// Poison the entry: a genuine cache hit must return this, not recompute.
+	poison := render.Size{W: first.W + 1234, H: first.H + 1}
+	fa.measureMu.Lock()
+	fa.measureCur[s] = poison
+	fa.measureMu.Unlock()
+	if got := fa.Measure(s); got != poison {
+		t.Fatalf("Measure recomputed instead of hitting cache: got %v, want poisoned %v", got, poison)
+	}
+
+	// A different (uncached) string must compute the true value.
+	got := fa.Measure("different string")
+	want := fa.measureUncached("different string")
+	if got != want {
+		t.Fatalf("miss path Measure = %v, want uncached %v", got, want)
+	}
+}
+
+// TestMeasureCacheBounded asserts the cache can't grow without limit: after
+// measuring far more distinct strings than a generation holds, the two
+// generations together stay within 2*measureCacheGen entries (older ones are
+// evicted by generation rotation), so live-updating labels can't leak.
+func TestMeasureCacheBounded(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := NewFace(f, 16)
+	// Several full generations' worth of distinct strings.
+	for i := 0; i < measureCacheGen*5; i++ {
+		fa.Measure(fmt.Sprintf("string-%d", i))
+	}
+	fa.measureMu.Lock()
+	total := len(fa.measureCur) + len(fa.measurePrev)
+	fa.measureMu.Unlock()
+	if total > 2*measureCacheGen {
+		t.Fatalf("measure cache grew past bound: %d entries > 2*%d", total, measureCacheGen)
+	}
+}
+
+// TestMeasureCachePromotesHotEntry asserts the two-generation eviction keeps a
+// still-measured string alive across rotations: a string measured every so
+// often should never fall out even as unrelated churn rotates generations,
+// because a prev-generation hit is promoted back into the current generation.
+func TestMeasureCachePromotesHotEntry(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := NewFace(f, 16)
+	const hot = "hot-string"
+	want := fa.Measure(hot)
+
+	// Churn distinct strings, re-touching hot within each generation so it
+	// stays promoted, across several rotations.
+	for i := 0; i < measureCacheGen*4; i++ {
+		fa.Measure(fmt.Sprintf("cold-%d", i))
+		if i%64 == 0 {
+			fa.Measure(hot)
+		}
+	}
+
+	fa.measureMu.Lock()
+	_, inCur := fa.measureCur[hot]
+	_, inPrev := fa.measurePrev[hot]
+	fa.measureMu.Unlock()
+	if !inCur && !inPrev {
+		t.Fatal("hot string evicted despite repeated measurement")
+	}
+	if got := fa.Measure(hot); got != want {
+		t.Fatalf("hot string Measure = %v, want stable %v", got, want)
+	}
+}
+
+// TestMeasureCacheInvalidatedOnAddFallback asserts AddFallback drops any
+// memoized Measure widths: appending a fallback can change how a rune
+// resolves, so a stale cached width would be wrong. Uses a second goregular
+// as the fallback purely to exercise invalidation (no CJK font needed).
+func TestMeasureCacheInvalidatedOnAddFallback(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := NewFace(f, 16)
+	fa.Measure("hello")
+
+	fa.measureMu.Lock()
+	populated := len(fa.measureCur) + len(fa.measurePrev)
+	fa.measureMu.Unlock()
+	if populated == 0 {
+		t.Fatal("measure cache not populated after Measure")
+	}
+
+	fb, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa.AddFallback(fb)
+
+	fa.measureMu.Lock()
+	after := len(fa.measureCur) + len(fa.measurePrev)
+	fa.measureMu.Unlock()
+	if after != 0 {
+		t.Fatalf("measure cache not cleared by AddFallback: %d entries remain", after)
+	}
+}
+
+// TestFaceDrawBatchOrderAndReuse is the P5 regression test for Draw's
+// per-(font,page) grouping after the batch map was replaced by a linear
+// scan. Forcing 'B' onto a grown second page while 'A' stays on page 0,
+// the string "ABA" must still emit exactly two DrawGlyphs calls in
+// first-seen page order (page 0 then page 1): the trailing 'A' must reuse
+// page 0's existing batch, not open a third. Textures confirm the order.
+func TestFaceDrawBatchOrderAndReuse(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := NewFace(f, 16)
+	atlas := fa.Font.sharedAtlas()
+
+	// Pack 'A' on page 0, then push page 0's packer past its bottom edge so
+	// the next distinct glyph ('B') must grow a new page (same setup as
+	// TestFaceDrawGrowsAtlasInsteadOfDropping).
+	giA, _ := f.glyphIndex('A')
+	if _, err := atlas.glyphCoverage(giA, 16); err != nil {
+		t.Fatal(err)
+	}
+	atlas.covPages[0].cursorY = atlasSize
+	atlas.covPages[0].rowH = 0
+
+	rr := &recordingRenderer{scale: 1}
+	fa.Draw(rr, render.Point{}, "ABA", render.RGB(255, 255, 255))
+
+	if len(atlas.covPages) != 2 {
+		t.Fatalf("covPages = %d, want 2 (a page grown for 'B')", len(atlas.covPages))
+	}
+	// Two calls, not three: the trailing 'A' reused page 0's batch.
+	if rr.glyphCalls != 2 {
+		t.Fatalf("DrawGlyphs called %d times, want 2 (trailing 'A' must reuse page 0's batch)", rr.glyphCalls)
+	}
+	if len(rr.glyphTex) != 2 {
+		t.Fatalf("recorded %d DrawGlyphs textures, want 2", len(rr.glyphTex))
+	}
+	// First-seen order: page 0 first, then the grown page 1.
+	if rr.glyphTex[0] != atlas.covPages[0].tex {
+		t.Errorf("first DrawGlyphs texture = %v, want page 0's %v", rr.glyphTex[0], atlas.covPages[0].tex)
+	}
+	if rr.glyphTex[1] != atlas.covPages[1].tex {
+		t.Errorf("second DrawGlyphs texture = %v, want page 1's %v", rr.glyphTex[1], atlas.covPages[1].tex)
 	}
 }
 
