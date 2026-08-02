@@ -43,6 +43,65 @@ func TestGridStarWeights(t *testing.T) {
 	}
 }
 
+// TestResolveTracksEqualStarsTileExactly pins that equal Star tracks add
+// back up to exactly the space they were resolved against. Each share used
+// to be computed independently in float32, so three equal Stars across 200px
+// summed to 200.00002 — enough for an exact "content wider than viewport"
+// comparison downstream to report an overflow of a hundred-thousandth of a
+// pixel and grow a scrollbar for it.
+func TestResolveTracksEqualStarsTileExactly(t *testing.T) {
+	none := func(int) float32 { return 0 }
+
+	for _, n := range []int{2, 3, 4, 5, 6, 7, 9} {
+		tracks := make([]Track, n)
+		for i := range tracks {
+			tracks[i] = Star(1)
+		}
+		for _, avail := range []float32{100, 200, 201, 300, 333, 640, 1000, 1024} {
+			resolved := resolveTracks(tracks, avail, none)
+			if got := sumF32(resolved); got != avail {
+				t.Fatalf("%d equal Star tracks across %v summed to %v (off by %v), want exactly %v",
+					n, avail, got, got-avail, avail)
+			}
+		}
+	}
+}
+
+// TestResolveTracksMixedStarsTileExactly is the same rule with Px tracks in
+// the mix and unequal weights: the Stars must consume exactly what the Px
+// tracks left behind.
+func TestResolveTracksMixedStarsTileExactly(t *testing.T) {
+	none := func(int) float32 { return 0 }
+
+	tracks := []Track{Px(80), Star(1), Px(60), Star(2), Star(1)}
+	for _, avail := range []float32{300, 301, 500, 777} {
+		resolved := resolveTracks(tracks, avail, none)
+		if got := sumF32(resolved); got != avail {
+			t.Fatalf("Px+Star tracks across %v summed to %v (off by %v), want exactly %v",
+				avail, got, got-avail, avail)
+		}
+	}
+}
+
+// TestResolveTracksStarWeightsStillProportional guards the fix above from
+// distorting the split it reconciles: handing the residual to the last Star
+// must not visibly move any track off its weighted share.
+func TestResolveTracksStarWeightsStillProportional(t *testing.T) {
+	none := func(int) float32 { return 0 }
+
+	resolved := resolveTracks([]Track{Star(1), Star(3)}, 400, none)
+	if resolved[0] != 100 || resolved[1] != 300 {
+		t.Fatalf("Star(1)/Star(3) across 400 = %v, want [100 300]", resolved)
+	}
+
+	resolved = resolveTracks([]Track{Star(1), Star(1), Star(1)}, 200, none)
+	for i, w := range resolved {
+		if diff := w - 200.0/3.0; diff > 0.001 || diff < -0.001 {
+			t.Fatalf("track %d of 3 equal Stars across 200 = %v, want ~66.667", i, w)
+		}
+	}
+}
+
 func TestGridDesiredUnconstrained(t *testing.T) {
 	g := NewGrid().Cols(Px(50), AutoTrack()).Rows(AutoTrack())
 	g.Add(NewFixed(40, 25, render.RGB(1, 2, 3)), 0, 1)

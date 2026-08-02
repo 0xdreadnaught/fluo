@@ -485,15 +485,16 @@ func (l *ListView) contentBounds() render.Rect {
 // alone — no text change — must still repaint the right rows the next time
 // this runs).
 //
-// The two gutter decisions are independent (the right gutter only reduces
-// width, the bottom gutter only reduces height) and each is made against the
-// pre-gutter inset dimension on its own axis: vGutter compares totalHeight
-// to inset.H, then hGutter compares contentWidth to the resulting viewport.W
-// (inset.W minus vGutter — NOT inset.W itself, since vGutter has already
-// permanently claimed that space from any row's actual content width; the
-// Bottom inset applied afterward doesn't touch W, so this is the same W
-// thumbGeometryX later reads back from v.viewport.W — see its doc comment
-// for why that agreement matters).
+// The two gutter decisions are coupled, not independent: each gutter takes
+// space from the axis the OTHER decision measures against (the right gutter
+// reduces width, which the horizontal decision compares contentWidth to; the
+// bottom gutter reduces height, which the vertical decision compares
+// totalHeight to), so both are resolved together before either is applied —
+// see the comment on that loop for why deciding them in sequence puts the
+// vertical thumb outside the control. Both are settled against the same
+// final viewport the virtualizer reads back from v.viewport for its own
+// thumbGeometry/thumbGeometryX overflow tests, so a reported thumb always
+// has the gutter it needs to be drawn in.
 func (l *ListView) ArrangeContent(bounds render.Rect) {
 	inset := bounds.Inset(render.Thickness{
 		Top: l.metrics.BevelWidth, Bottom: l.metrics.BevelWidth,
@@ -506,35 +507,46 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 		inset.H = 0
 	}
 
-	// Reserve the vertical thumb's gutter only when the content actually
-	// scrolls vertically. When it fits (no thumb), the viewport is the full
-	// inset rect so rows and the selection band reach its right edge; when
-	// it scrolls, the gutter keeps the band clear of the (translucent) thumb
-	// so the highlight sits fully beside the scrollbar rather than bleeding
+	// Reserve each thumb's gutter only when that axis actually scrolls: the
+	// vertical thumb's on the right, the horizontal thumb's along the
+	// bottom. When an axis fits (no thumb) the viewport keeps that space, so
+	// rows and the selection band reach the inset rect's edge; when it
+	// scrolls, the gutter keeps the band clear of the (translucent) thumb so
+	// the highlight sits fully beside the scrollbar rather than bleeding
 	// through it.
-	vGutter := float32(0)
-	if l.totalHeight() > inset.H {
-		vGutter = l.gutter
+	//
+	// The two decisions have to be made JOINTLY, because each gutter takes
+	// its space from the other axis: the right gutter takes width, which is
+	// what the horizontal decision measures against, and the bottom gutter
+	// takes height, which is what the vertical one measures against. Deciding
+	// the vertical one against the full inset height and only then shaving
+	// that height for a bottom gutter leaves a list that fits before the
+	// shave but scrolls after it with no right gutter reserved — while the
+	// virtualizer, which tests the FINAL viewport height, does report a
+	// vertical thumb. Its track then starts at the content's right edge and
+	// is drawn a full gutter's width outside the control, over whatever sits
+	// beside it and unhittable.
+	//
+	// Two rounds settle it and no more: a gutter can only ever turn ON (a
+	// gutter takes space, which can only make the other axis more likely to
+	// overflow, never less), and the horizontal decision runs after the
+	// vertical one it depends on, so it is already final by the time the
+	// vertical one stops moving.
+	contentW := l.contentWidth()
+	var vGutter, hGutter float32
+	for round := 0; round < 2; round++ {
+		if l.totalHeight() > inset.H-hGutter {
+			vGutter = l.gutter
+		}
+		if contentW > inset.W-vGutter {
+			hGutter = l.gutter
+		}
 	}
-	viewport := inset.Inset(render.Thickness{Right: vGutter})
+
+	viewport := inset.Inset(render.Thickness{Right: vGutter, Bottom: hGutter})
 	if viewport.W < 0 {
 		viewport.W = 0
 	}
-	if viewport.H < 0 {
-		viewport.H = 0
-	}
-
-	// Reserve the horizontal thumb's gutter only when the widest row's
-	// natural content actually exceeds the (already vGutter-reduced)
-	// viewport width — mirroring the vertical decision above, generalized to
-	// the X axis (see the doc comment above for why viewport.W, not inset.W,
-	// is the correct comparison here).
-	contentW := l.contentWidth()
-	hGutter := float32(0)
-	if contentW > viewport.W {
-		hGutter = l.gutter
-	}
-	viewport = viewport.Inset(render.Thickness{Bottom: hGutter})
 	if viewport.H < 0 {
 		viewport.H = 0
 	}
@@ -622,10 +634,12 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 // before its TextBlock renders on top (see RenderWidget's documented order:
 // a widget's own Render runs before its children's) — a no-op for the band
 // when nothing is selected, or the selected index isn't currently realized
-// (scrolled out of the visible range). The band is drawn unclipped like
-// every other Render method in this package, but always safely within l's
-// own bounds regardless: the row rect computed here is the exact geometry
-// ArrangeContent already arranged that pool slot's TextBlock at.
+// (scrolled out of the visible range). The band is drawn before any clip is
+// pushed, like every other Render method in this package (see
+// core.RenderWidget's order), so it is cropped to the content viewport here
+// instead — the row rect it comes from is the exact geometry ArrangeContent
+// arranged that pool slot's TextBlock at, and a row at the viewport edge can
+// be only partly visible.
 func (l *ListView) Render(r render.Renderer) {
 	drawSunken(r, l.Bounds(), l.colors.WindowWell, l.colors)
 
@@ -641,11 +655,22 @@ func (l *ListView) Render(r render.Renderer) {
 	// gutter), so the band reaches its right edge; when it scrolls, the band
 	// stops at the gutter so it stays clear of the translucent thumb rather
 	// than showing through it.
+	//
+	// Cropped to the viewport, because the band is drawn here and the clip
+	// isn't pushed until afterwards (RenderWidget runs a widget's own Render
+	// BEFORE its ClipRect, so only the row TextBlocks are clipped by it). A
+	// selected row at either edge of the viewport is only partly visible
+	// whenever the row height doesn't divide the viewport height, and its
+	// full-height band would otherwise paint over the sunken bevel below or
+	// above the content area.
 	rowRect := render.Rect{
 		X: l.viewport.X,
 		Y: l.viewport.Y + float32(l.selected)*l.rowH - l.offset,
 		W: l.viewport.W,
 		H: l.rowH,
+	}.Intersect(l.viewport)
+	if rowRect.Empty() {
+		return
 	}
 	r.FillRect(rowRect, l.colors.Highlight)
 }
@@ -713,10 +738,14 @@ func (l *ListView) OnFocusChanged(focused bool) {
 //
 // Wheel scrolls vertically (row scroll) by scrollWheelStep logical px per
 // notch by default, and horizontally instead when Shift is held (matching
-// ScrollViewer's Shift+Wheel convention) — always handled, exactly as
-// before Task 4 for the plain-wheel case. Unlike ScrollViewer, a plain wheel
+// ScrollViewer's Shift+Wheel convention). Unlike ScrollViewer, a plain wheel
 // never falls back to X even when only X overflows: a ListView's rows are
-// its primary scroll axis, so plain wheel always means row scroll.
+// its primary scroll axis, so plain wheel always means row scroll. A notch
+// is handled only when it actually moved the clamped offset (see
+// virtualizer.scrollBy) — a list whose rows already fit, or one pinned at
+// the end stop the notch pushes toward, leaves the event unhandled so
+// input.Bubble carries it out to an enclosing ScrollViewer rather than
+// swallowing it into a dead zone.
 //
 // A Press inside the current vertical thumb rect starts a vertical drag,
 // checked first (matching the original single-axis priority); otherwise a
@@ -731,10 +760,14 @@ func (l *ListView) OnPointer(e *input.PointerEvent) {
 	switch e.Action {
 	case input.Wheel:
 		delta := -e.Delta.Y * scrollWheelStep
+		var moved bool
 		if e.Mods&input.ModShift != 0 {
-			l.scrollByX(delta)
+			moved = l.scrollByX(delta)
 		} else {
-			l.scrollBy(delta)
+			moved = l.scrollBy(delta)
+		}
+		if !moved {
+			return
 		}
 		l.InvalidateArrange()
 		e.Handled = true

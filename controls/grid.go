@@ -175,7 +175,9 @@ func trackChildAvail(t Track) float32 {
 //  1. A Px track resolves to its fixed value.
 //  2. An Auto track resolves to maxDesired(i) (0 if no children).
 //  3. Remaining space (avail minus the sum of Px and Auto tracks, floored at
-//  0. is split across Star tracks proportional to weight/Σweights. If
+//  0. is split across Star tracks proportional to weight/Σweights, with the
+//     last Star track taking the leftover remainder so the shares add back
+//     up to the remaining space exactly (see the comment on that loop). If
 //     avail is +Inf, each Star track instead resolves like Auto (maxDesired).
 func resolveTracks(tracks []Track, avail float32, maxDesired func(i int) float32) []float32 {
 	resolved := make([]float32, len(tracks))
@@ -205,10 +207,35 @@ func resolveTracks(tracks []Track, avail float32, maxDesired func(i int) float32
 		if remaining < 0 {
 			remaining = 0
 		}
+		lastStar := -1
 		for i, t := range tracks {
 			if t.kind == trackStar {
-				resolved[i] = remaining * (t.value / sumWeight)
+				lastStar = i
 			}
+		}
+		// Give the last Star track whatever is left over rather than its own
+		// weighted share. remaining*(weight/sumWeight) is computed in float32
+		// per track, so the shares don't have to add back up to remaining —
+		// three equal Stars across 200px each round to 66.666664 and total
+		// 200.00002. Callers that compare a summed content width against the
+		// space it was resolved against (DataGrid's horizontal-overflow check)
+		// then see an overflow of a hundred-thousandth of a pixel and grow a
+		// scrollbar for it. Handing the residual to one track keeps equal
+		// Stars tiling the available space exactly.
+		var allocated float32
+		for i, t := range tracks {
+			if t.kind != trackStar {
+				continue
+			}
+			if i == lastStar {
+				resolved[i] = remaining - allocated
+				if resolved[i] < 0 {
+					resolved[i] = 0
+				}
+				continue
+			}
+			resolved[i] = remaining * (t.value / sumWeight)
+			allocated += resolved[i]
 		}
 	}
 	// If there are Star tracks but sumWeight == 0 (e.g. all Star(0)), no

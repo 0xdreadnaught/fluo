@@ -291,6 +291,98 @@ func TestListViewWheelScrollsAndHandles(t *testing.T) {
 	}
 }
 
+// TestListViewOverscrollLeavesNoDeadZone pins the end-stop dead zone on the
+// vertical axis: a scroll request past the end must not stay stranded in the
+// raw accumulator, or every notch back has to burn off the overshoot before
+// the clamped offset moves at all.
+func TestListViewOverscrollLeavesNoDeadZone(t *testing.T) {
+	items := newFakeListItems(make([]string, 20)...)
+	l := NewListView(nil, items).SetRowHeight(48)
+	l.rawOffset = 10000 // far past the end
+	layoutListView(l, 0, 0, 100, 100)
+
+	maxY := float32(20*48) - l.viewport.H
+	if got := l.offset; got != maxY {
+		t.Fatalf("offset after over-scrolling = %v, want the %v end stop", got, maxY)
+	}
+	if l.rawOffset != l.offset {
+		t.Fatalf("rawOffset = %v after layout clamped offset to %v — the accumulator kept the overshoot", l.rawOffset, l.offset)
+	}
+
+	up := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: 1}, Router: input.NewRouter()}
+	l.OnPointer(up)
+	if !up.Handled {
+		t.Fatal("a notch back off the end stop went unhandled")
+	}
+	layoutListView(l, 0, 0, 100, 100)
+	if got := l.offset; got != maxY-scrollWheelStep {
+		t.Fatalf("offset one notch back from the end stop = %v, want %v", got, maxY-scrollWheelStep)
+	}
+}
+
+// TestListViewWheelBubblesToOuterScrollerWhenRowsFit pins the nested-scroller
+// dead zone. A ListView whose rows already fit its own viewport scrolls
+// nothing, so it has to leave the notch unhandled — input.Bubble stops at the
+// first handler that sets Handled, so consuming it regardless (marking every
+// wheel handled, as this did) turned a ScrollViewer wrapping a short list
+// into a region where the wheel moved neither one.
+func TestListViewWheelBubblesToOuterScrollerWhenRowsFit(t *testing.T) {
+	// 2 rows of 48 = 96px of content inside the ListView's own 240px default
+	// desired height (what the viewer arranges it at, measuring it with
+	// unbounded height), inside a 50px-tall viewer: the list has nothing to
+	// scroll, the viewer has 190px of it.
+	items := newFakeListItems("a", "b")
+	l := NewListView(nil, items).SetRowHeight(48)
+	s := NewScrollViewer().SetChild(l)
+	layoutScrollViewer(s, 0, 0, 100, 50)
+
+	if _, ok := l.thumbRect(); ok {
+		t.Fatal("fixture: the inner list must fit its own viewport (no thumb)")
+	}
+	if !s.canScrollY() {
+		t.Fatal("fixture: the outer viewer must have room to scroll")
+	}
+
+	e := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -1}, Router: input.NewRouter()}
+	input.Bubble([]core.Widget{s, l}, e)
+	if !e.Handled {
+		t.Fatal("wheel over ScrollViewer{ListView} went unhandled by both")
+	}
+
+	layoutScrollViewer(s, 0, 0, 100, 50)
+	if got := l.offset; got != 0 {
+		t.Fatalf("inner list offset = %v, want 0 (nothing to scroll)", got)
+	}
+	if got := s.OffsetY(); got != scrollWheelStep {
+		t.Fatalf("outer viewer offset = %v, want %v — the inner list swallowed a notch it could not act on", got, scrollWheelStep)
+	}
+}
+
+// TestListViewWheelAtEndStopNotHandled is the same rule at the other end of
+// the range: a list scrolled to its last row must not keep consuming
+// downward notches, while a notch back up is still its own.
+func TestListViewWheelAtEndStopNotHandled(t *testing.T) {
+	items := newFakeListItems(make([]string, 4)...)
+	l := NewListView(nil, items).SetRowHeight(48)
+	l.rawOffset = 4*48 - 96 // exactly the end stop: content 192, viewport 96
+	layoutListView(l, 0, 0, 100, 100)
+	if got := l.offset; got != 96 {
+		t.Fatalf("fixture: offset = %v, want the 96 end stop", got)
+	}
+
+	down := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -1}, Router: input.NewRouter()}
+	l.OnPointer(down)
+	if down.Handled {
+		t.Fatal("a downward notch at the bottom end stop was consumed, scrolling nothing")
+	}
+
+	up := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: 1}, Router: input.NewRouter()}
+	l.OnPointer(up)
+	if !up.Handled {
+		t.Fatal("a notch back up from the end stop must still be handled")
+	}
+}
+
 // --- List mutation via granular channel ---
 
 func TestListViewAddReflectsAfterRelayout(t *testing.T) {
@@ -588,6 +680,66 @@ func TestListViewDisposeIsIdempotent(t *testing.T) {
 	l.Dispose() // must not panic
 }
 
+// TestListViewSelectionBandStaysInBounds pins that the selection band for a
+// partially-visible row is cropped. Render draws the band before ClipRect is
+// pushed (core.RenderWidget runs a widget's own Render first), so nothing
+// crops it for us: with a row height that doesn't divide the viewport, the
+// bottom row is partly visible and its full-height band used to paint out
+// past the well and over whatever sits below the control.
+func TestListViewSelectionBandStaysInBounds(t *testing.T) {
+	// viewport {2,2,84,96}: 96 is not a multiple of the 30px rows, so a row
+	// hangs off an edge at most offsets. The offsets below are set directly
+	// rather than through SetSelectedIndex, whose scroll-into-view would
+	// align the selected row flush with an edge and hide the bug.
+	cases := []struct {
+		name     string
+		selected int
+		offset   float32
+	}{
+		{"partial bottom row", 3, 14}, // band 78..108, viewport ends at 98
+		{"partial top row", 1, 40},    // band -8..22, viewport starts at 2
+	}
+
+	bounds := render.Rect{X: 0, Y: 0, W: 100, H: 100}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			items := newFakeListItems(make([]string, 10)...)
+			l := NewListView(nil, items).SetRowHeight(30)
+			l.selected = tc.selected
+			l.rawOffset = tc.offset
+			layoutListView(l, bounds.X, bounds.Y, bounds.W, bounds.H)
+
+			if l.selected < l.visibleFirst || l.selected >= l.visibleFirst+len(l.pool) {
+				t.Fatalf("fixture: row %d is not realized, so no band is drawn at all", l.selected)
+			}
+
+			rr := &recordRenderer{}
+			l.Render(rr)
+
+			if len(rr.fills) == 0 {
+				t.Fatal("ListView.Render emitted no fills at all")
+			}
+			var band bool
+			for _, f := range rr.fills {
+				if f.color == l.colors.Highlight {
+					band = true
+				}
+				if f.rect.Bottom() > bounds.Bottom() {
+					t.Fatalf("Render emitted %v, reaching %v — past the control's bottom edge at %v",
+						f.rect, f.rect.Bottom(), bounds.Bottom())
+				}
+				if f.rect.Y < bounds.Y {
+					t.Fatalf("Render emitted %v, starting at %v — above the control's top edge at %v",
+						f.rect, f.rect.Y, bounds.Y)
+				}
+			}
+			if !band {
+				t.Fatal("fixture: no selection band was drawn, so nothing was actually checked")
+			}
+		})
+	}
+}
+
 // --- Horizontal scroll (control-variants Task 4) ---
 
 // wideText is far wider, at typical face sizes, than any viewport used by
@@ -633,6 +785,41 @@ func TestListViewHorizontalThumbShowsForWideRowText(t *testing.T) {
 
 	if _, ok := l.thumbRectX(); !ok {
 		t.Fatal("expected a horizontal thumb: row text is far wider than the 100px viewport")
+	}
+}
+
+// TestListViewVerticalThumbStaysInBoundsWithBottomGutter pins the gutter
+// ordering. The rows fit the inset height on their own (2*48 = 96 <= 100),
+// so no right gutter used to be reserved — but the wide row text reserves a
+// bottom gutter afterwards, and against that reduced height the rows no
+// longer fit, so the virtualizer reports a vertical thumb anyway. With no
+// right gutter to draw it in, its track started at the content's right edge
+// and ran a full gutter's width past the control, over whatever sits beside
+// it and unhittable.
+func TestListViewVerticalThumbStaysInBoundsWithBottomGutter(t *testing.T) {
+	face := testFace(t)
+	items := newFakeListItems(wideText, wideText)
+	l := NewListView(face, items).SetRowHeight(48)
+
+	bounds := render.Rect{X: 0, Y: 0, W: 100, H: 104}
+	layoutListView(l, bounds.X, bounds.Y, bounds.W, bounds.H)
+
+	if _, ok := l.thumbRectX(); !ok {
+		t.Fatal("fixture: the wide rows must reserve a bottom gutter for a horizontal thumb")
+	}
+
+	track, _, ok := l.thumbGeometry()
+	if !ok {
+		return // no vertical thumb reported at all is also a correct answer
+	}
+	if track.Right() > bounds.Right() {
+		t.Fatalf("vertical thumb track %v runs to %v, past the control's right edge at %v",
+			track, track.Right(), bounds.Right())
+	}
+	thumb, _ := l.thumbRect()
+	if thumb.Right() > bounds.Right() {
+		t.Fatalf("vertical thumb %v runs to %v, past the control's right edge at %v",
+			thumb, thumb.Right(), bounds.Right())
 	}
 }
 

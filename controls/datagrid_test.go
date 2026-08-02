@@ -352,6 +352,73 @@ func TestDataGridHoverClearedOnWheel(t *testing.T) {
 	}
 }
 
+// TestDataGridOverscrollXLeavesNoDeadZone pins the end-stop dead zone on the
+// virtualizer's side of the clamp: ScrollToX writes rawOffsetX unbounded, so
+// a request far past the end used to sit there while offsetX stayed pinned at
+// the max, and every notch back had to burn off the whole overshoot before
+// anything moved.
+func TestDataGridOverscrollXLeavesNoDeadZone(t *testing.T) {
+	g := NewDataGrid(nil)
+	g.SetColumns(Column{Width: Px(300)})
+	g.SetRowCount(2)
+	g.rowH = 48
+	layoutDataGrid(g, 0, 0, 100, 200)
+
+	maxX := g.contentW - g.viewport.W
+	if maxX <= 2*scrollWheelStep {
+		t.Fatalf("fixture: horizontal range %v is too short to over-scroll meaningfully", maxX)
+	}
+
+	g.ScrollToX(10000)
+	layoutDataGrid(g, 0, 0, 100, 200)
+	if got := g.OffsetX(); got != maxX {
+		t.Fatalf("offsetX after over-scrolling = %v, want the %v end stop", got, maxX)
+	}
+
+	r := input.NewRouter()
+	back := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: 1}, Mods: input.ModShift, Router: r}
+	g.OnPointer(back)
+	if !back.Handled {
+		t.Fatal("a notch back off the horizontal end stop went unhandled — the raw accumulator kept the overshoot")
+	}
+	layoutDataGrid(g, 0, 0, 100, 200)
+	if got := g.OffsetX(); got != maxX-scrollWheelStep {
+		t.Fatalf("offsetX one notch back from the end stop = %v, want %v", got, maxX-scrollWheelStep)
+	}
+}
+
+// TestDataGridWheelNotHandledWhenRowsFit pins the same wheel-consumed-but-
+// nothing-moved rule ListView and ScrollViewer follow: a grid whose rows all
+// fit scrolls nothing, so the notch must stay unhandled for an enclosing
+// scroller (input.Bubble stops at the first handler that sets Handled).
+// Nothing moved, so the hovered row is still the hovered row.
+func TestDataGridWheelNotHandledWhenRowsFit(t *testing.T) {
+	g := NewDataGrid(nil)
+	g.SetColumns(Column{Width: Px(50)})
+	g.SetRowCount(2)
+	g.rowH = 48
+
+	layoutDataGrid(g, 0, 0, 100, 400) // headerH=48, 96px of rows, way short of the body
+	if _, ok := g.thumbRect(); ok {
+		t.Fatal("fixture: the grid must fit its own viewport (no thumb)")
+	}
+
+	r := input.NewRouter()
+	g.OnPointer(&input.PointerEvent{Action: input.Move, Pos: render.Point{X: 10, Y: 48 + 10}, Router: r})
+	if g.hoverRow != 0 {
+		t.Fatalf("fixture: hoverRow after Move = %d, want 0", g.hoverRow)
+	}
+
+	wheel := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -1}, Router: r}
+	g.OnPointer(wheel)
+	if wheel.Handled {
+		t.Fatal("wheel over a grid with nothing to scroll was marked Handled")
+	}
+	if g.hoverRow != 0 {
+		t.Fatalf("hoverRow after a wheel that scrolled nothing = %d, want 0 (the rows did not move)", g.hoverRow)
+	}
+}
+
 // TestDataGridHoverClearedOnThumbDrag mirrors the Wheel case above for the
 // other offset-changing-without-a-fresh-hit-test path: dragging the thumb.
 func TestDataGridHoverClearedOnThumbDrag(t *testing.T) {
@@ -479,6 +546,73 @@ func TestDataGridSetSelectedIndexAutoScrollsIntoView(t *testing.T) {
 	}
 }
 
+// TestDataGridBandAndGridLinesStayInBounds pins that the selection band and
+// the per-row grid line for a partially-visible row are cropped to the body
+// viewport. Render draws both before ClipRect is pushed (core.RenderWidget
+// runs a widget's own Render first), so nothing crops them for us: with a row
+// height that doesn't divide the body height, the bottom row is partly
+// visible and its band and line used to paint out past the well and over
+// whatever sits below the control.
+func TestDataGridBandAndGridLinesStayInBounds(t *testing.T) {
+	// header 20 tall, body viewport {2,22,84,86}: 86 is not a multiple of the
+	// 20px rows, so a row hangs off an edge at most offsets. The offset is set
+	// directly rather than through SetSelectedIndex, whose scroll-into-view
+	// would align the selected row flush with an edge and hide the bug.
+	cases := []struct {
+		name     string
+		selected int
+		offset   float32
+	}{
+		{"partial bottom row", 4, 5}, // band 97..117, viewport ends at 108
+		{"partial top row", 0, 5},    // band 17..37, viewport starts at 22
+	}
+
+	bounds := render.Rect{X: 0, Y: 0, W: 100, H: 110}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewDataGrid(nil)
+			g.SetColumns(Column{Width: Px(50)})
+			g.SetRowCount(10)
+			g.rowH = 20
+			g.selected = tc.selected
+			g.rawOffset = tc.offset
+			layoutDataGrid(g, bounds.X, bounds.Y, bounds.W, bounds.H)
+
+			lastRowBottom := g.viewport.Y + float32(g.visibleFirst+g.visibleCount)*g.rowH - g.offset
+			if lastRowBottom <= g.viewport.Bottom() {
+				t.Fatalf("fixture: the last visible row ends at %v, inside the viewport's %v — nothing overhangs to check",
+					lastRowBottom, g.viewport.Bottom())
+			}
+
+			rr := &recordRenderer{}
+			g.Render(rr)
+
+			if len(rr.fills) == 0 {
+				t.Fatal("DataGrid.Render emitted no fills at all")
+			}
+			var band bool
+			for _, f := range rr.fills {
+				if f.color == g.colors.Highlight {
+					band = true
+					// The band belongs to the body: it must not bleed up into
+					// the header strip drawn above it either.
+					if f.rect.Y < g.viewport.Y {
+						t.Fatalf("selection band %v starts at %v, above the body viewport at %v",
+							f.rect, f.rect.Y, g.viewport.Y)
+					}
+				}
+				if f.rect.Bottom() > bounds.Bottom() {
+					t.Fatalf("Render emitted %v, reaching %v — past the control's bottom edge at %v",
+						f.rect, f.rect.Bottom(), bounds.Bottom())
+				}
+			}
+			if !band {
+				t.Fatal("fixture: no selection band was drawn, so nothing was actually checked")
+			}
+		})
+	}
+}
+
 // --- Header fixed while body scrolls ---
 
 func TestDataGridHeaderYConstantWhileBodyScrolls(t *testing.T) {
@@ -536,6 +670,43 @@ func TestDataGridNoHorizontalThumbWhenColumnsFitViewport(t *testing.T) {
 	}
 	if g.offsetX != 0 {
 		t.Fatalf("offsetX = %v, want 0", g.offsetX)
+	}
+}
+
+// TestDataGridNoHorizontalThumbWhenEqualStarsDrift is the case the test
+// above happens not to hit: its Star column is the only one, so its share is
+// the whole remainder and nothing can round. Several EQUAL Stars each round
+// their own share in float32 and used to overshoot the width they were
+// resolved against — 3 across a 200-wide grid summed to 200.00002 — which
+// the exact contentW > viewport.W comparison read as real overflow: a
+// horizontal thumb with a scroll range of ~1.5e-5 px, plus a reserved bottom
+// gutter that costs a visible row.
+func TestDataGridNoHorizontalThumbWhenEqualStarsDrift(t *testing.T) {
+	for _, n := range []int{3, 6} {
+		cols := make([]Column, n)
+		for i := range cols {
+			cols[i] = Column{Width: Star(1)}
+		}
+		g := NewDataGrid(nil)
+		g.SetColumns(cols...)
+		g.SetRowCount(5)
+		g.rowH = 20
+		layoutDataGrid(g, 0, 0, 200, 200)
+
+		if g.contentW > g.viewport.W {
+			t.Fatalf("%d equal Star columns: contentW %v exceeds viewport.W %v by %v — the shares must tile it exactly",
+				n, g.contentW, g.viewport.W, g.contentW-g.viewport.W)
+		}
+		if _, ok := g.thumbRectX(); ok {
+			t.Fatalf("%d equal Star columns reported a horizontal thumb; they exactly fill the viewport", n)
+		}
+		// No phantom overflow means no bottom gutter either, so the body keeps
+		// the row the gutter would have cost it.
+		wantH := float32(200) - 2*g.metrics.BevelWidth - g.headerHeight()
+		if g.viewport.H != wantH {
+			t.Fatalf("%d equal Star columns: viewport.H = %v, want %v — a bottom gutter was reserved for phantom overflow",
+				n, g.viewport.H, wantH)
+		}
 	}
 }
 
