@@ -209,6 +209,37 @@ func (fa *Face) Ascent() float32 {
 	return ascent
 }
 
+// kernBefore returns the kern adjustment to apply before placing cur,
+// given the previous glyph state: prevFont.kern(prev, cur) when there is
+// a previous glyph AND it came from the same source font, otherwise 0
+// (a kern table's glyph indices aren't meaningful across fonts, so
+// kerning is only applied within a single source font). This is the one
+// definition of that same-font kern rule; Measure, PrefixWidths, and
+// Draw all go through it (directly or via glyphAdvance) so they can't
+// drift.
+func (fa *Face) kernBefore(prevFont *Font, prev sfnt.GlyphIndex, hasPrev bool, curFont *Font, cur sfnt.GlyphIndex) float32 {
+	if hasPrev && prevFont == curFont {
+		return prevFont.kern(prev, cur, fa.SizePx)
+	}
+	return 0
+}
+
+// glyphAdvance advances a running pen width w by one glyph: it adds the
+// kern-to-previous (kernBefore) and then cur's own advance, returning the
+// new width. It threads w (rather than returning a bare delta) on purpose,
+// so the accumulation stays exactly (w+kern)+advance — the same float
+// addition order the pre-refactor loops used — keeping every partial sum
+// byte-identical. Measure and PrefixWidths accumulate with this. Draw does
+// not call it (it needs the intermediate pen position after the kern but
+// before the advance, to place the glyph), but it applies the same two
+// steps through the same kernBefore and Font.advance, so all three sites
+// share one advance+kern definition and stay identical by construction.
+func (fa *Face) glyphAdvance(w float32, prevFont *Font, prev sfnt.GlyphIndex, hasPrev bool, curFont *Font, cur sfnt.GlyphIndex) float32 {
+	w += fa.kernBefore(prevFont, prev, hasPrev, curFont, cur)
+	w += curFont.advance(cur, fa.SizePx)
+	return w
+}
+
 // PrefixWidths returns the pen width at every rune boundary of runes:
 // len(runes)+1 values, [0] always 0 and [i] the width of the first i
 // runes — so PrefixWidths(runes)[i] is exactly what Measure reports for
@@ -232,10 +263,7 @@ func (fa *Face) PrefixWidths(runes []rune) []float32 {
 	hasPrev := false
 	for i, r := range runes {
 		srcFont, gi := fa.resolveGlyph(r)
-		if hasPrev && prevFont == srcFont {
-			w += prevFont.kern(prev, gi, fa.SizePx)
-		}
-		w += srcFont.advance(gi, fa.SizePx)
+		w = fa.glyphAdvance(w, prevFont, prev, hasPrev, srcFont, gi)
 		prevFont, prev, hasPrev = srcFont, gi, true
 		widths[i+1] = w
 	}
@@ -303,10 +331,7 @@ func (fa *Face) measureUncached(s string) render.Size {
 	hasPrev := false
 	for _, r := range s {
 		srcFont, gi := fa.resolveGlyph(r)
-		if hasPrev && prevFont == srcFont {
-			w += prevFont.kern(prev, gi, fa.SizePx)
-		}
-		w += srcFont.advance(gi, fa.SizePx)
+		w = fa.glyphAdvance(w, prevFont, prev, hasPrev, srcFont, gi)
 		prevFont, prev, hasPrev = srcFont, gi, true
 	}
 	return render.Size{W: w, H: fa.LineHeight()}
@@ -377,9 +402,13 @@ func (fa *Face) Draw(r render.Renderer, at render.Point, s string, c render.Colo
 	hasPrev := false
 	for _, ch := range s {
 		srcFont, gi := fa.resolveGlyph(ch)
-		if hasPrev && prevFont == srcFont {
-			penX += prevFont.kern(prev, gi, fa.SizePx)
-		}
+		// Kern to the previous glyph BEFORE positioning this one (the pen
+		// must include the kern when the glyph's draw origin is computed
+		// below), then advance AFTER — same two steps, same kernBefore and
+		// Font.advance, that glyphAdvance accumulates for Measure and
+		// PrefixWidths, so caret positions and rendered pen positions can't
+		// drift apart.
+		penX += fa.kernBefore(prevFont, prev, hasPrev, srcFont, gi)
 
 		atlas := srcFont.sharedAtlas()
 		if e, err := atlas.glyphCoverage(gi, px); err == nil && !e.empty {

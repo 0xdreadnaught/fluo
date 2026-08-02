@@ -682,6 +682,11 @@ func TestFaceFallbackDrawBatchesPerTexture(t *testing.T) {
 // The mixed-script subtest additionally covers the fallback chain, where
 // consecutive glyphs come from different source fonts and kerning between
 // them must be suppressed on both paths alike.
+//
+// PrefixWidths and Measure now accumulate through the same Face.glyphAdvance
+// helper (which Draw also shares, via kernBefore + Font.advance), so this
+// contract holds by construction; the test remains as a guard against a
+// future edit that reintroduces a parallel pen.
 func TestFacePrefixWidthsMatchMeasurePrefixes(t *testing.T) {
 	f, err := Load(goregular.TTF)
 	if err != nil {
