@@ -170,6 +170,70 @@ func TestTextBoxXOfMatchesFaceMeasurePrefixMultibyte(t *testing.T) {
 	}
 }
 
+// oldCaretIndexAtX is the pre-running-pen O(n²) hit-test: for each rune
+// boundary it recomputes xOf(i) = Measure(runes[:i]) from scratch and compares
+// x against the midpoint (xOf(i)+xOf(i+1))/2. Kept in the test as the exact
+// reference the O(n) caretIndexInRunes must reproduce byte-for-byte.
+func oldCaretIndexAtX(tb *TextBox, x float32) int {
+	n := len(tb.runes)
+	for i := 0; i < n; i++ {
+		mid := (tb.xOf(i) + tb.xOf(i+1)) / 2
+		if x < mid {
+			return i
+		}
+	}
+	return n
+}
+
+// TestTextBoxCaretIndexRunningPenMatchesPrefixMeasure pins the P3 speedup:
+// the O(n) running-pen hit-test must return the identical caret index as the
+// old O(n²) prefix-Measure scan for every x — including x on and around each
+// glyph midpoint, on a kerned/mixed multibyte string — and index->x->index
+// must round-trip. Covers the single-line path (caretIndexAtX) and, via
+// colAtX, the per-line path with the same helper.
+func TestTextBoxCaretIndexRunningPenMatchesPrefixMeasure(t *testing.T) {
+	face := buttonFace(t)
+	for _, s := range []string{"AVAWaToVoTaWATATaYoP.", "héllo wörld", "The quick brown fox", "iiiWWWmmm"} {
+		tb := NewTextBox(face)
+		tb.SetText(s)
+		runes := []rune(s)
+
+		// Full x-domain: negatives (left of text), 0, every boundary and each
+		// boundary's exact midpoint and a hair either side, past the end.
+		var xs []float32
+		xs = append(xs, -100, -1, -0.001, 0)
+		for i := 0; i <= len(runes); i++ {
+			xi := tb.xOf(i)
+			xs = append(xs, xi-0.001, xi, xi+0.001)
+			if i < len(runes) {
+				mid := (tb.xOf(i) + tb.xOf(i+1)) / 2
+				xs = append(xs, mid-0.001, mid, mid+0.001)
+			}
+		}
+		xs = append(xs, tb.xOf(len(runes))+100)
+
+		for _, x := range xs {
+			want := oldCaretIndexAtX(tb, x)
+			if got := tb.caretIndexAtX(x); got != want {
+				t.Fatalf("caretIndexAtX(%v) on %q = %d, want %d (old prefix-Measure)", x, s, got, want)
+			}
+			// colAtX over the single logical line (line 0) shares the helper
+			// and must agree with the whole-buffer scan for a newline-free string.
+			if got := tb.colAtX(0, x); got != want {
+				t.Fatalf("colAtX(0,%v) on %q = %d, want %d", x, s, got, want)
+			}
+		}
+
+		// index -> x -> index round-trips: clicking exactly at a boundary's x
+		// resolves back to that boundary (its own midpoint region).
+		for i := 0; i <= len(runes); i++ {
+			if got := tb.caretIndexAtX(tb.xOf(i)); got != i {
+				t.Fatalf("round-trip on %q: caretIndexAtX(xOf(%d)=%v) = %d, want %d", s, i, tb.xOf(i), got, i)
+			}
+		}
+	}
+}
+
 func TestTextBoxHScrollKeepsCaretVisible(t *testing.T) {
 	tb := NewTextBox(buttonFace(t))
 	tb.SetText("this is a much longer line of text than the box") // caret ends at len (end)

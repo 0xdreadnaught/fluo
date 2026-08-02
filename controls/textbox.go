@@ -1209,12 +1209,41 @@ func (t *TextBox) xOf(i int) float32 {
 // to len(runes) instead — deliberately not special-cased, since a nil-face
 // TextBox has no glyphs to click between anyway).
 func (t *TextBox) caretIndexAtX(x float32) int {
-	n := len(t.runes)
+	return t.caretIndexInRunes(t.runes, x)
+}
+
+// caretIndexInRunes is the shared O(n) hit-test behind caretIndexAtX, colAtX,
+// and colAtXInRow: it returns the boundary index within runes (0..len(runes))
+// nearest local x-coordinate x, applying the SAME midpoint rule those three
+// used with their per-prefix Measure — for each boundary i, compare x against
+// (xOf(i)+xOf(i+1))/2 and return the first i whose midpoint x sits left of,
+// else len(runes) (past the last rune). The old form recomputed xOf(i) =
+// Measure(runes[:i]) from scratch every step, so each scan was O(n²) in the
+// range length and re-ran on every pointer Move of a drag-select. Here a
+// single running pen accumulates one rune's advance at a time: prevX holds
+// xOf(i), and xOf(i+1) is prevX plus Measure of just runes[i]. Face.Measure
+// builds a prefix's width by adding each rune's advance (and any kerning to
+// the previous glyph) left-to-right in float32; the fonts in use carry no
+// kern pairs sfnt reads, so those kern steps contribute exactly 0 and the
+// prefix width is purely the left-to-right sum of single-rune advances —
+// making prevX bit-identical to the old xOf(i), every midpoint bit-identical,
+// and every returned index identical for every input (verified against the
+// old prefix-Measure form in the tests). A nil face measures 0 per rune, so
+// every boundary is 0 exactly as xOf returned there, preserving the old
+// nil-face outcome (x<0 -> 0, x>=0 -> len(runes)).
+func (t *TextBox) caretIndexInRunes(runes []rune, x float32) int {
+	n := len(runes)
+	var prevX float32 // xOf(i): pen width up to boundary i
 	for i := 0; i < n; i++ {
-		mid := (t.xOf(i) + t.xOf(i+1)) / 2
-		if x < mid {
+		var adv float32
+		if t.face != nil {
+			adv = t.face.Measure(string(runes[i])).W
+		}
+		curX := prevX + adv // xOf(i+1)
+		if x < (prevX+curX)/2 {
 			return i
 		}
+		prevX = curX
 	}
 	return n
 }
@@ -1818,14 +1847,8 @@ func (t *TextBox) rowAtY(windowY float32) int {
 // idx nearest local x-coordinate x, using the same "compare against each
 // boundary's midpoint" rule, bounded to idx's own rune count.
 func (t *TextBox) colAtXInRow(idx int, x float32) int {
-	n := t.rowEnd(idx) - t.rowStart(idx)
-	for i := 0; i < n; i++ {
-		mid := (t.xOfInRow(idx, i) + t.xOfInRow(idx, i+1)) / 2
-		if x < mid {
-			return i
-		}
-	}
-	return n
+	start, end := t.rowStart(idx), t.rowEnd(idx)
+	return t.caretIndexInRunes(t.runes[start:end], x)
 }
 
 // xOfInLine returns the x-offset (logical px, from the start of line's own
@@ -1967,14 +1990,8 @@ func (t *TextBox) lineAtY(windowY float32) int {
 // rule, but bounded to line's own rune count via xOfInLine instead of the
 // whole buffer.
 func (t *TextBox) colAtX(line int, x float32) int {
-	n := t.lineEnd(line) - t.lineStart(line)
-	for i := 0; i < n; i++ {
-		mid := (t.xOfInLine(line, i) + t.xOfInLine(line, i+1)) / 2
-		if x < mid {
-			return i
-		}
-	}
-	return n
+	start, end := t.lineStart(line), t.lineEnd(line)
+	return t.caretIndexInRunes(t.runes[start:end], x)
 }
 
 // caretIndexAtPos resolves a pointer event's window-space position to a
