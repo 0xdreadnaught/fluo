@@ -686,6 +686,43 @@ func TestItemsReentrancyGuard(t *testing.T) {
 	}
 }
 
+// TestItemsMutationOnFirstBuildNotLost is the FIX B1 regression: a makeItem
+// that mutates the list on the INITIAL build pass must still trigger a
+// coalesced rebuild, so the panel reflects the appended item instead of being
+// left permanently stale. Before the fix, Items subscribed to OnChanged only
+// AFTER running the first rebuild, so the first-pass mutation reached no
+// subscriber, set no pending flag, and was dropped forever.
+func TestItemsMutationOnFirstBuildNotLost(t *testing.T) {
+	face, err := text.Load(goregular.TTF)
+	if err != nil {
+		t.Fatalf("text.Load: %v", err)
+	}
+	textFace := text.NewFace(face, 14)
+
+	l := NewList[string]("Alice")
+	panel := controls.NewStackPanel(controls.Vertical)
+
+	appended := false
+	Items[string](l, panel, func(item string, index int) core.Widget {
+		tb := controls.NewTextBox(textFace)
+		tb.SetText(item)
+		// Mutate on the FIRST build pass, exactly once.
+		if item == "Alice" && !appended {
+			appended = true
+			l.Add("Bob")
+		}
+		return tb
+	})
+
+	// The coalesced rebuild after the first pass must have materialized Bob.
+	if got := len(panel.Children()); got != 2 {
+		t.Fatalf("panel.Children() = %d, want 2 (first-pass mutation must not be lost)", got)
+	}
+	if l.Len() != 2 || l.At(0) != "Alice" || l.At(1) != "Bob" {
+		t.Fatalf("list = %d items %q/%q, want [Alice Bob]", l.Len(), l.At(0), l.At(l.Len()-1))
+	}
+}
+
 // --- OnChange (granular) events ---
 
 func TestListOnChangeAddSingleItem(t *testing.T) {
@@ -708,12 +745,82 @@ func TestListOnChangeAddMultipleItems(t *testing.T) {
 	l.OnChange(func(c Change) { changes = append(changes, c) })
 	l.Add(2, 3, 4)
 
-	if len(changes) != 3 {
-		t.Fatalf("changes count = %d, want 3", len(changes))
+	// A multi-item Add coalesces into a single Reset (not one ChangeAdd per
+	// item) so an index can't go stale if a subscriber mutates mid-notify —
+	// see TestListOnChangeMultiAddSubscriberRemovesIndexZero.
+	if len(changes) != 1 {
+		t.Fatalf("changes count = %d, want 1 (coalesced Reset)", len(changes))
 	}
-	for i, wantIdx := range []int{1, 2, 3} {
-		if changes[i].Kind != ChangeAdd || changes[i].Index != wantIdx {
-			t.Fatalf("changes[%d] = {Kind: %d, Index: %d}, want {Kind: %d, Index: %d}", i, changes[i].Kind, changes[i].Index, ChangeAdd, wantIdx)
+	if changes[0].Kind != ChangeReset || changes[0].Index != -1 {
+		t.Fatalf("change[0] = {Kind: %d, Index: %d}, want {Kind: %d, Index: -1}", changes[0].Kind, changes[0].Index, ChangeReset)
+	}
+}
+
+// TestListOnChangeMultiAddSubscriberRemovesIndexZero is the FIX B2 regression:
+// a subscriber that enforces a cap by RemoveAt(0) on the first granular event
+// of a multi-item Add must not be handed stale/out-of-range indices. Before
+// the coalescing fix, Add fired one ChangeAdd per item in a loop; the removal
+// shifted every later item down one, so the subsequent ChangeAdd indices named
+// the wrong rows and eventually ran off the end (a consumer's At would panic).
+// With the coalesced Reset there is a single event carrying no index.
+func TestListOnChangeMultiAddSubscriberRemovesIndexZero(t *testing.T) {
+	l := NewList[int](1)
+	var seen []Change
+	depth := 0
+	l.OnChange(func(c Change) {
+		seen = append(seen, c)
+		// Cap-enforcing subscriber: drop the oldest on the FIRST event only
+		// (guard the reentrant RemoveAt notification against recursing).
+		if depth == 0 && l.Len() > 2 {
+			depth++
+			l.RemoveAt(0)
+			depth--
+		}
+	})
+
+	// Would previously panic (At/RemoveAt out of range) or misindex.
+	l.Add(2, 3, 4)
+
+	// The list must be internally consistent afterwards: every index in range.
+	for i := 0; i < l.Len(); i++ {
+		_ = l.At(i)
+	}
+	// First event delivered for the Add itself is the coalesced Reset.
+	if len(seen) == 0 || seen[0].Kind != ChangeReset {
+		t.Fatalf("first event = %+v, want a ChangeReset for the multi-Add", seen)
+	}
+}
+
+// TestListNotifyStableRegistrationOrder is the other half of FIX B2: coarse and
+// granular subscribers are notified in the order they registered, not in a
+// nondeterministic map-iteration order.
+func TestListNotifyStableRegistrationOrder(t *testing.T) {
+	// Run repeatedly: a map-order regression is probabilistic, so a single
+	// pass could pass by luck.
+	for iter := 0; iter < 50; iter++ {
+		l := NewList[int](1)
+		var order []int
+		for id := 0; id < 8; id++ {
+			id := id
+			l.OnChanged(func() { order = append(order, id) })
+		}
+		l.Add(2)
+		for i := 0; i < len(order); i++ {
+			if order[i] != i {
+				t.Fatalf("coarse order = %v, want ascending registration order", order)
+			}
+		}
+
+		var gorder []int
+		for id := 0; id < 8; id++ {
+			id := id
+			l.OnChange(func(Change) { gorder = append(gorder, id) })
+		}
+		l.Add(3)
+		for i := 0; i < len(gorder); i++ {
+			if gorder[i] != i {
+				t.Fatalf("granular order = %v, want ascending registration order", gorder)
+			}
 		}
 	}
 }

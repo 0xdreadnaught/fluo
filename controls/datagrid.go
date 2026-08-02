@@ -2,7 +2,6 @@ package controls
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/0xdreadnaught/fluo/core"
 	"github.com/0xdreadnaught/fluo/input"
@@ -266,7 +265,7 @@ func (g *DataGrid) rowAt(pos render.Point) (idx int, ok bool) {
 	if g.rowH <= 0 || !g.viewport.Contains(pos) {
 		return 0, false
 	}
-	idx = int(math.Floor(float64((pos.Y - g.viewport.Y + g.offset) / g.rowH)))
+	idx = g.rowIndexAt(pos.Y)
 	if idx < 0 || idx >= g.RowCount() {
 		return 0, false
 	}
@@ -398,7 +397,7 @@ func (g *DataGrid) ArrangeContent(bounds render.Rect) {
 
 	for row := 0; row < n; row++ {
 		rowIdx := first + row
-		rowY := viewport.Y + float32(rowIdx)*g.rowH - g.offset
+		rowY := g.rowTop(rowIdx)
 
 		for c := 0; c < numCols; c++ {
 			slot := row*numCols + c
@@ -549,7 +548,7 @@ func (g *DataGrid) Render(r render.Renderer) {
 	sw := g.metrics.StrokeWidth
 	for row := 0; row < g.visibleCount; row++ {
 		rowIdx := g.visibleFirst + row
-		rowY := g.viewport.Y + float32(rowIdx)*g.rowH - g.offset
+		rowY := g.rowTop(rowIdx)
 		rowRect := render.Rect{X: g.viewport.X, Y: rowY, W: g.viewport.W, H: g.rowH}
 
 		if rowIdx == g.selected {

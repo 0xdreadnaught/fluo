@@ -935,3 +935,57 @@ func TestOverlaySetContentNilClearsContent(t *testing.T) {
 		t.Fatalf("re-set content's parent = %v, want host", got)
 	}
 }
+
+// TestClosingStackedPopupRefocusesSurvivor is the FIX #20 regression: with two
+// modal dialogs open, closing the top one (which strips focus from its own
+// scrim via router.Detach) must hand focus to the dialog now beneath it, so
+// Escape still reaches that dialog. Before the fix, focus went nil and stayed
+// nil, so OverlayHost.OnKey delegated the next Escape to CONTENT and the
+// surviving button-less dialog — whose only close path IS Escape — was stuck.
+func TestClosingStackedPopupRefocusesSurvivor(t *testing.T) {
+	host, r := newTestDialogHost(t)
+	face := buttonFace(t)
+
+	// Both button-less: Escape is the only way to close either one.
+	var lower []DialogResult
+	ShowDialog(host, face, DialogSpec{
+		Title: "Lower", Body: "beneath",
+		OnResult: func(res DialogResult) { lower = append(lower, res) },
+	})
+	var upper []DialogResult
+	ShowDialog(host, face, DialogSpec{
+		Title: "Upper", Body: "on top",
+		OnResult: func(res DialogResult) { upper = append(upper, res) },
+	})
+
+	if got := host.PopupCount(); got != 2 {
+		t.Fatalf("PopupCount = %d, want 2", got)
+	}
+	lowerScrim := host.popups[0].w
+	upperScrim := host.popups[1].w
+	if r.Focused() != upperScrim {
+		t.Fatalf("Focused() = %v, want the upper dialog's scrim after it opened", r.Focused())
+	}
+
+	// Close the top dialog.
+	r.KeyDown(input.KeyEscape, 0, 0)
+
+	if len(upper) != 1 || upper[0] != DialogDismissed {
+		t.Fatalf("upper results = %v, want [DialogDismissed]", upper)
+	}
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after first Esc = %d, want 1 (lower survives)", got)
+	}
+	if r.Focused() != lowerScrim {
+		t.Fatalf("Focused() after closing the top dialog = %v, want the lower dialog's scrim (Esc must still reach it)", r.Focused())
+	}
+
+	// Escape must now close the survivor.
+	r.KeyDown(input.KeyEscape, 0, 0)
+	if len(lower) != 1 || lower[0] != DialogDismissed {
+		t.Fatalf("lower results after second Esc = %v, want [DialogDismissed]", lower)
+	}
+	if got := host.PopupCount(); got != 0 {
+		t.Fatalf("PopupCount after second Esc = %d, want 0", got)
+	}
+}

@@ -211,6 +211,60 @@ func TestToolTipRealRouterMoveShowsLeaveHidesPressPassesThrough(t *testing.T) {
 	}
 }
 
+// TestToolTipPendingTimerCancelledWhenModalOpens is FIX #21 scenario (b): a
+// tip whose dwell timer is still pending when a modal popup opens (e.g. from a
+// keystroke, while the pointer dwells over the tooltip) must NOT fire — before
+// the fix its timer kept running because the modal capture silences the hover
+// diffing that would otherwise Leave the ToolTipArea, so the tip popped over
+// the modal at stale bounds once the delay elapsed.
+func TestToolTipPendingTimerCancelledWhenModalOpens(t *testing.T) {
+	start := time.Now()
+	q := timers.NewQueue(start)
+
+	ta, host := newTestTooltip(t)
+	ta.SetTimers(q)
+
+	ta.OnPointer(&input.PointerEvent{Action: input.Enter}) // arms the dwell timer
+	if ta.pendingTimer == nil {
+		t.Fatal("pendingTimer nil right after Enter, want an armed timer")
+	}
+
+	// A modal popup opens while the timer is still pending.
+	host.ShowPopup(NewFixed(30, 15, render.RGB(1, 2, 3)), render.Rect{X: 10, Y: 10}, nil)
+
+	if ta.pendingTimer != nil {
+		t.Fatal("pendingTimer still armed after a modal opened, want it stopped")
+	}
+
+	// Advancing past the delay must NOT show the tip: only the modal remains.
+	q.Advance(start.Add(2 * tooltipDelay))
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after Advance = %d, want 1 (the modal only; the tip must never fire over it)", got)
+	}
+}
+
+// TestToolTipShowingTipHiddenWhenModalOpens is FIX #21 scenario (a): a tip
+// that is already showing when a modal popup opens must be hidden, not left
+// floating beside the modal for its whole lifetime.
+func TestToolTipShowingTipHiddenWhenModalOpens(t *testing.T) {
+	ta, host := newTestTooltip(t) // no timers: Enter shows immediately
+
+	ta.OnPointer(&input.PointerEvent{Action: input.Enter})
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after Enter = %d, want 1 (tip showing)", got)
+	}
+
+	host.ShowPopup(NewFixed(30, 15, render.RGB(1, 2, 3)), render.Rect{X: 10, Y: 10}, nil)
+
+	// The tip is gone; only the modal remains.
+	if got := host.PopupCount(); got != 1 {
+		t.Fatalf("PopupCount after the modal opened = %d, want 1 (tip hidden, modal only)", got)
+	}
+	if ta.open {
+		t.Fatal("ta.open still true after a modal opened, want the tip hidden")
+	}
+}
+
 func TestToolTipWrapperTransparentToChildLayout(t *testing.T) {
 	child := NewFixed(40, 20, render.RGB(1, 2, 3))
 	ta := NewToolTipArea(child, nil, "hint")

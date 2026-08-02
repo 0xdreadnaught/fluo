@@ -62,6 +62,11 @@ type ToolTipArea struct {
 	open  bool
 	popup core.Widget
 
+	// modalCancel unregisters this ToolTipArea from its OverlayHost's
+	// modal-open observers (see armModalCancel). Non-nil exactly while a tip
+	// is pending or showing; nil otherwise.
+	modalCancel func()
+
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
 }
@@ -92,8 +97,50 @@ func (ta *ToolTipArea) SetTimers(q *timers.Queue) *ToolTipArea {
 		ta.pendingTimer.Stop()
 		ta.pendingTimer = nil
 	}
+	if !ta.open {
+		ta.disarmModalCancel()
+	}
 	ta.timerQueue = q
 	return ta
+}
+
+// armModalCancel subscribes this ToolTipArea to its OverlayHost so it is told
+// the moment a MODAL popup opens, while a tip is pending or showing. A modal
+// popup captures the router and silences the ordinary hover diffing this
+// ToolTipArea relies on for its Leave (see OverlayHost's "Hover" paragraph), so
+// without this a pending tip would still fire OVER the modal, and a showing tip
+// would strand beside it until the modal closed. Idempotent, and a no-op when
+// there is no OverlayHost above us (nothing can open a modal popup anyway).
+func (ta *ToolTipArea) armModalCancel() {
+	if ta.modalCancel != nil {
+		return
+	}
+	host := OverlayHostFor(ta)
+	if host == nil {
+		return
+	}
+	ta.modalCancel = host.onModalOpen(ta.cancelAcrossModal)
+}
+
+// disarmModalCancel unregisters the modal-open observer armed above, if any.
+func (ta *ToolTipArea) disarmModalCancel() {
+	if ta.modalCancel != nil {
+		ta.modalCancel()
+		ta.modalCancel = nil
+	}
+}
+
+// cancelAcrossModal drops a pending or showing tip when a modal popup opens
+// over the content this ToolTipArea lives in — the same teardown Leave would
+// have done, invoked from OverlayHost.notifyModalOpen because Leave itself can
+// no longer arrive (the modal capture silences hover diffing).
+func (ta *ToolTipArea) cancelAcrossModal() {
+	if ta.pendingTimer != nil {
+		ta.pendingTimer.Stop()
+		ta.pendingTimer = nil
+	}
+	ta.hideTip()
+	ta.disarmModalCancel()
 }
 
 // MeasureContent measures child with the full available space and reports
@@ -162,6 +209,10 @@ func (ta *ToolTipArea) OnPointer(e *input.PointerEvent) {
 			ta.pendingTimer.Stop()
 			ta.pendingTimer = nil
 		}
+		// Arm the modal-open cancel for the whole pending-or-showing window, so
+		// a modal popup opening (typically from a keystroke, while the pointer
+		// dwells here) drops the tip that could no longer be Left normally.
+		ta.armModalCancel()
 		if ta.timerQueue == nil {
 			ta.showTip()
 			return
@@ -176,6 +227,7 @@ func (ta *ToolTipArea) OnPointer(e *input.PointerEvent) {
 			ta.pendingTimer = nil
 		}
 		ta.hideTip()
+		ta.disarmModalCancel()
 	}
 }
 
