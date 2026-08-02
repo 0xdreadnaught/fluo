@@ -352,6 +352,41 @@ func TestDataGridHoverClearedOnWheel(t *testing.T) {
 	}
 }
 
+// TestDataGridOverscrollXLeavesNoDeadZone pins the end-stop dead zone on the
+// virtualizer's side of the clamp: ScrollToX writes rawOffsetX unbounded, so
+// a request far past the end used to sit there while offsetX stayed pinned at
+// the max, and every notch back had to burn off the whole overshoot before
+// anything moved.
+func TestDataGridOverscrollXLeavesNoDeadZone(t *testing.T) {
+	g := NewDataGrid(nil)
+	g.SetColumns(Column{Width: Px(300)})
+	g.SetRowCount(2)
+	g.rowH = 48
+	layoutDataGrid(g, 0, 0, 100, 200)
+
+	maxX := g.contentW - g.viewport.W
+	if maxX <= 2*scrollWheelStep {
+		t.Fatalf("fixture: horizontal range %v is too short to over-scroll meaningfully", maxX)
+	}
+
+	g.ScrollToX(10000)
+	layoutDataGrid(g, 0, 0, 100, 200)
+	if got := g.OffsetX(); got != maxX {
+		t.Fatalf("offsetX after over-scrolling = %v, want the %v end stop", got, maxX)
+	}
+
+	r := input.NewRouter()
+	back := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: 1}, Mods: input.ModShift, Router: r}
+	g.OnPointer(back)
+	if !back.Handled {
+		t.Fatal("a notch back off the horizontal end stop went unhandled — the raw accumulator kept the overshoot")
+	}
+	layoutDataGrid(g, 0, 0, 100, 200)
+	if got := g.OffsetX(); got != maxX-scrollWheelStep {
+		t.Fatalf("offsetX one notch back from the end stop = %v, want %v", got, maxX-scrollWheelStep)
+	}
+}
+
 // TestDataGridWheelNotHandledWhenRowsFit pins the same wheel-consumed-but-
 // nothing-moved rule ListView and ScrollViewer follow: a grid whose rows all
 // fit scrolls nothing, so the notch must stay unhandled for an enclosing

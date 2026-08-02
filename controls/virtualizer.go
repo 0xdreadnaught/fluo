@@ -45,8 +45,9 @@ type virtualizer struct {
 
 	// rawOffset is the last value requested via wheel/drag, before clamping.
 	// offset is the clamped value as of the last layout call — layout is the
-	// single source of truth for clamping. rawOffsetX/offsetX are the exact
-	// X-axis counterparts.
+	// single source of truth for clamping, and folds the clamped result back
+	// into rawOffset so the pair only ever disagrees for requests made since
+	// that call. rawOffsetX/offsetX are the exact X-axis counterparts.
 	rawOffset, offset   float32
 	rawOffsetX, offsetX float32
 
@@ -97,13 +98,23 @@ func (v *virtualizer) totalHeight() float32 {
 // [0, max(0, totalHeight-viewport.H)] and rawOffsetX into
 // [0, max(0, contentWidth-viewport.W)] — via the same clampScrollOffset
 // ScrollViewer itself uses, so the two controls clamp identically — and
-// stores the clamped results (read back via offset/offsetX).
+// stores the clamped results (read back via offset/offsetX), folding each
+// back into its raw counterpart so the unbounded accumulators can't drift
+// past the end stop.
 func (v *virtualizer) layout(viewport render.Rect, contentWidth float32) {
 	v.viewport = viewport
 	v.contentW = contentWidth
 
 	v.offset = clampScrollOffset(v.rawOffset, v.totalHeight(), viewport.H)
 	v.offsetX = clampScrollOffset(v.rawOffsetX, contentWidth, viewport.W)
+
+	// Fold the clamp back into the raw accumulators, exactly as
+	// ScrollViewer.ArrangeContent does (see its comment): scrollBy/scrollByX
+	// add to them without bound, so an overshoot at an end stop would
+	// otherwise have to be burned off notch by notch before the clamped
+	// offset moved again.
+	v.rawOffset = v.offset
+	v.rawOffsetX = v.offsetX
 }
 
 // visibleRange returns the half-open row-index range [first, last) that

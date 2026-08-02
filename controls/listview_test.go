@@ -291,6 +291,35 @@ func TestListViewWheelScrollsAndHandles(t *testing.T) {
 	}
 }
 
+// TestListViewOverscrollLeavesNoDeadZone pins the end-stop dead zone on the
+// vertical axis: a scroll request past the end must not stay stranded in the
+// raw accumulator, or every notch back has to burn off the overshoot before
+// the clamped offset moves at all.
+func TestListViewOverscrollLeavesNoDeadZone(t *testing.T) {
+	items := newFakeListItems(make([]string, 20)...)
+	l := NewListView(nil, items).SetRowHeight(48)
+	l.rawOffset = 10000 // far past the end
+	layoutListView(l, 0, 0, 100, 100)
+
+	maxY := float32(20*48) - l.viewport.H
+	if got := l.offset; got != maxY {
+		t.Fatalf("offset after over-scrolling = %v, want the %v end stop", got, maxY)
+	}
+	if l.rawOffset != l.offset {
+		t.Fatalf("rawOffset = %v after layout clamped offset to %v — the accumulator kept the overshoot", l.rawOffset, l.offset)
+	}
+
+	up := &input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: 1}, Router: input.NewRouter()}
+	l.OnPointer(up)
+	if !up.Handled {
+		t.Fatal("a notch back off the end stop went unhandled")
+	}
+	layoutListView(l, 0, 0, 100, 100)
+	if got := l.offset; got != maxY-scrollWheelStep {
+		t.Fatalf("offset one notch back from the end stop = %v, want %v", got, maxY-scrollWheelStep)
+	}
+}
+
 // TestListViewWheelBubblesToOuterScrollerWhenRowsFit pins the nested-scroller
 // dead zone. A ListView whose rows already fit its own viewport scrolls
 // nothing, so it has to leave the notch unhandled — input.Bubble stops at the

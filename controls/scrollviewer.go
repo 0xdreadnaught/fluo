@@ -62,7 +62,9 @@ type ScrollViewer struct {
 	// ScrollTo/ScrollBy (vertical) and ScrollToX/ScrollByX (horizontal),
 	// before clamping. offset/offsetX are the clamped values as of the
 	// last ArrangeContent call — ArrangeContent is the single source of
-	// truth for clamping on both axes (see its doc comment).
+	// truth for clamping on both axes (see its doc comment), and folds each
+	// clamped result back into its raw counterpart, so the pair only ever
+	// disagrees for requests made since that pass.
 	rawOffset, offset   float32
 	rawOffsetX, offsetX float32
 
@@ -242,7 +244,9 @@ func (s *ScrollViewer) MeasureContent(available render.Size) render.Size {
 //     thumb ever shown for that sliver — a narrow, harmless edge case (see
 //     ArrangeWidget below).
 //  3. Clamps rawOffset/rawOffsetX into [0, max(0, childH/W-viewportH/W)],
-//     stores the clamped results (read back via OffsetY/OffsetX).
+//     stores the clamped results (read back via OffsetY/OffsetX) and folds
+//     them back into rawOffset/rawOffsetX so the unbounded accumulators
+//     can't drift past the end stop.
 //  4. Arranges the child at {viewport.X-offsetX, viewport.Y-offset,
 //     arrangeW, childH} — arrangeW is at least viewport.W (preserving the
 //     original Stretch-to-fill behavior for non-overflowing content) but
@@ -279,6 +283,17 @@ func (s *ScrollViewer) ArrangeContent(bounds render.Rect) {
 	s.childH = childH
 	s.offset = offset
 	s.offsetX = offsetX
+
+	// Fold the clamp back into the raw accumulators. ScrollBy/ScrollByX add
+	// to them without bound, so holding a scroll at an end stop otherwise
+	// leaves rawOffset far past the max while offset sits pinned at it — and
+	// every subsequent step back has to first burn off all that accumulated
+	// slack before the clamped offset moves at all, a dead zone as many
+	// notches deep as the overshoot. The raw value's only job is to carry a
+	// request from between two arrange passes; once this pass has resolved
+	// it, the clamped result IS the current request.
+	s.rawOffset = offset
+	s.rawOffsetX = offsetX
 
 	if s.child != nil {
 		arrangeW := viewport.W
