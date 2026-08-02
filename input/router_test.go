@@ -1485,3 +1485,275 @@ func TestClickRunScopedToWidget(t *testing.T) {
 		t.Fatalf("second press on B = %d, want 2 (same widget continues the run)", got)
 	}
 }
+
+// --- focus scopes (modal focus trap) -----------------------------------
+//
+// The shape every test below shares stands in for an open modal dialog: two
+// focusable BACKGROUND probes that are still in the tree (and so still in
+// the unscoped tab order) plus a scope-root probe standing in for the
+// dialog's scrim — deliberately NOT focusable itself, exactly like the real
+// scrim — wrapping two focusable probes of its own.
+
+// newFocusProbe returns a sized probe (probes are zero-sized by default, and
+// these trees are laid out so hit-testing works alongside the key paths).
+func newFocusProbe(name string, focusable bool) *probe {
+	p := &probe{name: name, focusable: focusable}
+	p.SetWidth(50)
+	p.SetHeight(50)
+	return p
+}
+
+// newFocusScopeSurface returns one modal-surface stand-in: a non-focusable
+// scope root wrapping two focusable probes, named <prefix>1/<prefix>2.
+func newFocusScopeSurface(prefix string) (scope, a, b *probe) {
+	a, b = newFocusProbe(prefix+"1", true), newFocusProbe(prefix+"2", true)
+	scope = newFocusProbe(prefix, false)
+	scope.setChild(controls.NewCanvas().Add(a, 0, 0).Add(b, 60, 0))
+	return scope, a, b
+}
+
+// newFocusScopeTree builds the shared shape, laid out and ready to dispatch
+// into: canvas root [bg1, bg2, scope[m1, m2]] in that document order. Every
+// probe records the keys it receives, so a test can assert not only where
+// focus went but which widget a key actually reached.
+func newFocusScopeTree() (root core.Widget, bg1, bg2, scope, m1, m2 *probe) {
+	bg1, bg2 = newFocusProbe("bg1", true), newFocusProbe("bg2", true)
+	scope, m1, m2 = newFocusScopeSurface("scope")
+	root = controls.NewCanvas().Add(bg1, 0, 0).Add(bg2, 60, 0).Add(scope, 0, 60)
+	layout(root, 200, 200)
+	return root, bg1, bg2, scope, m1, m2
+}
+
+// wantFocus fails the test unless r's focused widget is want.
+func wantFocus(t *testing.T, r *input.Router, want *probe, ctx string) {
+	t.Helper()
+	got, ok := r.Focused().(*probe)
+	if !ok {
+		t.Fatalf("Focused() %s = %v, want %s", ctx, r.Focused(), want.name)
+	}
+	if got != want {
+		t.Fatalf("Focused() %s = %s, want %s", ctx, got.name, want.name)
+	}
+}
+
+// gotKey reports whether p received at least one key event.
+func gotKey(p *probe) bool {
+	for _, e := range p.events {
+		if e == "key" {
+			return true
+		}
+	}
+	return false
+}
+
+func TestFocusScopeTabCyclesOnlyWithinScope(t *testing.T) {
+	root, bg1, _, scope, m1, m2 := newFocusScopeTree()
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.Focus(bg1) // whatever the user was on before the modal opened
+	r.PushFocusScope(scope)
+	wantFocus(t, r, scope, "after PushFocusScope")
+
+	// Three Tabs: into the scope, across it, and wrapping back to its first
+	// entry — never onto bg1/bg2, which are still visible and still focusable.
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, m1, "after the first Tab")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, m2, "after the second Tab")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, m1, "after the wrapping Tab")
+}
+
+func TestFocusScopeShiftTabCyclesOnlyWithinScope(t *testing.T) {
+	root, bg1, _, scope, m1, m2 := newFocusScopeTree()
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.Focus(bg1)
+	r.PushFocusScope(scope)
+
+	r.KeyDown(input.KeyTab, 0, input.ModShift)
+	wantFocus(t, r, m2, "after the first Shift+Tab") // enters at the scope's LAST entry
+	r.KeyDown(input.KeyTab, 0, input.ModShift)
+	wantFocus(t, r, m1, "after the second Shift+Tab")
+	r.KeyDown(input.KeyTab, 0, input.ModShift)
+	wantFocus(t, r, m2, "after the wrapping Shift+Tab")
+}
+
+func TestPushFocusScopeKeepsFocusAlreadyInsideIt(t *testing.T) {
+	root, _, _, scope, m1, _ := newFocusScopeTree()
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.Focus(m1)
+	r.PushFocusScope(scope)
+	wantFocus(t, r, m1, "after pushing a scope around the already-focused widget")
+}
+
+func TestFocusScopeKeyNotDeliveredOutOfScope(t *testing.T) {
+	root, bg1, _, scope, _, _ := newFocusScopeTree()
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PushFocusScope(scope)
+	r.Focus(bg1) // e.g. a caller focusing a background widget behind the modal
+
+	r.KeyDown(input.KeySpace, ' ', 0)
+
+	if gotKey(bg1) {
+		t.Fatalf("bg1.events = %v, want no key (a scope must not let Space reach a background widget)", bg1.events)
+	}
+	if !gotKey(scope) {
+		t.Fatalf("scope.events = %v, want a key (delivery falls back to the scope root)", scope.events)
+	}
+}
+
+func TestFocusScopeUnfocusedKeyReachesScopeRoot(t *testing.T) {
+	root, _, _, scope, _, _ := newFocusScopeTree()
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PushFocusScope(scope)
+	r.Focus(nil)
+
+	r.KeyDown(input.KeyEscape, 0, 0)
+
+	if !gotKey(scope) {
+		t.Fatalf("scope.events = %v, want a key (an unfocused key must still reach the scope root)", scope.events)
+	}
+}
+
+func TestFocusScopeWithNoFocusablesKeepsScopeRootFocused(t *testing.T) {
+	// The button-less-dialog shape: a scope root with nothing focusable
+	// inside it at all, whose own OnKey is the only thing that can close it.
+	bg := newFocusProbe("bg", true)
+	scope := newFocusProbe("scope", false)
+	scope.setChild(newFocusProbe("inert", false))
+	root := controls.NewCanvas().Add(bg, 0, 0).Add(scope, 0, 60)
+	layout(root, 200, 200)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+	r.Focus(bg)
+	r.PushFocusScope(scope)
+
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, scope, "after Tab in a scope with no focusable widgets")
+	if gotKey(bg) {
+		t.Fatalf("bg.events = %v, want no key", bg.events)
+	}
+
+	r.KeyDown(input.KeyEscape, 0, 0)
+	if !gotKey(scope) {
+		t.Fatalf("scope.events = %v, want a key (Escape must reach a button-less scope root)", scope.events)
+	}
+}
+
+func TestPopFocusScopeRestoresTraversal(t *testing.T) {
+	root, bg1, bg2, scope, m1, m2 := newFocusScopeTree()
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PushFocusScope(scope)
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, m1, "after Tab inside the scope")
+
+	r.PopFocusScope()
+	wantFocus(t, r, m1, "after popping the last scope") // pop alone moves nothing
+
+	// The whole tree is back in the tab order, in document order.
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, m2, "after Tab with no scope active")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, bg1, "after the wrapping Tab with no scope active")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, bg2, "after another Tab with no scope active")
+}
+
+func TestNestedFocusScopesTrapTopmost(t *testing.T) {
+	// Two sibling modal surfaces, opened one over the other.
+	outer, m1, m2 := newFocusScopeSurface("outer")
+	inner, n1, n2 := newFocusScopeSurface("inner")
+	bg := newFocusProbe("bg", true)
+	root := controls.NewCanvas().Add(bg, 0, 0).Add(outer, 0, 60).Add(inner, 0, 120)
+	layout(root, 200, 300)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PushFocusScope(outer)
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, m1, "after Tab in the outer scope")
+
+	r.PushFocusScope(inner)
+	wantFocus(t, r, inner, "after pushing the nested scope")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, n1, "after Tab in the nested scope")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, n2, "after a second Tab in the nested scope")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, n1, "after the wrapping Tab in the nested scope")
+
+	// Closing the nested surface hands the trap back to the one beneath, and
+	// re-homes focus (it was stranded in the scope that just went away).
+	r.PopFocusScope()
+	wantFocus(t, r, outer, "after popping the nested scope")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, m1, "after Tab back in the outer scope")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, m2, "after a second Tab back in the outer scope")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, m1, "after the wrapping Tab back in the outer scope")
+}
+
+func TestNoFocusScopeTraversalUnchanged(t *testing.T) {
+	// Regression lock: with an empty scope stack, every focus path behaves
+	// exactly as it did before scopes existed — full-tree tab order in
+	// document order, and keys bubbling from the focused widget.
+	root, bg1, bg2, _, m1, m2 := newFocusScopeTree()
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, bg1, "after the first Tab")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, bg2, "after Tab")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, m1, "after Tab into the (unscoped) subtree")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, m2, "after Tab")
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, bg1, "after the wrapping Tab")
+
+	r.KeyDown(input.KeyEscape, 0, 0)
+	if !gotKey(bg1) {
+		t.Fatalf("bg1.events = %v, want a key (unscoped dispatch goes to the focused widget)", bg1.events)
+	}
+}
+
+func TestFocusScopeNilPushAndEmptyPopAreNoOps(t *testing.T) {
+	root, bg1, bg2, _, _, _ := newFocusScopeTree()
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PopFocusScope() // nothing pushed yet
+	r.PushFocusScope(nil)
+
+	r.Focus(bg1)
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, bg2, "after Tab (neither call should have restricted anything)")
+}
+
+func TestSetRootDropsFocusScopes(t *testing.T) {
+	root, bg1, bg2, scope, _, _ := newFocusScopeTree()
+	r := input.NewRouter()
+	r.SetRoot(root)
+	r.PushFocusScope(scope)
+
+	r.SetRoot(root) // a new tree (here, the same one) starts unrestricted
+
+	r.Focus(bg1)
+	r.KeyDown(input.KeyTab, 0, 0)
+	wantFocus(t, r, bg2, "after Tab following SetRoot")
+}

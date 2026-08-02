@@ -46,6 +46,17 @@ type Router struct {
 	// Focus's doc comment and TestFocusReentrancyIgnored).
 	focusing bool
 
+	// focusScopes is the focus-trap stack: the last element (if any) is the
+	// ACTIVE scope root, and every element before it is a scope that was
+	// itself active when a later PushFocusScope nested over it (a dialog
+	// opened from a dialog). While it is non-empty, Tab/Shift+Tab cycle only
+	// within the active root's own subtree and key events never dispatch
+	// into a widget outside it — see PushFocusScope/PopFocusScope, focusables
+	// and dispatchKey. Empty (the zero value, and the state for an app with
+	// no modal surface open) means no restriction at all: every focus path
+	// below behaves exactly as it did before scopes existed.
+	focusScopes []core.Widget
+
 	// clipboard is the host-provided system clipboard access, or nil if the
 	// host hasn't wired one (e.g. headless/test routers). Set via
 	// SetClipboard; see Clipboard.
@@ -80,15 +91,18 @@ func NewRouter() *Router {
 }
 
 // SetRoot sets the root widget for this router. SetRoot resets hover,
-// capture, and focus: the previous tree's hover path and pointer capture are
-// discarded directly (no Enter/Leave or capture-release notifications fire
-// for widgets that are about to become unreachable), while focus is cleared
-// via Focus(nil) so OnFocusChanged(false) still fires normally on whatever
-// widget previously held it.
+// capture, focus, and any active focus scopes: the previous tree's hover
+// path, pointer capture and focus-scope stack are discarded directly (no
+// Enter/Leave or capture-release notifications fire for widgets that are
+// about to become unreachable, and a scope root belonging to the outgoing
+// tree can only be stale), while focus is cleared via Focus(nil) so
+// OnFocusChanged(false) still fires normally on whatever widget previously
+// held it.
 func (r *Router) SetRoot(w core.Widget) {
 	r.root = w
 	r.hover = nil
 	r.captureStack = nil
+	r.focusScopes = nil
 	r.Focus(nil)
 }
 
@@ -569,6 +583,114 @@ func (r *Router) Focused() core.Widget {
 	return r.focused
 }
 
+// PushFocusScope confines keyboard focus to root's own subtree until a
+// matching PopFocusScope. A modal surface (controls.ShowDialog's scrim)
+// pushes its root widget the moment it opens and pops it when it closes; for
+// as long as the scope is active:
+//
+//   - Tab/Shift+Tab cycle only the focusable widgets UNDER root, wrapping
+//     within them, so focus can never step out into the widgets the modal is
+//     covering (which are still in the tree, still visible, and so still in
+//     the unscoped tab order) — see focusables.
+//   - A key event is never dispatched into a focused widget that sits
+//     outside root; it is delivered from root instead — see dispatchKey.
+//
+// Scopes NEST: pushing while another scope is active makes the new root the
+// active one and restores the previous root on PopFocusScope, so a dialog
+// opened from a dialog traps focus in the topmost one and hands the trap
+// back to the one beneath when it closes.
+//
+// FOCUS ON PUSH: if the currently focused widget is not already inside the
+// new scope (the usual case — whatever the user was on before the modal
+// opened), focus MOVES to root itself, via the ordinary Focus path
+// (OnFocusChanged fires as always). root need not be focusable for this;
+// Focus accepts any widget. Focusing the scope root rather than clearing
+// focus outright is what makes both of the behaviors a modal needs fall out
+// of the existing machinery: the root is not in its own focusable list, so
+// the first Tab lands on the scope's first focusable exactly as an unfocused
+// Tab always does, and a scope with NO focusable descendant at all (a dialog
+// with no buttons, whose only close path is Escape) keeps the root focused,
+// so the key bubble starts at the root and its own OnKey sees the Escape.
+// Clearing focus instead would leave Focused() == nil, which
+// controls.OverlayHost.OnKey reads as "delegate this key to CONTENT" —
+// routing the modal's own Escape into the widgets it is supposed to be
+// trapping input away from.
+//
+// A nil root is ignored (there is nothing to confine focus to).
+func (r *Router) PushFocusScope(root core.Widget) {
+	if root == nil {
+		return
+	}
+	r.focusScopes = append(r.focusScopes, root)
+	if !inFocusScope(root, r.focused) {
+		r.Focus(root)
+	}
+}
+
+// PopFocusScope ends the CURRENT (topmost) focus scope, restoring whichever
+// scope (if any) was active before it — see PushFocusScope on nesting.
+// Calling it with no scope active is a no-op. Once the stack is fully
+// unwound, focus traversal and key dispatch are unrestricted again, exactly
+// as they are for a router that never had a scope pushed.
+//
+// If a scope remains active afterward and focus is now OUTSIDE it (it was
+// inside the scope just popped, which is the normal case when a nested modal
+// closes), focus moves to the newly active scope root — the same re-homing
+// PushFocusScope does, keeping the invariant that an active scope always
+// holds the focus rather than leaving it stranded in a surface that is on
+// its way out of the tree.
+//
+// CAVEAT: this pops the TOP of the stack, so scopes must be popped in push
+// order. A caller that pushes A then B and pops while B is still open leaves
+// B's root on the stack as the active scope even though A is the one being
+// closed. controls.OverlayHost pairs its push/pop with the popup stack,
+// which is closed topmost-first everywhere it matters (CloseTopPopup,
+// CloseAllPopups, OnPointer's stale-level collapse); an explicit
+// ClosePopup of a LOWER modal while a higher one is still open is the one
+// out-of-order case, and is left documented rather than special-cased — the
+// same treatment OverlayHost.CloseAllPopups gives its own equivalent v0
+// limitation.
+func (r *Router) PopFocusScope() {
+	if len(r.focusScopes) == 0 {
+		return
+	}
+	r.focusScopes = r.focusScopes[:len(r.focusScopes)-1]
+	if scope := r.focusScope(); scope != nil && !inFocusScope(scope, r.focused) {
+		r.Focus(scope)
+	}
+}
+
+// focusScope returns the ACTIVE focus-scope root (top of the stack — see
+// PushFocusScope), or nil when no scope is active.
+func (r *Router) focusScope() core.Widget {
+	if len(r.focusScopes) == 0 {
+		return nil
+	}
+	return r.focusScopes[len(r.focusScopes)-1]
+}
+
+// inFocusScope reports whether w is scope itself or one of its descendants,
+// walking w's core.ParentOf ancestor chain (the same chain key events bubble
+// along) rather than descending scope's Children — so it answers the
+// question at the point of use, for one widget, without materializing the
+// scope's whole subtree.
+//
+// A nil scope means no scope is active and everything is therefore in scope:
+// that is what makes every caller below collapse to its pre-scope behavior
+// when the stack is empty. A nil w is never in a (non-nil) scope.
+func inFocusScope(scope, w core.Widget) bool {
+	if scope == nil {
+		return true
+	}
+	for w != nil {
+		if w == scope {
+			return true
+		}
+		w = core.ParentOf(w)
+	}
+	return false
+}
+
 // dispatchComposition delivers e to the focused widget's OnComposition, if
 // one is focused and implements CompositionHandler — shared by
 // CompositionUpdate/CompositionCommit/CompositionCancel below, mirroring
@@ -648,6 +770,33 @@ func focusableList(w core.Widget) []core.Widget {
 	return out
 }
 
+// focusables returns the tab order FocusNext/FocusPrev cycle: the whole
+// tree's focusable widgets in document order (focusableList from the root)
+// when no focus scope is active, or only those under the ACTIVE scope root
+// when one is (see PushFocusScope).
+//
+// The scoped list is produced by running the same DFS from the scope root
+// instead of from the tree root, which yields exactly the scope's
+// descendants — the ParentOf-walk membership test inFocusScope answers for a
+// single widget, computed for the whole subtree in one pass rather than once
+// per candidate over the entire tree. The one thing descending from a
+// non-root widget loses is focusableList's implicit "every ancestor was
+// visible too" property (it only ever checked visibility on the way DOWN
+// from the root), so the scope root's own ancestor chain is checked up front
+// via inVisibleSubtree: a scope root inside a subtree that has since been
+// hidden contributes nothing, matching what the unscoped walk would have
+// done with it.
+func (r *Router) focusables() []core.Widget {
+	scope := r.focusScope()
+	if scope == nil {
+		return focusableList(r.root)
+	}
+	if !inVisibleSubtree(scope) {
+		return nil
+	}
+	return focusableList(scope)
+}
+
 // indexOfIdentity returns the index of w in list (compared by identity, ==),
 // or -1 if absent.
 func indexOfIdentity(list []core.Widget, w core.Widget) int {
@@ -664,8 +813,17 @@ func indexOfIdentity(list []core.Widget, w core.Widget) int {
 // nothing is currently focused (or the focused widget is no longer in the
 // list), it focuses the first entry. A no-op if there are no focusable
 // widgets at all.
+//
+// While a focus scope is active (see PushFocusScope) the list is the scope's
+// own focusable descendants instead of the whole tree's, so Tab wraps within
+// the modal surface and never reaches what it covers. The
+// not-currently-in-the-list case is what a scope leans on to ENTER itself:
+// the scope root (which PushFocusScope focused, and which is not in its own
+// focusable list unless it happens to be focusable) is not in the list, so
+// the first Tab lands on the scope's first focusable — and a scope with no
+// focusable descendant at all leaves focus exactly where it is.
 func (r *Router) FocusNext() {
-	list := focusableList(r.root)
+	list := r.focusables()
 	if len(list) == 0 {
 		return
 	}
@@ -680,9 +838,11 @@ func (r *Router) FocusNext() {
 // FocusPrev moves focus to the previous focusable+visible widget in document
 // order, wrapping from the first back to the last. If nothing is currently
 // focused (or the focused widget is no longer in the list), it focuses the
-// last entry. A no-op if there are no focusable widgets at all.
+// last entry. A no-op if there are no focusable widgets at all. Scoped
+// exactly like FocusNext while a focus scope is active — see its doc comment
+// and PushFocusScope.
 func (r *Router) FocusPrev() {
-	list := focusableList(r.root)
+	list := r.focusables()
 	if len(list) == 0 {
 		return
 	}
@@ -748,6 +908,21 @@ func inVisibleSubtree(w core.Widget) bool {
 // OnChanged fires with nothing on screen to show for it. focusableList
 // already skips hidden subtrees, so Tab-cycling recovered from this while
 // typing did not; the two now agree.
+//
+// While a focus scope is active (see PushFocusScope), a focused widget
+// OUTSIDE the scope is treated as no usable focus at all — the key is NOT
+// delivered to it, nor to anything on its ancestor chain, which is what
+// stops Space/Enter from activating a button the modal surface is covering.
+// The chain starts at the SCOPE ROOT instead in that case, and in the
+// nothing-focused case too, so the modal's own key handling still runs:
+// that is the route by which Escape reaches a button-less dialog's scrim.
+// Focus is deliberately NOT cleared here — an out-of-scope focused widget
+// belongs to whatever the user was on before the modal opened, and clearing
+// it would fire OnFocusChanged(false) on that widget from inside a key
+// dispatch it had nothing to do with. With no scope active inFocusScope is
+// true for everything, so the switch below collapses to exactly the
+// pre-scope behavior: focused-and-visible bubbles from the focused widget,
+// anything else goes to the bare root.
 func (r *Router) dispatchKey(e *KeyEvent) {
 	visible := r.focused != nil && inVisibleSubtree(r.focused)
 	if r.focused != nil && !visible {
@@ -756,11 +931,15 @@ func (r *Router) dispatchKey(e *KeyEvent) {
 		// still does not get the key, since visible is what's consulted below.
 		r.Focus(nil)
 	}
+	scope := r.focusScope()
 
 	var chain []core.Widget
-	if visible {
+	switch {
+	case visible && inFocusScope(scope, r.focused):
 		chain = keyChain(r.focused)
-	} else if r.root != nil {
+	case scope != nil:
+		chain = keyChain(scope)
+	case r.root != nil:
 		chain = []core.Widget{r.root}
 	}
 	for _, w := range chain {
