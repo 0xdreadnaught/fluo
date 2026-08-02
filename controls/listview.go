@@ -485,15 +485,16 @@ func (l *ListView) contentBounds() render.Rect {
 // alone — no text change — must still repaint the right rows the next time
 // this runs).
 //
-// The two gutter decisions are independent (the right gutter only reduces
-// width, the bottom gutter only reduces height) and each is made against the
-// pre-gutter inset dimension on its own axis: vGutter compares totalHeight
-// to inset.H, then hGutter compares contentWidth to the resulting viewport.W
-// (inset.W minus vGutter — NOT inset.W itself, since vGutter has already
-// permanently claimed that space from any row's actual content width; the
-// Bottom inset applied afterward doesn't touch W, so this is the same W
-// thumbGeometryX later reads back from v.viewport.W — see its doc comment
-// for why that agreement matters).
+// The two gutter decisions are coupled, not independent: each gutter takes
+// space from the axis the OTHER decision measures against (the right gutter
+// reduces width, which the horizontal decision compares contentWidth to; the
+// bottom gutter reduces height, which the vertical decision compares
+// totalHeight to), so both are resolved together before either is applied —
+// see the comment on that loop for why deciding them in sequence puts the
+// vertical thumb outside the control. Both are settled against the same
+// final viewport the virtualizer reads back from v.viewport for its own
+// thumbGeometry/thumbGeometryX overflow tests, so a reported thumb always
+// has the gutter it needs to be drawn in.
 func (l *ListView) ArrangeContent(bounds render.Rect) {
 	inset := bounds.Inset(render.Thickness{
 		Top: l.metrics.BevelWidth, Bottom: l.metrics.BevelWidth,
@@ -506,35 +507,46 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 		inset.H = 0
 	}
 
-	// Reserve the vertical thumb's gutter only when the content actually
-	// scrolls vertically. When it fits (no thumb), the viewport is the full
-	// inset rect so rows and the selection band reach its right edge; when
-	// it scrolls, the gutter keeps the band clear of the (translucent) thumb
-	// so the highlight sits fully beside the scrollbar rather than bleeding
+	// Reserve each thumb's gutter only when that axis actually scrolls: the
+	// vertical thumb's on the right, the horizontal thumb's along the
+	// bottom. When an axis fits (no thumb) the viewport keeps that space, so
+	// rows and the selection band reach the inset rect's edge; when it
+	// scrolls, the gutter keeps the band clear of the (translucent) thumb so
+	// the highlight sits fully beside the scrollbar rather than bleeding
 	// through it.
-	vGutter := float32(0)
-	if l.totalHeight() > inset.H {
-		vGutter = l.gutter
+	//
+	// The two decisions have to be made JOINTLY, because each gutter takes
+	// its space from the other axis: the right gutter takes width, which is
+	// what the horizontal decision measures against, and the bottom gutter
+	// takes height, which is what the vertical one measures against. Deciding
+	// the vertical one against the full inset height and only then shaving
+	// that height for a bottom gutter leaves a list that fits before the
+	// shave but scrolls after it with no right gutter reserved — while the
+	// virtualizer, which tests the FINAL viewport height, does report a
+	// vertical thumb. Its track then starts at the content's right edge and
+	// is drawn a full gutter's width outside the control, over whatever sits
+	// beside it and unhittable.
+	//
+	// Two rounds settle it and no more: a gutter can only ever turn ON (a
+	// gutter takes space, which can only make the other axis more likely to
+	// overflow, never less), and the horizontal decision runs after the
+	// vertical one it depends on, so it is already final by the time the
+	// vertical one stops moving.
+	contentW := l.contentWidth()
+	var vGutter, hGutter float32
+	for round := 0; round < 2; round++ {
+		if l.totalHeight() > inset.H-hGutter {
+			vGutter = l.gutter
+		}
+		if contentW > inset.W-vGutter {
+			hGutter = l.gutter
+		}
 	}
-	viewport := inset.Inset(render.Thickness{Right: vGutter})
+
+	viewport := inset.Inset(render.Thickness{Right: vGutter, Bottom: hGutter})
 	if viewport.W < 0 {
 		viewport.W = 0
 	}
-	if viewport.H < 0 {
-		viewport.H = 0
-	}
-
-	// Reserve the horizontal thumb's gutter only when the widest row's
-	// natural content actually exceeds the (already vGutter-reduced)
-	// viewport width — mirroring the vertical decision above, generalized to
-	// the X axis (see the doc comment above for why viewport.W, not inset.W,
-	// is the correct comparison here).
-	contentW := l.contentWidth()
-	hGutter := float32(0)
-	if contentW > viewport.W {
-		hGutter = l.gutter
-	}
-	viewport = viewport.Inset(render.Thickness{Bottom: hGutter})
 	if viewport.H < 0 {
 		viewport.H = 0
 	}

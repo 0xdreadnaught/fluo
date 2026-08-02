@@ -728,6 +728,41 @@ func TestListViewHorizontalThumbShowsForWideRowText(t *testing.T) {
 	}
 }
 
+// TestListViewVerticalThumbStaysInBoundsWithBottomGutter pins the gutter
+// ordering. The rows fit the inset height on their own (2*48 = 96 <= 100),
+// so no right gutter used to be reserved — but the wide row text reserves a
+// bottom gutter afterwards, and against that reduced height the rows no
+// longer fit, so the virtualizer reports a vertical thumb anyway. With no
+// right gutter to draw it in, its track started at the content's right edge
+// and ran a full gutter's width past the control, over whatever sits beside
+// it and unhittable.
+func TestListViewVerticalThumbStaysInBoundsWithBottomGutter(t *testing.T) {
+	face := testFace(t)
+	items := newFakeListItems(wideText, wideText)
+	l := NewListView(face, items).SetRowHeight(48)
+
+	bounds := render.Rect{X: 0, Y: 0, W: 100, H: 104}
+	layoutListView(l, bounds.X, bounds.Y, bounds.W, bounds.H)
+
+	if _, ok := l.thumbRectX(); !ok {
+		t.Fatal("fixture: the wide rows must reserve a bottom gutter for a horizontal thumb")
+	}
+
+	track, _, ok := l.thumbGeometry()
+	if !ok {
+		return // no vertical thumb reported at all is also a correct answer
+	}
+	if track.Right() > bounds.Right() {
+		t.Fatalf("vertical thumb track %v runs to %v, past the control's right edge at %v",
+			track, track.Right(), bounds.Right())
+	}
+	thumb, _ := l.thumbRect()
+	if thumb.Right() > bounds.Right() {
+		t.Fatalf("vertical thumb %v runs to %v, past the control's right edge at %v",
+			thumb, thumb.Right(), bounds.Right())
+	}
+}
+
 func TestListViewOffsetXShiftsRowX(t *testing.T) {
 	face := testFace(t)
 	items := newFakeListItems(wideText)
