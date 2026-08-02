@@ -4044,3 +4044,30 @@ func TestTextBoxSingleLineWheelBubbles(t *testing.T) {
 		t.Fatal("single-line wheel: Handled = true, want false (nothing to scroll; must bubble)")
 	}
 }
+
+// TestTextBoxMultilineWheelScrollsThroughRouterDispatch drives the wheel
+// through the REAL routing path — input.Router.PointerWheel does its own
+// HitPath at the point and Bubbles the event leaf→root to OnPointer — rather
+// than calling TextBox.OnPointer directly. This is the "does the router
+// actually DELIVER Wheel to a hovered widget's OnPointer" guard: a dispatch
+// gap (router never reaches OnPointer) would leave vscroll untouched here even
+// though the isolated OnPointer test passes. The viewer wires its GLFW scroll
+// callback straight to this same Surface/Router.PointerWheel, so this exercises
+// the exact call path the app uses.
+func TestTextBoxMultilineWheelScrollsThroughRouterDispatch(t *testing.T) {
+	tb := newOverflowingMultilineTextBox(t)
+	tb.SetCaret(0)
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50}) // vscroll -> 0
+	if tb.vscroll != 0 {
+		t.Fatalf("vscroll = %v after caret-to-start, want 0", tb.vscroll)
+	}
+
+	r := input.NewRouter()
+	r.SetRoot(tb)
+	// A wheel notch at a point inside the box — routed, not hand-delivered.
+	r.PointerWheel(render.Point{Y: -1}, render.Point{X: 20, Y: 20}, 0)
+
+	if tb.vscroll <= 0 {
+		t.Fatalf("vscroll = %v after Router.PointerWheel, want > 0 (real dispatch must reach OnPointer, not just a direct call)", tb.vscroll)
+	}
+}
