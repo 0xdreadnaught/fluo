@@ -370,6 +370,15 @@ func (s *SplitPanel) Cursor() input.Cursor {
 // invalidates arrange and fires OnSplitChanged with the new ratio. A no-op
 // (ratio left unchanged, callback not fired) when there's no room to split
 // (available <= 0), matching dragTo/dragToX's own no-room no-op.
+//
+// ALSO a no-op when the clamped result equals the ratio already stored: once
+// clampPaneLen has pinned the divider at either min-pane ceiling, every
+// further Move in that direction produces the very same ratio, and firing the
+// callback for each of them would report a stream of "changes" that never
+// changed anything (a listener persisting the layout would write on every
+// mouse move against a wall). Gating on a real change matches every other
+// user-driven notification in this package — Slider.setValue,
+// TabControl.selectUser.
 func (s *SplitPanel) dragTo(pos render.Point) {
 	bounds := s.Bounds()
 
@@ -389,7 +398,11 @@ func (s *SplitPanel) dragTo(pos render.Point) {
 	}
 
 	firstLen = clampPaneLen(firstLen, available, s.minPane)
-	s.ratio = firstLen / available
+	ratio := firstLen / available
+	if ratio == s.ratio {
+		return
+	}
+	s.ratio = ratio
 	s.InvalidateArrange()
 	if s.onSplitChanged != nil {
 		s.onSplitChanged(s.ratio)

@@ -179,6 +179,60 @@ func TestSplitPanelDividerDragChangesRatioAndFiresCallback(t *testing.T) {
 	}
 }
 
+// TestSplitPanelDragAtMinPaneWallFiresOnce pins dragTo's change gate. Once
+// clampPaneLen has pinned the divider against a min-pane ceiling, every
+// further Move in that direction produces the identical ratio — dragTo used
+// to fire OnSplitChanged for each of them anyway, reporting a stream of
+// "changes" that changed nothing (a listener persisting the layout would
+// write on every mouse move against the wall). One fire for the move that
+// actually reached the wall, none for the ones that stay there.
+func TestSplitPanelDragAtMinPaneWallFiresOnce(t *testing.T) {
+	first := NewFixed(10, 10, render.RGB(1, 2, 3))
+	second := NewFixed(10, 10, render.RGB(4, 5, 6))
+	s := NewSplitPanel(Horizontal).SetFirst(first).SetSecond(second)
+	layoutSplitPanel(s, 0, 0, 100, 50)
+
+	fired := 0
+	s.SetOnSplitChanged(func(float32) { fired++ })
+
+	_, divider, _ := s.layout()
+	r := input.NewRouter()
+	s.OnPointer(&input.PointerEvent{
+		Action: input.Press,
+		Pos:    render.Point{X: divider.X + divider.W/2, Y: 25},
+		Router: r,
+	})
+
+	// available = 100 - divider(6) = 94, minPane = 20, so First clamps at 20
+	// and the ratio pins at 20/94. Every X at or left of that wall lands on
+	// the same clamped result.
+	drag := func(x float32) {
+		s.OnPointer(&input.PointerEvent{Action: input.Move, Pos: render.Point{X: x, Y: 25}, Router: r})
+	}
+
+	drag(0) // reaches the wall: a real change, fires once
+	if fired != 1 {
+		t.Fatalf("fired after reaching the min-pane wall = %d, want 1", fired)
+	}
+	wall := s.ratio
+
+	drag(-5)
+	drag(-40)
+	drag(0)
+	if fired != 1 {
+		t.Fatalf("fired after further drags at the wall = %d, want 1 (no re-fire without a real change)", fired)
+	}
+	if s.ratio != wall {
+		t.Fatalf("ratio while pinned = %v, want %v (unchanged)", s.ratio, wall)
+	}
+
+	// Dragging back off the wall is a real change again.
+	drag(60)
+	if fired != 2 {
+		t.Fatalf("fired after dragging back off the wall = %d, want 2", fired)
+	}
+}
+
 func TestSplitPanelPressOnPaneNotHandled(t *testing.T) {
 	first := NewFixed(10, 10, render.RGB(1, 2, 3))
 	second := NewFixed(10, 10, render.RGB(4, 5, 6))
