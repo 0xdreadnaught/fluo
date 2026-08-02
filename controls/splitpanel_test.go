@@ -359,3 +359,38 @@ func TestSplitPanelDragDegenerateAvailableBelowTwoMinPanes(t *testing.T) {
 	wantPaneLen(t, "second width (never negative)", core.BoundsOf(second).W, 0)
 	wantPaneLen(t, "ratio dragged fully right", s.ratio, 1)
 }
+
+// TestSplitPanelSetPaneNilClearsSlot pins the nil guard both pane setters
+// were missing: each already detached the OUTGOING pane behind a nil check,
+// then handed the INCOMING one straight to core.SetParent, which dereferences
+// its child argument — so clearing a pane panicked, even though every read
+// path (Children, MeasureContent, ArrangeContent, layout) has always handled
+// an empty slot.
+func TestSplitPanelSetPaneNilClearsSlot(t *testing.T) {
+	first := NewFixed(10, 10, render.RGB(1, 2, 3))
+	second := NewFixed(10, 10, render.RGB(4, 5, 6))
+	s := NewSplitPanel(Horizontal).SetFirst(first).SetSecond(second)
+
+	s.SetFirst(nil)
+	if got := s.Children(); len(got) != 1 || got[0] != core.Widget(second) {
+		t.Fatalf("Children() after SetFirst(nil) = %v, want [second]", got)
+	}
+	if p := core.ParentOf(first); p != nil {
+		t.Fatalf("detached first's parent = %v, want nil", p)
+	}
+
+	s.SetSecond(nil)
+	if got := s.Children(); len(got) != 0 {
+		t.Fatalf("Children() after SetSecond(nil) = %v, want empty", got)
+	}
+
+	// An empty panel still lays out and renders: the divider is all that's
+	// left, and nothing downstream should trip over the missing panes.
+	layoutSplitPanel(s, 0, 0, 100, 50)
+
+	// Setting a real pane back afterward works normally.
+	s.SetFirst(first)
+	if got := s.Children(); len(got) != 1 || got[0] != core.Widget(first) {
+		t.Fatalf("Children() after re-setting first = %v, want [first]", got)
+	}
+}

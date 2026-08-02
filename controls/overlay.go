@@ -156,12 +156,20 @@ func NewOverlayHost() *OverlayHost {
 // widget, re-parenting it to this host and invalidating measure. Any
 // previously set content is detached (its parent cleared) first, matching
 // the SetChild convention used elsewhere in controls.
+//
+// w may be nil, which simply CLEARS the content: MeasureContent,
+// ArrangeContent and Children all already skip a host with no content (a
+// popup-only host is a perfectly ordinary state — see Children's own doc
+// comment), and the nil is kept away from core.SetParent, which dereferences
+// its child argument. Same nil handling as ScrollViewer.SetChild.
 func (h *OverlayHost) SetContent(w core.Widget) *OverlayHost {
 	if h.content != nil {
 		core.SetParent(h.content, nil)
 	}
 	h.content = w
-	core.SetParent(w, h)
+	if w != nil {
+		core.SetParent(w, h)
+	}
 	h.InvalidateMeasure()
 	return h
 }

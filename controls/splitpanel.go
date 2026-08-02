@@ -95,25 +95,36 @@ func NewSplitPanel(orientation Orientation) *SplitPanel {
 // Horizontal, top for Vertical — re-parenting it and invalidating measure.
 // Any previously set First is detached (its parent cleared), matching the
 // Border/ScrollViewer SetChild convention.
+//
+// w may be nil, which simply CLEARS the pane: measure/arrange/Render and
+// Children all already treat a missing pane as an empty slot (the divider
+// stays where the ratio puts it, with nothing on that side), and the nil is
+// kept away from core.SetParent, which dereferences its child argument.
+// Same nil handling as ScrollViewer.SetChild.
 func (s *SplitPanel) SetFirst(w core.Widget) *SplitPanel {
 	if s.first != nil {
 		core.SetParent(s.first, nil)
 	}
 	s.first = w
-	core.SetParent(w, s)
+	if w != nil {
+		core.SetParent(w, s)
+	}
 	s.InvalidateMeasure()
 	return s
 }
 
 // SetSecond sets (replacing any existing) the trailing pane — right for
 // Horizontal, bottom for Vertical — re-parenting it and invalidating
-// measure, mirroring SetFirst.
+// measure, mirroring SetFirst. w may be nil to clear the pane, exactly as
+// for SetFirst.
 func (s *SplitPanel) SetSecond(w core.Widget) *SplitPanel {
 	if s.second != nil {
 		core.SetParent(s.second, nil)
 	}
 	s.second = w
-	core.SetParent(w, s)
+	if w != nil {
+		core.SetParent(w, s)
+	}
 	s.InvalidateMeasure()
 	return s
 }

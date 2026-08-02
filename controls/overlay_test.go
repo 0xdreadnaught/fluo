@@ -901,3 +901,37 @@ func TestClampFRejectsNaN(t *testing.T) {
 		}
 	}
 }
+
+// TestOverlaySetContentNilClearsContent pins the nil guard SetContent was
+// missing: it detached the OUTGOING content behind a nil check, then handed
+// the INCOMING one straight to core.SetParent, which dereferences its child
+// argument — so clearing the content panicked, even though MeasureContent,
+// ArrangeContent, Children and OnKey have always tolerated a host with none.
+func TestOverlaySetContentNilClearsContent(t *testing.T) {
+	content := NewFixed(40, 20, render.RGB(1, 2, 3))
+	host := NewOverlayHost()
+	host.SetContent(content)
+
+	host.SetContent(nil)
+
+	if got := host.Children(); len(got) != 0 {
+		t.Fatalf("Children() after SetContent(nil) = %v, want empty", got)
+	}
+	if p := core.ParentOf(content); p != nil {
+		t.Fatalf("detached content's parent = %v, want nil", p)
+	}
+
+	// A content-less host still measures, arranges and renders popups.
+	popup := NewFixed(30, 15, render.RGB(4, 5, 6))
+	host.ShowPopup(popup, render.Rect{X: 5, Y: 5}, nil)
+	layoutOverlay(host, 200, 100)
+	if got := host.Children(); len(got) != 1 || got[0] != core.Widget(popup) {
+		t.Fatalf("Children() with no content and one popup = %v, want [popup]", got)
+	}
+
+	// Setting real content back afterward works normally.
+	host.SetContent(content)
+	if got := core.ParentOf(content); got != core.Widget(host) {
+		t.Fatalf("re-set content's parent = %v, want host", got)
+	}
+}
