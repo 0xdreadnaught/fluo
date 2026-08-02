@@ -4202,4 +4202,41 @@ func TestTextBoxSourceEditorRealArrangementReservesGutter(t *testing.T) {
 	if vp.Right() != track.X {
 		t.Fatalf("TextViewportRect right edge = %v, want %v (thumb track left edge — text stops before the thumb)", vp.Right(), track.X)
 	}
+
+	// DRAW-TIME proof (the PM's exact question): renderMultiline must actually
+	// PushClip the narrowed viewport during Render, not merely compute it and
+	// then draw to full bounds. Select the whole long first line with the caret
+	// at 0 (hscroll pinned to 0) so its highlight fill runs the full line width
+	// off the right — if the draw used full bounds it would paint under the
+	// thumb; the recorded, clip-intersected fill must stop at vp.Right().
+	tb.Select(len([]rune(lines[0])), 0)
+	core.ArrangeWidget(right, render.Rect{X: 0, Y: 0, W: 600, H: 900})
+	vp, _ = tb.TextViewportRect() // stable across Select, re-read defensively
+
+	rr := newClipRecorder()
+	tb.Render(rr)
+
+	foundClip := false
+	for _, cr := range rr.clips {
+		if cr == vp {
+			foundClip = true
+			break
+		}
+	}
+	if !foundClip {
+		t.Fatalf("renderMultiline did not PushClip the narrowed text viewport %+v at draw time; clips = %v", vp, rr.clips)
+	}
+	sawSel := false
+	for _, p := range rr.painted {
+		if p.color != tb.colors.Highlight || p.rect.W <= 0 || p.rect.H <= 0 {
+			continue
+		}
+		sawSel = true
+		if p.rect.Right() > vp.Right()+0.01 {
+			t.Fatalf("selection fill painted to x = %v, past the text viewport right edge %v (drawing under the thumb at DRAW time)", p.rect.Right(), vp.Right())
+		}
+	}
+	if !sawSel {
+		t.Fatal("no selection fill painted; the overflow-under-thumb draw case was not exercised")
+	}
 }

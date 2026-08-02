@@ -787,19 +787,23 @@ func TestTextBoxSourceEditor(t *testing.T) {
 	defer theme.SetActive(nil)
 	th := theme.Active()
 
-	testFrame(t, "textbox_source_editor", 220, 120, func(r *glr.Renderer) {
+	testFrame(t, "textbox_source_editor", 240, 200, func(r *glr.Renderer) {
 		f, err := text.Load(goregular.TTF)
 		if err != nil {
 			t.Fatal(err)
 		}
 		face := text.NewFace(f, th.Type.BodySize)
 
+		// The real augment source-editor config: multi-line, word-wrap OFF,
+		// line numbers on, MORE lines than fit (thumb + gutter shown), and a
+		// first line far wider than the box. The long line must visibly stop
+		// at the thumb's left edge, not draw under it.
 		tb := controls.NewTextBox(face).SetMultiline(true).SetLineNumbers(true)
-		tb.SetText("def handle(request, context, options, retries, deadline):\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10")
+		tb.SetText("def handle(request, context, options, retries, deadline, backoff):\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\nl11\nl12\nl13\nl14\nl15\nl16")
 		tb.OnFocusChanged(true)
 		tb.SetCaret(0) // hscroll pinned at the start so the long line shows from column 0
 
-		frame := render.Rect{X: 0, Y: 0, W: 220, H: 120}
+		frame := render.Rect{X: 0, Y: 0, W: 240, H: 200}
 		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
