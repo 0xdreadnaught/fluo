@@ -1108,13 +1108,19 @@ func (t *TextBox) OnFocusChanged(focused bool) {
 // the line-number gutter (gutterWidth, 0 unless SetLineNumbers is on) exactly
 // as every render path does, so the reported rect tracks the drawn caret.
 //
-// While an IME composition is active (t.composing), the reported rect is
-// shifted to the caret's position INSIDE the preedit run (preeditMeasure of
-// preeditCaret runes further along) rather than the plain t.caret position —
-// so a host anchoring platform UI to this rect (e.g. the Windows candidate
-// window, see app/ime_windows.go) keeps tracking the caret as the user moves
-// it within an in-progress composition, not just the point where the
-// composition began.
+// While an IME composition is active (t.composing), two things change. The
+// rect is shifted to the caret's position INSIDE the preedit run
+// (preeditMeasure of preeditCaret runes further along) rather than the plain
+// t.caret position — so a host anchoring platform UI to this rect (e.g. the
+// Windows candidate window, see app/ime_windows.go) keeps tracking the caret
+// as the user moves it within an in-progress composition, not just the point
+// where the composition began. And a WRAPPING box computes the rect in
+// LOGICAL-line coordinates (lineCol/xOfInLine), not visual-row ones, because
+// renderMultiline routes an active composition to renderComposingMultiline,
+// whose caret is drawn in logical-line space regardless of wrapping (a
+// preedit never contains a '\n' and is not reflowed into rows) — computing
+// the anchor in visual-row space here would drift it from the drawn caret by
+// whole line-heights.
 func (t *TextBox) CaretScreenRect() (render.Rect, bool) {
 	if !t.focused {
 		return render.Rect{}, false
@@ -1135,10 +1141,20 @@ func (t *TextBox) CaretScreenRect() (render.Rect, bool) {
 
 	var row, col int
 	var cx float32
-	if t.wrapping() {
+	if t.wrapping() && !t.composing {
 		row, col = t.rowCol(t.caret)
 		cx = textX + t.xOfInRow(row, col)
 	} else {
+		// Unwrapped, OR wrapping-but-composing. renderMultiline dispatches an
+		// active composition to renderComposingMultiline, which draws in
+		// LOGICAL-line coordinates (lineCol/xOfInLine) regardless of wrapping
+		// — a composition never contains a '\n' and is not reflowed into
+		// visual rows — so the anchored rect must be computed the same way, or
+		// it drifts from the drawn caret by whole line-heights (and, far left,
+		// by the row-vs-line x difference). hscroll stays pinned at 0 while
+		// wrapping (updateHScroll pins it whenever wrapping(), which remains
+		// true through composition), exactly as that render path assumes, so
+		// the shared textX (which subtracts hscroll) lines up too.
 		row, col = t.lineCol(t.caret)
 		cx = textX + t.xOfInLine(row, col)
 	}
@@ -2440,10 +2456,15 @@ func (t *TextBox) renderComposing(r render.Renderer, textX, textY, lh float32) {
 // same as if wrapping were off; and an ACTIVE IME composition always
 // renders via renderComposingMultiline's own logical-line body, regardless
 // of wrapping — a composition is transient and never contains a '\n' itself
-// (see OnComposition), so it temporarily shows unwrapped (with hscroll
-// re-enabled for that one frame's rendering, since updateHScroll's pin only
-// applies through the normal arrange pass) rather than reflowing rows
-// specifically for it.
+// (see OnComposition), so it temporarily shows unwrapped rather than
+// reflowing rows specifically for it. hscroll is NOT re-enabled for that
+// frame: updateHScroll pins it at 0 whenever wrapping() is true, and
+// wrapping() stays true throughout a composition, so a composing line in a
+// wrapped box still draws at hscroll 0 and does not scroll a long preedit
+// into view horizontally — an accepted v0 limitation (a wrapped box's whole
+// point is that content need not scroll sideways). CaretScreenRect mirrors
+// this exactly (logical-line coordinates, hscroll 0) so the IME anchor
+// tracks the drawn caret.
 func (t *TextBox) renderMultiline(r render.Renderer, bounds render.Rect) {
 	c := t.colors
 	pad := t.metrics.PaddingM

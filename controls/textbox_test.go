@@ -2524,6 +2524,57 @@ func TestTextBoxWordWrapContiguousBoundaryStartAffinity(t *testing.T) {
 	}
 }
 
+// TestTextBoxCaretScreenRectWrappingComposingUsesLogicalCoords locks the fix
+// for the IME-anchor coordinate mismatch: while composing, renderMultiline
+// draws the caret via renderComposingMultiline in LOGICAL-line coordinates
+// (regardless of wrapping), so CaretScreenRect must report the rect in that
+// same space — matching the drawn caret exactly, not the visual-row space it
+// would use outside composition. The box is tall/narrow enough that the
+// committed text occupies several visual rows, so a visual-row rect would be
+// offset from the logical-line rect by whole line-heights.
+func TestTextBoxCaretScreenRectWrappingComposingUsesLogicalCoords(t *testing.T) {
+	tb, r := newFocusedCharBreakFixture(t) // "aaaaaaaaaa", 4 visual rows, 1 logical line
+	tb.SetCaret(len([]rune("aaaaaaaaaa")))
+
+	// Begin an IME composition. renderMultiline now routes drawing through
+	// renderComposingMultiline (logical-line coordinates).
+	r.CompositionUpdate("ん", 1)
+	if !tb.composing {
+		t.Fatal("composing = false after CompositionUpdate, want true")
+	}
+
+	got, ok := tb.CaretScreenRect()
+	if !ok {
+		t.Fatal("CaretScreenRect() ok = false while focused, want true")
+	}
+
+	// Expected rect == exactly what renderComposingMultiline draws: logical
+	// (line, col) via lineCol/xOfInLine, plus the preedit-caret offset.
+	bounds := tb.Bounds()
+	pad := tb.metrics.PaddingM
+	lh := tb.lineHeight()
+	line, col := tb.lineCol(tb.caret)
+	textX := bounds.X + pad + tb.gutterWidth() - tb.hscroll
+	wantX := textX + tb.xOfInLine(line, col) + tb.preeditMeasure(tb.preeditCaret)
+	wantY := bounds.Y + pad - tb.vscroll + float32(line)*lh
+	if got.X != wantX || got.Y != wantY || got.H != lh {
+		t.Fatalf("CaretScreenRect() while composing = %+v, want X=%v Y=%v H=%v (logical-line coords)", got, wantX, wantY, lh)
+	}
+
+	// The committed text is a single logical line (line 0), so the composing
+	// caret's Y must be the top row — NOT offset down by the visual rows the
+	// wrapped layout would have placed it on. Prove it differs from the
+	// visual-row Y CaretScreenRect would report outside composition.
+	visRow, _ := tb.rowCol(tb.caret)
+	visualY := bounds.Y + pad - tb.vscroll + float32(visRow)*lh
+	if visRow == 0 {
+		t.Fatalf("test setup: caret's visual row = 0, want a lower row so the offset is observable")
+	}
+	if got.Y == visualY {
+		t.Fatalf("CaretScreenRect().Y = %v equals the visual-row Y; while composing it must use the logical-line Y %v (offset by %d line-heights)", got.Y, wantY, visRow)
+	}
+}
+
 // --- Vertical scroll thumb (shown only while content overflows) ---
 
 // newOverflowingMultilineTextBox builds a focused, multi-line (word-wrap
