@@ -136,6 +136,19 @@ type OverlayHost struct {
 	// "which popup does this belong to" field needed to detect the switch.
 	popupHover []core.Widget
 
+	// modalOpenObs holds observers notified the instant a MODAL popup opens
+	// (see showPopup/notifyModalOpen). Its only consumer is ToolTipArea: a
+	// content tooltip relies on the router's ordinary (uncaptured) hover
+	// diffing for its Leave, but a modal popup captures the router and silences
+	// that diffing (see this type's "Hover" paragraph), so a pending or showing
+	// content tip would otherwise strand beside — or, if its dwell timer is
+	// still pending, pop OVER — the modal at stale bounds. Each observer cancels
+	// one such tooltip. Keyed by id so a ToolTipArea can unregister when it
+	// disarms (onModalOpen's returned cancel); non-modal popups (a tooltip's own
+	// tip) never fire it, since they engage no capture.
+	modalOpenObs   map[int]func()
+	modalOpenObsID int
+
 	// popupHoverGen counts every write to popupHover (both the resets in
 	// ShowPopup/ClosePopup and diffPopupHover's own final assignment), used
 	// by diffPopupHover to detect REENTRANT mutation: delivering a
@@ -257,6 +270,44 @@ func (h *OverlayHost) showPopup(popup core.Widget, anchor render.Rect, onDismiss
 		h.router.Capture(h)
 	}
 	h.InvalidateMeasure()
+	// A modal popup has just captured the router, silencing the hover diffing
+	// content tooltips depend on — tell them to drop any pending/showing tip
+	// (see modalOpenObs). Done last, after the popup is fully on the stack and
+	// the capture is engaged, so an observer that closes its own tip popup
+	// (hideTip -> ClosePopup) sees consistent state.
+	if modal {
+		h.notifyModalOpen()
+	}
+}
+
+// onModalOpen registers f to be invoked whenever a MODAL popup opens on this
+// host, returning a cancel that unregisters it (idempotent — a second call is a
+// no-op). See the modalOpenObs field's doc comment for why ToolTipArea needs
+// it.
+func (h *OverlayHost) onModalOpen(f func()) (cancel func()) {
+	if h.modalOpenObs == nil {
+		h.modalOpenObs = make(map[int]func())
+	}
+	id := h.modalOpenObsID
+	h.modalOpenObsID++
+	h.modalOpenObs[id] = f
+	return func() { delete(h.modalOpenObs, id) }
+}
+
+// notifyModalOpen invokes every modal-open observer over a snapshot, so an
+// observer that unregisters itself (disarm) or mutates the popup stack
+// (ToolTipArea.hideTip -> ClosePopup) during the call cannot corrupt the walk.
+func (h *OverlayHost) notifyModalOpen() {
+	if len(h.modalOpenObs) == 0 {
+		return
+	}
+	fns := make([]func(), 0, len(h.modalOpenObs))
+	for _, f := range h.modalOpenObs {
+		fns = append(fns, f)
+	}
+	for _, f := range fns {
+		f()
+	}
 }
 
 // hasModalPopup reports whether any popup currently on the stack is modal
