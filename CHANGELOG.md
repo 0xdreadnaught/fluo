@@ -8,6 +8,35 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.15.4] - 2026-08-02
+
+### Fixed
+
+- Layout invalidations raised *during* a measure/arrange pass are no longer
+  discarded — the clean flag is now set before the content callout, so a widget
+  that invalidates itself mid-layout is re-laid-out on the next frame.
+- `Property[T]` notifies subscribers in a deterministic registration order and
+  is reentrancy-safe: a subscriber that coerces the value (a validator) now
+  leaves the model and every subscriber agreeing on the final value regardless
+  of subscription order.
+- A minimum size larger than the maximum now wins (min takes priority).
+- Multi-click runs are scoped to the widget under the pointer, so a quick click
+  on one control followed by a click on an abutting control no longer registers
+  as a double-click on the second.
+- The `TextBox` caret resolves to the start of a wrapped continuation row at a
+  character-break boundary, fixing caret rendering, Home/End, Up/Down, and IME
+  anchoring for long unbroken runs (URLs, paths, CJK).
+- `TextBox.CaretScreenRect` uses the same coordinate space the composing text is
+  drawn in, so the IME candidate window anchors at the caret while composing.
+- `bind.Items` subscribes before its first rebuild, so a mutation during the
+  initial build isn't lost; a multi-item add notifies as a single reset so a
+  subscriber that mutates mid-notification can't desync.
+- Virtualized row positions accumulate in float64, so rows no longer overlap or
+  mis-hit at very large item counts.
+- Closing a stacked dialog restores focus to the one beneath it, so a
+  button-less dialog stays closable with Escape.
+- A pending or visible tooltip is cancelled when a modal opens.
+
 ## [0.15.3] - 2026-08-02
 
 ### Fixed
