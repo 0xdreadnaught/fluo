@@ -8,6 +8,23 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.15.6] - 2026-08-02
+
+### Changed
+
+- `TextBox` caret hit-testing walks a single running pen instead of re-measuring
+  a growing prefix at every character, so a click or drag-select in a long line
+  is O(n) instead of O(n²). It stays exact for kerned fonts via a new
+  `Face.PrefixWidths`, which returns the cumulative pen width at each rune
+  boundary using the same advance-and-kern accumulation as `Measure`.
+- Multi-line `TextBox` rendering resolves all line starts in one pass and skips
+  drawing lines that fall entirely outside the viewport.
+
+### Added
+
+- `text.Face.PrefixWidths(runes)` — cumulative text width at each rune boundary,
+  kern-accurate and matching `Measure` exactly.
+
 ## [0.15.5] - 2026-08-02
 
 ### Changed
