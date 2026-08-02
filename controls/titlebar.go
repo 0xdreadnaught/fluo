@@ -233,24 +233,37 @@ func (t *TitleBar) OnClose(fn func()) *TitleBar {
 	return t
 }
 
-// MeasureContent stretches to the available width at the fixed
-// titleBarHeight, regardless of available height — an ordinary full-width
-// titlebar sitting under a window's top edge. The three caption buttons
-// each measure to their own fixed size; the title measures within whatever
-// width remains after them (clamped to >= 0).
+// MeasureContent reports the width the bar's own parts actually need — the
+// left PaddingL inset, the title's measured width, and the three caption
+// cells — at the fixed titleBarHeight, regardless of available height. The
+// three caption buttons each measure to their own fixed size; the title
+// measures within whatever width remains after them (clamped to >= 0).
+//
+// The reported width is DELIBERATELY the content width rather than
+// available.W: available.W may be +Inf (a horizontal StackPanel or SplitPanel
+// offers its children an unbounded main axis, as does an Auto/Star grid
+// track), and core.Widget requires MeasureContent to return a FINITE size —
+// passing available.W straight back through would hand the parent an infinite
+// desired width and arrange every following sibling at X=+Inf. A TitleBar
+// still fills a full-width slot the ordinary way, through the default
+// Stretch alignment core.ArrangeWidget applies (see core/element.go), so the
+// usual "docked across the window's top edge" case is unchanged.
 func (t *TitleBar) MeasureContent(available render.Size) render.Size {
 	captionSize := render.Size{W: captionButtonWidth, H: titleBarHeight}
 	core.MeasureWidget(t.min, captionSize)
 	core.MeasureWidget(t.max, captionSize)
 	core.MeasureWidget(t.close, captionSize)
 
-	titleAvailW := available.W - 3*captionButtonWidth - t.metrics.PaddingL
+	captionsW := 3 * captionButtonWidth
+
+	titleAvailW := available.W - captionsW - t.metrics.PaddingL
 	if titleAvailW < 0 {
 		titleAvailW = 0
 	}
 	core.MeasureWidget(t.title, render.Size{W: titleAvailW, H: titleBarHeight})
+	titleD := core.DesiredSizeOf(t.title)
 
-	return render.Size{W: available.W, H: titleBarHeight}
+	return render.Size{W: t.metrics.PaddingL + titleD.W + captionsW, H: titleBarHeight}
 }
 
 // ArrangeContent arranges the three caption buttons right-aligned at the
