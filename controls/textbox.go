@@ -1662,6 +1662,28 @@ func (t *TextBox) textClipRect(bounds render.Rect) render.Rect {
 	}
 }
 
+// TextViewportRect returns the rectangle a multi-line box actually draws its
+// text inside — the content area with BOTH gutters carved off (the left
+// line-number gutter and the right vertical-scroll thumb gutter). It is the
+// exact clip renderMultiline pushes around the glyphs (see textClipRect),
+// exposed as a ground-truth observability signal in the same spirit as
+// CaretScreenRect.
+//
+// This is deliberately DISTINCT from ClipRect: ClipRect is the widget's OUTER
+// clip and is always the full Bounds() so the thumb and line numbers can draw
+// in their gutters — its width NEVER narrows, by design. The gutter-aware
+// narrowing lives here instead, so a harness checking "does the text stop
+// before the thumb" must read THIS (its width is < Bounds().W whenever a
+// gutter is reserved), not ClipRect (whose width equals Bounds().W
+// unconditionally — comparing it to the bounds width is a tautology). ok is
+// false for a single-line box, which has no multi-line text viewport.
+func (t *TextBox) TextViewportRect() (render.Rect, bool) {
+	if !t.multiline {
+		return render.Rect{}, false
+	}
+	return t.textClipRect(t.Bounds()), true
+}
+
 // totalContentHeight returns the current total (unclipped) content height:
 // row/line count times lineHeight, using the visual-rows count while
 // wrapping (at the current, gutter-aware contentWidth — safe to call here,

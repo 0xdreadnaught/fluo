@@ -4071,3 +4071,135 @@ func TestTextBoxMultilineWheelScrollsThroughRouterDispatch(t *testing.T) {
 		t.Fatalf("vscroll = %v after Router.PointerWheel, want > 0 (real dispatch must reach OnPointer, not just a direct call)", tb.vscroll)
 	}
 }
+
+// TestTextBoxTextViewportRectNarrowsForGutter proves the exported
+// TextViewportRect (unlike ClipRect) narrows below the bounds width when the
+// vertical-scroll gutter is reserved — the ground-truth render signal a
+// harness needs (comparing ClipRect().W to bounds width is a tautology, since
+// ClipRect always returns the full bounds).
+func TestTextBoxTextViewportRectNarrowsForGutter(t *testing.T) {
+	tb := newLongLineOverflowingTextBox(t) // overflows -> thumb shown -> gutter reserved
+	if !tb.vScrollShown {
+		t.Fatal("want vScrollShown (overflowing) so a gutter is reserved")
+	}
+	bounds := tb.Bounds()
+
+	// ClipRect is the tautology: always the full bounds width.
+	clip, _ := tb.ClipRect()
+	if clip.W != bounds.W {
+		t.Fatalf("ClipRect().W = %v, want %v (ClipRect is always full bounds by design)", clip.W, bounds.W)
+	}
+
+	// TextViewportRect is the real signal: narrower than the bounds, and its
+	// right edge is the thumb track's left edge.
+	vp, ok := tb.TextViewportRect()
+	if !ok {
+		t.Fatal("TextViewportRect ok = false for a multi-line box, want true")
+	}
+	if vp.W >= bounds.W {
+		t.Fatalf("TextViewportRect().W = %v, want < bounds width %v (gutter reserved)", vp.W, bounds.W)
+	}
+	track, _ := tb.vScrollTrack()
+	if vp.Right() != track.X {
+		t.Fatalf("TextViewportRect right edge = %v, want %v (thumb track left edge)", vp.Right(), track.X)
+	}
+
+	// Single-line: no viewport.
+	sl := NewTextBox(buttonFace(t))
+	if _, ok := sl.TextViewportRect(); ok {
+		t.Fatal("single-line TextViewportRect ok = true, want false")
+	}
+}
+
+// TestTextBoxMultilineWheelScrollsWhenNestedInContainer drives the wheel
+// through Router.PointerWheel at the box's real on-screen position while the
+// box is a CHILD of a StackPanel (not the root) — proving HitPath traverses
+// the container to reach the nested TextBox and Bubble delivers the wheel to
+// it. This is the nesting the real augment box has (a StackPanel inside a
+// SplitPanel); a HitPath that stopped at the container would leave vscroll
+// untouched here.
+func TestTextBoxMultilineWheelScrollsWhenNestedInContainer(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true)
+	tb.SetText("l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9")
+	tb.SetWidth(200)
+	tb.SetHeight(50)
+
+	panel := NewStackPanel(Vertical)
+	panel.Add(tb)
+	core.MeasureWidget(panel, render.Size{W: 200, H: 50})
+	core.ArrangeWidget(panel, render.Rect{X: 0, Y: 0, W: 200, H: 50})
+	tb.SetCaret(0)
+	core.ArrangeWidget(panel, render.Rect{X: 0, Y: 0, W: 200, H: 50})
+	if tb.vscroll != 0 {
+		t.Fatalf("vscroll = %v after caret-to-start, want 0", tb.vscroll)
+	}
+
+	r := input.NewRouter()
+	r.SetRoot(panel)
+	b := core.BoundsOf(tb)
+	if b.W == 0 || b.H == 0 {
+		t.Fatalf("nested TextBox bounds are zero (%+v) — container did not arrange it", b)
+	}
+	r.PointerWheel(render.Point{Y: -1}, render.Point{X: b.X + b.W/2, Y: b.Y + b.H/2}, 0)
+
+	if tb.vscroll <= 0 {
+		t.Fatalf("vscroll = %v after a wheel routed to the NESTED box, want > 0 (HitPath must traverse the container)", tb.vscroll)
+	}
+}
+
+// TestTextBoxSourceEditorRealArrangementReservesGutter reproduces the augment
+// source editor's EXACT construction (Multiline + WordWrap OFF + LineNumbers,
+// SetHeight(460), NO SetWidth) inside a Vertical StackPanel arranged as a
+// split pane — the real config Eric's -selftest-augment-source-wheel-diag
+// drives. It proves the gutter reservation FIRES for this config (vScrollShown
+// true, contentWidth narrowed by ScrollGutter) and, crucially, that the RIGHT
+// probe to see it is TextViewportRect (narrows) NOT ClipRect (always full
+// bounds — the tautology that made the real box look unfixed).
+func TestTextBoxSourceEditorRealArrangementReservesGutter(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 80; i++ {
+		if i == 1 {
+			lines = append(lines, "def handle(request, context, options, retries, deadline, backoff, jitter):")
+		} else {
+			lines = append(lines, "    step = compute(i)")
+		}
+	}
+	tb := NewTextBox(buttonFace(t))
+	tb.SetMultiline(true)
+	tb.SetTabInserts(true)
+	tb.SetLineNumbers(true)
+	tb.SetText(strings.Join(lines, "\n"))
+	tb.SetHeight(460)
+	// NO SetWidth — grows with the split, like the real box.
+
+	right := NewStackPanel(Vertical).SetGap(4)
+	right.Add(NewTextBlock(buttonFace(t), "Source"))
+	right.Add(tb)
+	core.MeasureWidget(right, render.Size{W: 600, H: 900})
+	core.ArrangeWidget(right, render.Rect{X: 0, Y: 0, W: 600, H: 900})
+
+	b := tb.Bounds()
+	if b.H != 460 {
+		t.Fatalf("box height = %v, want 460 (SetHeight honored through the StackPanel)", b.H)
+	}
+	if !tb.vScrollShown {
+		t.Fatal("vScrollShown = false for an 80-line box in a 460px viewport, want true (gutter reservation must fire for LineNumbers+WordWrapOff)")
+	}
+	if tb.contentWidth() >= tb.fullContentWidth() {
+		t.Fatalf("contentWidth %v not reduced below fullContentWidth %v (gutter not subtracted)", tb.contentWidth(), tb.fullContentWidth())
+	}
+
+	// The tautology: ClipRect is ALWAYS full bounds — the wrong probe.
+	if clip, _ := tb.ClipRect(); clip.W != b.W {
+		t.Fatalf("ClipRect().W = %v, want %v (always full bounds by design)", clip.W, b.W)
+	}
+	// The real signal: TextViewportRect narrows and stops at the thumb.
+	vp, ok := tb.TextViewportRect()
+	if !ok || vp.W >= b.W {
+		t.Fatalf("TextViewportRect = %+v ok=%v, want narrowed below bounds width %v", vp, ok, b.W)
+	}
+	track, _ := tb.vScrollTrack()
+	if vp.Right() != track.X {
+		t.Fatalf("TextViewportRect right edge = %v, want %v (thumb track left edge — text stops before the thumb)", vp.Right(), track.X)
+	}
+}
