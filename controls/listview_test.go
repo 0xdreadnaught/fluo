@@ -22,14 +22,25 @@ type fakeListItems struct {
 	items  []string
 	subs   map[int]func(ListChange)
 	nextID int
+
+	// atCalls counts At calls, so the content-width cache tests can tell a
+	// real measure pass (which reads every item) from a cached one (which
+	// reads none). Face.Measure itself can't be counted — text.Face is a
+	// concrete type, not an interface — but contentWidth reads exactly one
+	// item per Measure, so this counts the same thing.
+	atCalls int
 }
 
 func newFakeListItems(items ...string) *fakeListItems {
 	return &fakeListItems{items: append([]string(nil), items...)}
 }
 
-func (f *fakeListItems) Len() int        { return len(f.items) }
-func (f *fakeListItems) At(i int) string { return f.items[i] }
+func (f *fakeListItems) Len() int { return len(f.items) }
+
+func (f *fakeListItems) At(i int) string {
+	f.atCalls++
+	return f.items[i]
+}
 
 func (f *fakeListItems) OnChange(fn func(ListChange)) (cancel func()) {
 	if f.subs == nil {
@@ -46,6 +57,20 @@ func (f *fakeListItems) Add(s string) {
 	idx := len(f.items) - 1
 	for _, fn := range f.subs {
 		fn(ListChange{Kind: ListChangeAdd, Index: idx})
+	}
+}
+
+func (f *fakeListItems) RemoveAt(i int) {
+	f.items = append(f.items[:i], f.items[i+1:]...)
+	for _, fn := range f.subs {
+		fn(ListChange{Kind: ListChangeRemove, Index: i})
+	}
+}
+
+func (f *fakeListItems) Set(i int, s string) {
+	f.items[i] = s
+	for _, fn := range f.subs {
+		fn(ListChange{Kind: ListChangeReplace, Index: i})
 	}
 }
 
@@ -731,4 +756,163 @@ func TestListViewNilItemsBuildsAndLaysOut(t *testing.T) {
 		t.Fatalf("Children = %d, want 0 (no rows to realize)", got)
 	}
 	l.Dispose()
+}
+
+// --- contentWidth memoization ---
+
+// wantContentWidth is the full, uncached max-row-width computation the cache
+// must agree with: the widest row's measured text width plus the lpad/rpad
+// inset ArrangeContent gives every row.
+func wantContentWidth(face *text.Face, items []string, m theme.MetricTokens) float32 {
+	var maxW float32
+	for _, s := range items {
+		if w := face.Measure(s).W; w > maxW {
+			maxW = w
+		}
+	}
+	return maxW + 2*m.PaddingS + m.PaddingS
+}
+
+func TestListViewContentWidthMatchesFullMeasure(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+
+	face := testFace(t)
+	rows := []string{"short", wideText, "middling row"}
+	l := NewListView(face, newFakeListItems(rows...))
+
+	want := wantContentWidth(face, rows, theme.Light().Metric)
+	if got := l.contentWidth(); got != want {
+		t.Fatalf("contentWidth() = %v, want %v (widest row + lpad + rpad)", got, want)
+	}
+	// Cold cache and warm cache must agree.
+	if got := l.contentWidth(); got != want {
+		t.Fatalf("second contentWidth() = %v, want %v (cached value must match the measured one)", got, want)
+	}
+}
+
+func TestListViewContentWidthCachedAfterFirstCall(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+
+	items := newFakeListItems("a", "b", "c", "d")
+	l := NewListView(testFace(t), items)
+
+	items.atCalls = 0
+	first := l.contentWidth()
+	if items.atCalls != items.Len() {
+		t.Fatalf("cold contentWidth() read %d items, want %d (a full measure pass)", items.atCalls, items.Len())
+	}
+
+	items.atCalls = 0
+	if got := l.contentWidth(); got != first {
+		t.Fatalf("cached contentWidth() = %v, want %v", got, first)
+	}
+	if items.atCalls != 0 {
+		t.Fatalf("cached contentWidth() read %d items, want 0 (no re-measure without a list change)", items.atCalls)
+	}
+}
+
+func TestListViewContentWidthRemeasuredAfterListChange(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+
+	face := testFace(t)
+	items := newFakeListItems("a", "b")
+	l := NewListView(face, items)
+
+	narrow := l.contentWidth()
+
+	items.Add(wideText)
+	items.atCalls = 0
+	wide := l.contentWidth()
+	if items.atCalls != items.Len() {
+		t.Fatalf("contentWidth() after an add read %d items, want %d (the change must drop the cache)", items.atCalls, items.Len())
+	}
+	if wide <= narrow {
+		t.Fatalf("contentWidth() after adding a wide row = %v, want > %v", wide, narrow)
+	}
+	if want := wantContentWidth(face, items.items, theme.Light().Metric); wide != want {
+		t.Fatalf("contentWidth() after an add = %v, want %v", wide, want)
+	}
+
+	// Removing the wide row must shrink it back.
+	items.RemoveAt(2)
+	if got := l.contentWidth(); got != narrow {
+		t.Fatalf("contentWidth() after removing the wide row = %v, want %v (back to the narrow set)", got, narrow)
+	}
+
+	// Replacing a row in place (through the change channel) is picked up too.
+	items.Set(0, wideText)
+	if got := l.contentWidth(); got != wide {
+		t.Fatalf("contentWidth() after replacing row 0 with the wide text = %v, want %v", got, wide)
+	}
+}
+
+// TestListViewArrangeDoesNotRemeasureEveryRow is the point of the cache:
+// scrolling a long list must not re-measure every row, only re-realize the
+// handful of visible ones.
+func TestListViewArrangeDoesNotRemeasureEveryRow(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+
+	rows := make([]string, 200)
+	for i := range rows {
+		rows[i] = "Item"
+	}
+	items := newFakeListItems(rows...)
+	l := NewListView(testFace(t), items).SetRowHeight(20)
+	layoutListView(l, 0, 0, 120, 100)
+
+	realized := len(l.pool)
+	if realized == 0 || realized >= items.Len() {
+		t.Fatalf("realized %d of %d rows, want a small virtualized slice", realized, items.Len())
+	}
+
+	// A wheel notch + re-arrange: only the realized rows may be read.
+	items.atCalls = 0
+	l.OnPointer(&input.PointerEvent{Action: input.Wheel, Delta: render.Point{Y: -1}, Router: input.NewRouter()})
+	layoutListView(l, 0, 0, 120, 100)
+	if items.atCalls > len(l.pool) {
+		t.Fatalf("arrange after a scroll read %d items, want at most %d (the realized rows) — the width measure must be cached", items.atCalls, len(l.pool))
+	}
+}
+
+func TestListViewContentWidthNilSources(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+
+	nilItems := NewListView(testFace(t), nil)
+	if got := nilItems.contentWidth(); got != 0 {
+		t.Fatalf("contentWidth() with nil items = %v, want 0", got)
+	}
+	if got := nilItems.contentWidth(); got != 0 {
+		t.Fatalf("cached contentWidth() with nil items = %v, want 0", got)
+	}
+
+	nilFace := NewListView(nil, newFakeListItems(wideText))
+	if got := nilFace.contentWidth(); got != 0 {
+		t.Fatalf("contentWidth() with a nil face = %v, want 0", got)
+	}
+}
+
+// TestListViewHorizontalThumbAppearsAfterWideRowAdded checks the cache
+// invalidation end to end: an added wide row must grow the horizontal thumb
+// on the next arrange, not stay hidden behind a stale width.
+func TestListViewHorizontalThumbAppearsAfterWideRowAdded(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+
+	items := newFakeListItems("a", "b")
+	l := NewListView(testFace(t), items).SetRowHeight(48)
+	layoutListView(l, 0, 0, 100, 100)
+	if _, ok := l.thumbRectX(); ok {
+		t.Fatal("expected no horizontal thumb for short rows")
+	}
+
+	items.Add(wideText)
+	layoutListView(l, 0, 0, 100, 100)
+	if _, ok := l.thumbRectX(); !ok {
+		t.Fatal("expected a horizontal thumb after adding a row far wider than the viewport")
+	}
 }
