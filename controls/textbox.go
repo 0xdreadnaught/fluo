@@ -1219,31 +1219,28 @@ func (t *TextBox) caretIndexAtX(x float32) int {
 // (xOf(i)+xOf(i+1))/2 and return the first i whose midpoint x sits left of,
 // else len(runes) (past the last rune). The old form recomputed xOf(i) =
 // Measure(runes[:i]) from scratch every step, so each scan was O(n²) in the
-// range length and re-ran on every pointer Move of a drag-select. Here a
-// single running pen accumulates one rune's advance at a time: prevX holds
-// xOf(i), and xOf(i+1) is prevX plus Measure of just runes[i]. Face.Measure
-// builds a prefix's width by adding each rune's advance (and any kerning to
-// the previous glyph) left-to-right in float32; the fonts in use carry no
-// kern pairs sfnt reads, so those kern steps contribute exactly 0 and the
-// prefix width is purely the left-to-right sum of single-rune advances —
-// making prevX bit-identical to the old xOf(i), every midpoint bit-identical,
-// and every returned index identical for every input (verified against the
-// old prefix-Measure form in the tests). A nil face measures 0 per rune, so
-// every boundary is 0 exactly as xOf returned there, preserving the old
-// nil-face outcome (x<0 -> 0, x>=0 -> len(runes)).
+// range length and re-ran on every pointer Move of a drag-select. Here one
+// Face.PrefixWidths pass walks the run once and hands back every boundary's
+// pen width, widths[i] being exactly Measure(runes[:i]).W — same glyph
+// resolution, same kerning between same-font neighbors, same float32 order
+// of accumulation — so every midpoint and every returned index match the old
+// scan for every input, on kerned and kern-free fonts alike. A nil face has
+// no pen to walk: xOf returned 0 for every boundary there, so every midpoint
+// was 0 and the old scan yielded 0 for x<0 and len(runes) otherwise, which is
+// what this reproduces directly.
 func (t *TextBox) caretIndexInRunes(runes []rune, x float32) int {
 	n := len(runes)
-	var prevX float32 // xOf(i): pen width up to boundary i
-	for i := 0; i < n; i++ {
-		var adv float32
-		if t.face != nil {
-			adv = t.face.Measure(string(runes[i])).W
+	if t.face == nil {
+		if x < 0 {
+			return 0
 		}
-		curX := prevX + adv // xOf(i+1)
-		if x < (prevX+curX)/2 {
+		return n
+	}
+	widths := t.face.PrefixWidths(runes)
+	for i := 0; i < n; i++ {
+		if x < (widths[i]+widths[i+1])/2 {
 			return i
 		}
-		prevX = curX
 	}
 	return n
 }

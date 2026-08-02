@@ -234,6 +234,30 @@ func TestTextBoxCaretIndexRunningPenMatchesPrefixMeasure(t *testing.T) {
 	}
 }
 
+// TestTextBoxCaretIndexAtXNilFace locks the nil-face hit-test outcome, which
+// the running pen short-circuits rather than walking: with no face there are
+// no glyphs to click between, xOf reports 0 for every boundary, so every
+// midpoint is 0 — a click left of the text lands at 0 and anything from 0
+// rightward falls through to the end.
+func TestTextBoxCaretIndexAtXNilFace(t *testing.T) {
+	tb := NewTextBox(nil)
+	tb.SetText("hello")
+	n := len(tb.runes)
+	for _, tc := range []struct {
+		x    float32
+		want int
+	}{{-100, 0}, {-0.001, 0}, {0, n}, {0.001, n}, {500, n}} {
+		if got := tb.caretIndexAtX(tc.x); got != tc.want {
+			t.Errorf("nil face: caretIndexAtX(%v) = %d, want %d", tc.x, got, tc.want)
+		}
+	}
+
+	empty := NewTextBox(nil)
+	if got := empty.caretIndexAtX(-1); got != 0 {
+		t.Errorf("nil face, empty text: caretIndexAtX(-1) = %d, want 0", got)
+	}
+}
+
 // TestTextBoxMultilineCullsOffscreenLines pins the P4 speedup: a tall
 // multi-line box scrolled so most lines sit outside its bounds must draw only
 // the lines whose row actually intersects the viewport. With the whole text

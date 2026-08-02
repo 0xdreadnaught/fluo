@@ -336,6 +336,51 @@ func TestMeasure(t *testing.T) {
 	}
 }
 
+// TestFacePrefixWidthsMatchMeasurePrefixes pins the contract PrefixWidths
+// exists for: widths[i] must equal Measure(string(runes[:i])).W for EVERY
+// boundary i, exactly — not within a tolerance. Callers that walk a run
+// boundary by boundary (caret hit-testing) rely on that, and the only way to
+// get it is to reuse Measure's own per-step accumulation, kerning included:
+// a pen that summed advances alone would agree here only by the accident of
+// goregular carrying no kern pairs, and would drift on a font that does.
+// The mixed-script subtest additionally covers the fallback chain, where
+// consecutive glyphs come from different source fonts and kerning between
+// them must be suppressed on both paths alike.
+func TestFacePrefixWidthsMatchMeasurePrefixes(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	check := func(t *testing.T, fa *Face, s string) {
+		t.Helper()
+		runes := []rune(s)
+		widths := fa.PrefixWidths(runes)
+		if len(widths) != len(runes)+1 {
+			t.Fatalf("PrefixWidths(%q) returned %d widths, want %d", s, len(widths), len(runes)+1)
+		}
+		if widths[0] != 0 {
+			t.Errorf("PrefixWidths(%q)[0] = %v, want 0", s, widths[0])
+		}
+		for i := range widths {
+			want := fa.Measure(string(runes[:i])).W
+			if widths[i] != want {
+				t.Errorf("PrefixWidths(%q)[%d] = %v, want %v (Measure of the prefix)", s, i, widths[i], want)
+			}
+		}
+	}
+
+	fa := NewFace(f, 16)
+	for _, s := range []string{"", "M", "AVAWaToVoTaWATATaYoP.", "The quick brown fox", "héllo wörld", "iiiWWWmmm"} {
+		check(t, fa, s)
+	}
+
+	t.Run("fallback", func(t *testing.T) {
+		fb := NewFaceWithFallback(f, []*Font{loadCJKFallback(t)}, 16)
+		check(t, fb, "Hi 中文 fluo")
+	})
+}
+
 // TestResolveGlyphNoFallback is the graceful-tofu regression test: a Face
 // with no fallback chain (the NewFace path) must resolve every rune to its
 // own Font, even one goregular has no glyph for — falling back to glyph
