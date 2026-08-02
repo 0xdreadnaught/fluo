@@ -546,6 +546,73 @@ func TestDataGridSetSelectedIndexAutoScrollsIntoView(t *testing.T) {
 	}
 }
 
+// TestDataGridBandAndGridLinesStayInBounds pins that the selection band and
+// the per-row grid line for a partially-visible row are cropped to the body
+// viewport. Render draws both before ClipRect is pushed (core.RenderWidget
+// runs a widget's own Render first), so nothing crops them for us: with a row
+// height that doesn't divide the body height, the bottom row is partly
+// visible and its band and line used to paint out past the well and over
+// whatever sits below the control.
+func TestDataGridBandAndGridLinesStayInBounds(t *testing.T) {
+	// header 20 tall, body viewport {2,22,84,86}: 86 is not a multiple of the
+	// 20px rows, so a row hangs off an edge at most offsets. The offset is set
+	// directly rather than through SetSelectedIndex, whose scroll-into-view
+	// would align the selected row flush with an edge and hide the bug.
+	cases := []struct {
+		name     string
+		selected int
+		offset   float32
+	}{
+		{"partial bottom row", 4, 5}, // band 97..117, viewport ends at 108
+		{"partial top row", 0, 5},    // band 17..37, viewport starts at 22
+	}
+
+	bounds := render.Rect{X: 0, Y: 0, W: 100, H: 110}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewDataGrid(nil)
+			g.SetColumns(Column{Width: Px(50)})
+			g.SetRowCount(10)
+			g.rowH = 20
+			g.selected = tc.selected
+			g.rawOffset = tc.offset
+			layoutDataGrid(g, bounds.X, bounds.Y, bounds.W, bounds.H)
+
+			lastRowBottom := g.viewport.Y + float32(g.visibleFirst+g.visibleCount)*g.rowH - g.offset
+			if lastRowBottom <= g.viewport.Bottom() {
+				t.Fatalf("fixture: the last visible row ends at %v, inside the viewport's %v — nothing overhangs to check",
+					lastRowBottom, g.viewport.Bottom())
+			}
+
+			rr := &recordRenderer{}
+			g.Render(rr)
+
+			if len(rr.fills) == 0 {
+				t.Fatal("DataGrid.Render emitted no fills at all")
+			}
+			var band bool
+			for _, f := range rr.fills {
+				if f.color == g.colors.Highlight {
+					band = true
+					// The band belongs to the body: it must not bleed up into
+					// the header strip drawn above it either.
+					if f.rect.Y < g.viewport.Y {
+						t.Fatalf("selection band %v starts at %v, above the body viewport at %v",
+							f.rect, f.rect.Y, g.viewport.Y)
+					}
+				}
+				if f.rect.Bottom() > bounds.Bottom() {
+					t.Fatalf("Render emitted %v, reaching %v — past the control's bottom edge at %v",
+						f.rect, f.rect.Bottom(), bounds.Bottom())
+				}
+			}
+			if !band {
+				t.Fatal("fixture: no selection band was drawn, so nothing was actually checked")
+			}
+		})
+	}
+}
+
 // --- Header fixed while body scrolls ---
 
 func TestDataGridHeaderYConstantWhileBodyScrolls(t *testing.T) {

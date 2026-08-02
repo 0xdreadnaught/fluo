@@ -538,6 +538,14 @@ func (g *DataGrid) Render(r render.Renderer) {
 
 	r.PopClip()
 
+	// Both the selection band and the grid lines are cropped to the body
+	// viewport. They are drawn here, before ClipRect is pushed (RenderWidget
+	// runs a widget's own Render BEFORE its clip — only the cell TextBlocks
+	// are clipped by it), and the visible range deliberately includes the
+	// partial rows at either edge whenever the row height doesn't divide the
+	// viewport height. Without the crop the top row's band bleeds up into the
+	// header and the bottom row's band and line spill past the body onto the
+	// sunken bevel.
 	sw := g.metrics.StrokeWidth
 	for row := 0; row < g.visibleCount; row++ {
 		rowIdx := g.visibleFirst + row
@@ -545,10 +553,15 @@ func (g *DataGrid) Render(r render.Renderer) {
 		rowRect := render.Rect{X: g.viewport.X, Y: rowY, W: g.viewport.W, H: g.rowH}
 
 		if rowIdx == g.selected {
-			r.FillRect(rowRect, g.colors.Highlight)
+			if band := rowRect.Intersect(g.viewport); !band.Empty() {
+				r.FillRect(band, g.colors.Highlight)
+			}
 		}
 
 		gridLine := render.Rect{X: g.viewport.X, Y: rowRect.Bottom() - sw, W: g.viewport.W, H: sw}
+		if gridLine = gridLine.Intersect(g.viewport); gridLine.Empty() {
+			continue
+		}
 		r.FillRect(gridLine, g.colors.ButtonShadow)
 	}
 }

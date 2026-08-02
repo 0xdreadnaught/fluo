@@ -634,10 +634,12 @@ func (l *ListView) ArrangeContent(bounds render.Rect) {
 // before its TextBlock renders on top (see RenderWidget's documented order:
 // a widget's own Render runs before its children's) — a no-op for the band
 // when nothing is selected, or the selected index isn't currently realized
-// (scrolled out of the visible range). The band is drawn unclipped like
-// every other Render method in this package, but always safely within l's
-// own bounds regardless: the row rect computed here is the exact geometry
-// ArrangeContent already arranged that pool slot's TextBlock at.
+// (scrolled out of the visible range). The band is drawn before any clip is
+// pushed, like every other Render method in this package (see
+// core.RenderWidget's order), so it is cropped to the content viewport here
+// instead — the row rect it comes from is the exact geometry ArrangeContent
+// arranged that pool slot's TextBlock at, and a row at the viewport edge can
+// be only partly visible.
 func (l *ListView) Render(r render.Renderer) {
 	drawSunken(r, l.Bounds(), l.colors.WindowWell, l.colors)
 
@@ -653,11 +655,22 @@ func (l *ListView) Render(r render.Renderer) {
 	// gutter), so the band reaches its right edge; when it scrolls, the band
 	// stops at the gutter so it stays clear of the translucent thumb rather
 	// than showing through it.
+	//
+	// Cropped to the viewport, because the band is drawn here and the clip
+	// isn't pushed until afterwards (RenderWidget runs a widget's own Render
+	// BEFORE its ClipRect, so only the row TextBlocks are clipped by it). A
+	// selected row at either edge of the viewport is only partly visible
+	// whenever the row height doesn't divide the viewport height, and its
+	// full-height band would otherwise paint over the sunken bevel below or
+	// above the content area.
 	rowRect := render.Rect{
 		X: l.viewport.X,
 		Y: l.viewport.Y + float32(l.selected)*l.rowH - l.offset,
 		W: l.viewport.W,
 		H: l.rowH,
+	}.Intersect(l.viewport)
+	if rowRect.Empty() {
+		return
 	}
 	r.FillRect(rowRect, l.colors.Highlight)
 }

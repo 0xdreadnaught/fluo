@@ -680,6 +680,66 @@ func TestListViewDisposeIsIdempotent(t *testing.T) {
 	l.Dispose() // must not panic
 }
 
+// TestListViewSelectionBandStaysInBounds pins that the selection band for a
+// partially-visible row is cropped. Render draws the band before ClipRect is
+// pushed (core.RenderWidget runs a widget's own Render first), so nothing
+// crops it for us: with a row height that doesn't divide the viewport, the
+// bottom row is partly visible and its full-height band used to paint out
+// past the well and over whatever sits below the control.
+func TestListViewSelectionBandStaysInBounds(t *testing.T) {
+	// viewport {2,2,84,96}: 96 is not a multiple of the 30px rows, so a row
+	// hangs off an edge at most offsets. The offsets below are set directly
+	// rather than through SetSelectedIndex, whose scroll-into-view would
+	// align the selected row flush with an edge and hide the bug.
+	cases := []struct {
+		name     string
+		selected int
+		offset   float32
+	}{
+		{"partial bottom row", 3, 14}, // band 78..108, viewport ends at 98
+		{"partial top row", 1, 40},    // band -8..22, viewport starts at 2
+	}
+
+	bounds := render.Rect{X: 0, Y: 0, W: 100, H: 100}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			items := newFakeListItems(make([]string, 10)...)
+			l := NewListView(nil, items).SetRowHeight(30)
+			l.selected = tc.selected
+			l.rawOffset = tc.offset
+			layoutListView(l, bounds.X, bounds.Y, bounds.W, bounds.H)
+
+			if l.selected < l.visibleFirst || l.selected >= l.visibleFirst+len(l.pool) {
+				t.Fatalf("fixture: row %d is not realized, so no band is drawn at all", l.selected)
+			}
+
+			rr := &recordRenderer{}
+			l.Render(rr)
+
+			if len(rr.fills) == 0 {
+				t.Fatal("ListView.Render emitted no fills at all")
+			}
+			var band bool
+			for _, f := range rr.fills {
+				if f.color == l.colors.Highlight {
+					band = true
+				}
+				if f.rect.Bottom() > bounds.Bottom() {
+					t.Fatalf("Render emitted %v, reaching %v — past the control's bottom edge at %v",
+						f.rect, f.rect.Bottom(), bounds.Bottom())
+				}
+				if f.rect.Y < bounds.Y {
+					t.Fatalf("Render emitted %v, starting at %v — above the control's top edge at %v",
+						f.rect, f.rect.Y, bounds.Y)
+				}
+			}
+			if !band {
+				t.Fatal("fixture: no selection band was drawn, so nothing was actually checked")
+			}
+		})
+	}
+}
+
 // --- Horizontal scroll (control-variants Task 4) ---
 
 // wideText is far wider, at typical face sizes, than any viewport used by
