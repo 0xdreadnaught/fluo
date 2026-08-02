@@ -606,6 +606,43 @@ func TestDataGridNoHorizontalThumbWhenColumnsFitViewport(t *testing.T) {
 	}
 }
 
+// TestDataGridNoHorizontalThumbWhenEqualStarsDrift is the case the test
+// above happens not to hit: its Star column is the only one, so its share is
+// the whole remainder and nothing can round. Several EQUAL Stars each round
+// their own share in float32 and used to overshoot the width they were
+// resolved against — 3 across a 200-wide grid summed to 200.00002 — which
+// the exact contentW > viewport.W comparison read as real overflow: a
+// horizontal thumb with a scroll range of ~1.5e-5 px, plus a reserved bottom
+// gutter that costs a visible row.
+func TestDataGridNoHorizontalThumbWhenEqualStarsDrift(t *testing.T) {
+	for _, n := range []int{3, 6} {
+		cols := make([]Column, n)
+		for i := range cols {
+			cols[i] = Column{Width: Star(1)}
+		}
+		g := NewDataGrid(nil)
+		g.SetColumns(cols...)
+		g.SetRowCount(5)
+		g.rowH = 20
+		layoutDataGrid(g, 0, 0, 200, 200)
+
+		if g.contentW > g.viewport.W {
+			t.Fatalf("%d equal Star columns: contentW %v exceeds viewport.W %v by %v — the shares must tile it exactly",
+				n, g.contentW, g.viewport.W, g.contentW-g.viewport.W)
+		}
+		if _, ok := g.thumbRectX(); ok {
+			t.Fatalf("%d equal Star columns reported a horizontal thumb; they exactly fill the viewport", n)
+		}
+		// No phantom overflow means no bottom gutter either, so the body keeps
+		// the row the gutter would have cost it.
+		wantH := float32(200) - 2*g.metrics.BevelWidth - g.headerHeight()
+		if g.viewport.H != wantH {
+			t.Fatalf("%d equal Star columns: viewport.H = %v, want %v — a bottom gutter was reserved for phantom overflow",
+				n, g.viewport.H, wantH)
+		}
+	}
+}
+
 func TestDataGridHorizontalThumbShowsWhenColumnsOverflow(t *testing.T) {
 	// Px-only columns whose sum exceeds the viewport: the deliberate
 	// horizontal-overflow scenario this feature targets.
