@@ -8,6 +8,30 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-08-02
+
+### Fixed
+
+- A menu item now closes the menu before running its action, so an item that
+  opens a dialog, context menu, or dropdown no longer has it torn down instantly.
+- The mouse wheel is only consumed when a scroll actually moved, so a scroller
+  that can't scroll (e.g. a `ListView` that fits inside a `ScrollViewer`) lets
+  the wheel bubble to its parent instead of swallowing it.
+- The raw scroll accumulator is resynced to the clamped offset, removing the
+  dead zone where scrolling back from an end stop did nothing for several notches.
+- Equal `Star` columns now tile to fill the width exactly, fixing a float
+  rounding drift that produced a phantom horizontal scrollbar in `DataGrid`.
+- `ListView` reserves its scroll gutters jointly, so the vertical thumb is no
+  longer drawn outside the control when content also overflows horizontally.
+- `ListView`/`DataGrid` selection bands and grid lines are clipped to the
+  content viewport, so a partially-visible bottom row no longer paints outside.
+- `TitleBar.MeasureContent` returns a finite width instead of `+Inf`.
+- A focused vertical `Slider` responds to Up/Down.
+- `SplitPanel.SetFirst/SetSecond(nil)` and `OverlayHost.SetContent(nil)` clear
+  the slot instead of panicking.
+- `SplitPanel` fires `OnSplitChanged` only when the ratio actually changed.
+- The tab strip bounds-checks its cell cache when rendering before a re-measure.
+
 ## [0.15.2] - 2026-08-02
 
 ### Changed
