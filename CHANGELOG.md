@@ -8,6 +8,8 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-08-02
+
 ### Changed
 
 - `ListView` caches its measured content width instead of re-measuring every row
