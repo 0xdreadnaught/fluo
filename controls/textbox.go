@@ -1728,17 +1728,44 @@ func (t *TextBox) indexOfRowCol(idx, col int) int {
 }
 
 // rowCol maps rune index i (0..len(runes)) to its 0-based (row, col) in the
-// current wrap layout — the wrapping analogue of lineCol. A caret exactly
-// at a row boundary (soft OR hard — computeVisualRows makes no distinction
-// once the rows exist) is reported at the END of the UPPER row, col ==
-// that row's own length: the same tie-break lineCol already applies at a
-// real '\n' (see its own doc comment, "just before the '\n': end of that
-// line"), kept consistent between hard and soft breaks so Up/Down/Home/End
-// behave identically at either kind.
+// current wrap layout — the wrapping analogue of lineCol.
+//
+// Affinity at a row boundary. wrapLogicalLine produces two kinds of soft
+// break. A dropped wrap-space (case 2) and a real '\n' both leave a GAP:
+// the upper row ends at index e, the next row starts strictly after it
+// (> e), so the boundary index e is unambiguous — it is the end of the
+// upper row, col == that row's own length. A character break inside an
+// over-long word (cases 3/4) instead leaves the rows CONTIGUOUS:
+// rows[k].end == rows[k+1].start == e, so the single index e is BOTH the
+// end of row k and the start of the continuation row k+1. For that
+// contiguous case we give the caret start-of-continuation affinity: index e
+// maps to (k+1, 0), the START of the continuation row, not (k, len(row k)).
+// "Start of a continuation row" would otherwise be unrepresentable — every
+// such index would collapse onto the upper row's far-right end, so a caret
+// legitimately at the head of a char-broken row would draw a line up and
+// far right, feed the wrong rect to the IME, and make Home/End/Up/Down
+// disagree with where it visibly sits. The gap boundaries are unchanged:
+// there the next row starts past e, so the affinity check below never fires
+// and the index stays the end of the upper row — matching lineCol's own
+// "just before the '\n': end of that line" tie-break, kept identical for
+// hard breaks and dropped-space soft breaks. This stays consistent with
+// caretIndexAtPos (click -> index): a click at the head of a continuation
+// row resolves to e via rowStart(k+1)+0, and rowCol(e) maps back to
+// (k+1, 0), so draw and hit-test round-trip.
 func (t *TextBox) rowCol(i int) (row, col int) {
 	rows := t.visualRows(t.contentWidth())
 	for idx := range rows {
-		if i <= rows[idx].end {
+		if i < rows[idx].end {
+			return idx, i - rows[idx].start
+		}
+		if i == rows[idx].end {
+			// Contiguous continuation (char-break): the index is equally the
+			// start of the next row, so report it there (col 0). A gap
+			// boundary (dropped wrap-space or '\n') has the next row starting
+			// past i, so this does not fire — the index stays row idx's end.
+			if idx+1 < len(rows) && rows[idx+1].start == i {
+				return idx + 1, 0
+			}
 			return idx, i - rows[idx].start
 		}
 	}

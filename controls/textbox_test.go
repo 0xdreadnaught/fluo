@@ -2424,6 +2424,106 @@ func TestTextBoxWordWrapMeasureContentFallsBackOnInfiniteAvailableWidth(t *testi
 	}
 }
 
+// newFocusedCharBreakFixture builds a focused, multi-line, word-wrapped
+// TextBox around a single over-long word with no spaces ("aaaaaaaaaa"), at a
+// content width sized to fit exactly three glyphs (face.Measure("aaa").W).
+// Because there is no space to break on, wrapLogicalLine character-breaks it
+// (cases 3/4), yielding CONTIGUOUS rows [0,3)[3,6)[6,9)[9,10) — each row's
+// end is the next row's start, unlike the dropped-wrap-space fixture whose
+// rows have a one-index gap. This is the fixture the contiguous-boundary
+// affinity tests below need (the shared word-wrap fixture only exercises gap
+// boundaries, which is why the affinity bug went unnoticed).
+func newFocusedCharBreakFixture(t *testing.T) (*TextBox, *input.Router) {
+	t.Helper()
+	face := buttonFace(t)
+	tb := NewTextBox(face).SetMultiline(true).SetWordWrap(true)
+	boxWidth := face.Measure("aaa").W + 2*tb.metrics.PaddingM
+	const boxHeight = 200
+	tb.SetWidth(boxWidth)
+	tb.SetHeight(boxHeight)
+	tb.SetText("aaaaaaaaaa")
+
+	r := input.NewRouter()
+	r.SetRoot(tb)
+	layoutButton(tb, render.Rect{X: 0, Y: 0, W: boxWidth, H: boxHeight})
+	r.Focus(tb)
+
+	rows := tb.visualRows(tb.contentWidth())
+	if len(rows) < 2 || rows[0].end != rows[1].start {
+		t.Fatalf("test setup: rows = %+v, want contiguous char-break rows (rows[0].end == rows[1].start)", rows)
+	}
+	return tb, r
+}
+
+// TestTextBoxWordWrapContiguousBoundaryStartAffinity locks the fix for the
+// contiguous-wrap boundary: an index that is the START of a char-broken
+// continuation row must map to that row's head (col 0), not the far-right
+// END of the row above. rows[1].start (== rows[0].end == 3) is exactly such
+// an index. Draw (rowCol), Home, Down, and CaretScreenRect must all agree it
+// sits at row 1 col 0.
+func TestTextBoxWordWrapContiguousBoundaryStartAffinity(t *testing.T) {
+	tb, r := newFocusedCharBreakFixture(t)
+	rows := tb.visualRows(tb.contentWidth())
+	boundary := rows[1].start // == rows[0].end: ambiguous contiguous index
+
+	// rowCol: start-of-continuation affinity, not end-of-upper-row.
+	if row, col := tb.rowCol(boundary); row != 1 || col != 0 {
+		t.Fatalf("rowCol(%d) = (%d,%d), want (1,0) (start of the continuation row, not the end of row 0)", boundary, row, col)
+	}
+
+	// Draw / hit-test round-trip: a click at the head of row 1 resolves to
+	// the same index, and rowCol maps it back to (1,0).
+	bounds := tb.Bounds()
+	pad := tb.metrics.PaddingM
+	lh := tb.lineHeight()
+	y := bounds.Y + pad + 1*lh + lh/2 // vertically centered within row 1
+	x := bounds.X + pad               // far left of row 1
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: x, Y: y}, 0)
+	if c := tb.Caret(); c != boundary {
+		t.Fatalf("click at row1 head: Caret() = %d, want %d", c, boundary)
+	}
+	if row, col := tb.rowCol(tb.Caret()); row != 1 || col != 0 {
+		t.Fatalf("click round-trip: rowCol = (%d,%d), want (1,0)", row, col)
+	}
+
+	// Home from within row 1 stops at the row's own start (the boundary),
+	// not the whole text's start.
+	tb.SetCaret(rows[1].start + 1) // row 1, col 1
+	r.KeyDown(input.KeyHome, 0, 0)
+	if c := tb.Caret(); c != boundary {
+		t.Fatalf("Home from within row 1: Caret() = %d, want %d (row 1 start)", c, boundary)
+	}
+
+	// Down from row 0 lands at row 1's start (col 0 desired), on row 1.
+	tb.SetCaret(0)
+	r.KeyDown(input.KeyDown, 0, 0)
+	if c := tb.Caret(); c != boundary {
+		t.Fatalf("Down from row 0 col 0: Caret() = %d, want %d (row 1 start)", c, boundary)
+	}
+	if row, col := tb.rowCol(tb.Caret()); row != 1 || col != 0 {
+		t.Fatalf("Down: rowCol = (%d,%d), want (1,0)", row, col)
+	}
+
+	// CaretScreenRect returns row 1's rect (one line-height down, far left),
+	// not row 0's far-right end.
+	tb.SetCaret(boundary)
+	got, ok := tb.CaretScreenRect()
+	if !ok {
+		t.Fatal("CaretScreenRect() ok = false while focused, want true")
+	}
+	wantX := bounds.X + pad + tb.gutterWidth() - tb.hscroll + tb.xOfInRow(1, 0)
+	wantY := bounds.Y + pad - tb.vscroll + 1*lh
+	if got.X != wantX || got.Y != wantY || got.H != lh {
+		t.Fatalf("CaretScreenRect() = %+v, want X=%v Y=%v H=%v (row 1 col 0)", got, wantX, wantY, lh)
+	}
+	// Guard against the specific regression: the caret must NOT be reported a
+	// whole line-height up on row 0.
+	row0Y := bounds.Y + pad - tb.vscroll + 0*lh
+	if got.Y == row0Y {
+		t.Fatalf("CaretScreenRect().Y = %v is on row 0; the contiguous-boundary caret must render on row 1", got.Y)
+	}
+}
+
 // --- Vertical scroll thumb (shown only while content overflows) ---
 
 // newOverflowingMultilineTextBox builds a focused, multi-line (word-wrap
