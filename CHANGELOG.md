@@ -8,6 +8,21 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.15.5] - 2026-08-02
+
+### Changed
+
+- `Face.Measure` is memoized with a bounded two-generation cache, so re-measuring
+  the same string (the common case for stable labels re-laid-out each frame) is
+  now a map lookup instead of a per-rune font traversal. The cache is per-`Face`
+  and dropped when a fallback font is added.
+- `Face.Draw` no longer allocates a batch map on every call.
+- The timer queue is now a min-heap instead of a re-sorted slice, so advancing
+  and cancelling timers scale better; timers with the same due time now fire in
+  a stable insertion order.
+- `ListView` grows its cached content width incrementally when items are appended
+  instead of re-measuring the whole list.
+
 ## [0.15.4] - 2026-08-02
 
 ### Fixed
