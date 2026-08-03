@@ -2455,6 +2455,21 @@ func (t *TextBox) Render(r render.Renderer) {
 	textY := bounds.Y + (bounds.H-lh)/2
 	textX := bounds.X + pad - t.hscroll
 
+	// Clip the single-line text (glyphs, selection, caret) to the padding-inset
+	// content area so horizontally-scrolled text stops at the padding edge
+	// instead of bleeding half-glyphs over the sunken bevel. This is the
+	// single-line analogue of renderMultiline's textClipRect — single-line has
+	// no line-number or thumb gutter, so it's just the PaddingM inset. hscroll
+	// is untouched, so the full line is still reachable by scrolling; only the
+	// visible strip is bounded. Nothing covers a single-line box's bleed (it
+	// never draws a thumb track), unlike the multiline case, so this matters.
+	contentClip := render.Rect{X: bounds.X + pad, Y: bounds.Y, W: bounds.W - 2*pad, H: bounds.H}
+	if contentClip.W < 0 {
+		contentClip.W = 0
+	}
+	r.PushClip(contentClip)
+	defer r.PopClip()
+
 	if t.composing {
 		t.renderComposing(r, textX, textY, lh)
 		return

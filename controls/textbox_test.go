@@ -4302,3 +4302,60 @@ func TestTextBoxSourceEditorInSplitPanelStillNarrows(t *testing.T) {
 		t.Fatalf("renderMultiline did not PushClip %+v inside the SplitPanel; clips = %v", vp, rr.clips)
 	}
 }
+
+// TestTextBoxSingleLineClipsScrolledTextToPadding proves the single-line render
+// path clips horizontally-scrolled text (glyphs, selection, caret) to the
+// padding-inset content area, so scrolled-off content doesn't bleed half-glyphs
+// over the sunken bevel. This is the single-line analogue of the multiline
+// textClipRect fix (a single-line box never draws a thumb track, so nothing
+// covers the bleed).
+func TestTextBoxSingleLineClipsScrolledTextToPadding(t *testing.T) {
+	const s = "this is a fairly long single line of text that overflows the narrow box"
+	tb := NewTextBox(buttonFace(t))
+	tb.SetText(s)
+	tb.SetWidth(140)
+	tb.SetHeight(24)
+	core.MeasureWidget(tb, render.Size{W: 140, H: 24})
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 140, H: 24})
+
+	// Caret at the end -> hscroll > 0 (the line has scrolled left to keep the
+	// caret visible), so the head of the line is off the left content edge.
+	tb.Select(0, len([]rune(s))) // anchor 0, caret end: full selection, caret at end
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 140, H: 24})
+	if tb.hscroll <= 0 {
+		t.Fatalf("precondition: hscroll = %v, want > 0 (text scrolled to show the end)", tb.hscroll)
+	}
+
+	bounds := tb.Bounds()
+	pad := tb.metrics.PaddingM
+	clipL := bounds.X + pad
+	clipR := bounds.X + bounds.W - pad
+
+	rr := newClipRecorder()
+	tb.Render(rr)
+
+	found := false
+	for _, cr := range rr.clips {
+		if cr.X == clipL && cr.W == bounds.W-2*pad {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("single-line content clip not pushed (want x=%v w=%v); clips = %v", clipL, bounds.W-2*pad, rr.clips)
+	}
+
+	sawSel := false
+	for _, p := range rr.painted {
+		if p.color != tb.colors.Highlight || p.rect.W <= 0 || p.rect.H <= 0 {
+			continue
+		}
+		sawSel = true
+		if p.rect.X < clipL-0.01 || p.rect.Right() > clipR+0.01 {
+			t.Fatalf("selection fill %+v bleeds outside the content area [%v,%v]", p.rect, clipL, clipR)
+		}
+	}
+	if !sawSel {
+		t.Fatal("no selection fill painted; the scrolled-bleed case was not exercised")
+	}
+}
