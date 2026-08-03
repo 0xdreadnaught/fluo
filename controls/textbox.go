@@ -260,6 +260,14 @@ func (t *TextBox) Text() string {
 // caret-moving mutation — but only on the real-change path; the
 // no-op-on-equal path above leaves the blink phase (like everything else)
 // untouched.
+//
+// LOADING A DOCUMENT (multi-line): the caret is parked at the END of the new
+// text, and the next layout scrolls the viewport to keep the caret visible
+// (updateVScroll). So a bulk SetText of content taller than the box opens it
+// scrolled to the LAST line, not the first — which reads as "the box opened at
+// the bottom." A caller loading a document/script that should open at the TOP
+// must call SetCaret(0) after SetText. (Single-line boxes scroll only
+// horizontally, so this is a multi-line concern.)
 func (t *TextBox) SetText(s string) *TextBox {
 	if s == string(t.runes) {
 		return t
