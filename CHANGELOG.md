@@ -8,6 +8,18 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.15.11] - 2026-08-03
+
+### Fixed
+
+- **Single-line `TextBox` no longer bleeds scrolled text over its bevel.** A
+  horizontally-scrolled single-line box drew half-glyphs of the scrolled-off
+  head (and, with the caret mid-line, the tail) over the sunken bevel/padding,
+  because — unlike the multi-line path — it had no inner content clip. The text,
+  selection, and caret are now clipped to the padding-inset content area
+  (`hscroll` unchanged, so the full line is still reachable by scrolling). A box
+  whose text fits is byte-for-byte unchanged.
+
 ## [0.15.10] - 2026-08-02
 
 ### Added
