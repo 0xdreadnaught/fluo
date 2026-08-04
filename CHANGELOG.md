@@ -8,7 +8,18 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
-## [0.18.0] - 2026-08-04
+## [0.19.0] - 2026-08-04
+
+### Added
+
+- **`MenuItems.Clear()`** — empties a menu's entries and returns the receiver for
+  chaining, the one non-append operation on the otherwise append-only builder.
+  It makes dynamic menus possible: because `buildMenuPopup` already reads entries
+  fresh on every open, a caller that holds a `*MenuItems` (e.g. the submenu from
+  `AddSub("Recent")`) can rebuild it on a state change with `Clear()` + fresh
+  `Add` calls, and the next open reflects the new contents — no per-open hook, no
+  stale list. Unblocks a consumer's dynamic "Recent" menu. Additive; no golden
+  change.
 
 ### Added
 

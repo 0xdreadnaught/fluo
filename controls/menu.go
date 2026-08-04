@@ -125,6 +125,23 @@ func (mi *MenuItems) AddSub(label string) *MenuItems {
 	return sub
 }
 
+// Clear removes every entry, resetting this menu to empty, and returns mi for
+// chaining (Clear().Add(...).Add(...)). It is the one non-append operation on
+// the otherwise append-only builder, and it is what makes a DYNAMIC menu
+// possible: because buildMenuPopup reads entries fresh on every open (see its
+// doc comment — "edits made to items while closed are always reflected"), a
+// caller that holds onto a *MenuItems — e.g. the submenu returned by
+// AddSub("Recent") — can rebuild it on a state change with Clear() followed by
+// fresh Add calls, and the next time that menu opens it shows the new contents
+// with no per-open hook and no re-Add-into-a-stale-list. Clearing a menu that
+// is currently open does not rebuild the already-shown popup widget; the change
+// takes effect on the next open, which is the state-change-driven (not
+// per-frame, not per-open) usage this is designed for.
+func (mi *MenuItems) Clear() *MenuItems {
+	mi.entries = nil
+	return mi
+}
+
 // buildMenuPopup constructs a fresh popup widget (a menuPopupCard wrapping a
 // vertical StackPanel of rows) from items' CURRENT entries — built fresh on
 // every open, exactly like ComboBox.buildPopup, so edits made to items while

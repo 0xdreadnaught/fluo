@@ -616,3 +616,38 @@ func TestMenuHoverSameTitleNoop(t *testing.T) {
 		t.Fatalf("same-title hover churned the popup (count=%d, same=%v), want no change", host.PopupCount(), bar.popup == openPopup)
 	}
 }
+
+// TestMenuItemsClearRebuildsDynamically covers the Recent-Maps enrichment
+// (v0.19.0): a held *MenuItems can be emptied and rebuilt, and because
+// buildMenuPopup reads entries fresh on every open, the next open reflects the
+// new contents. Mirrors Eric's consumption pattern (hold the AddSub submenu,
+// Clear()+Add() on a state change).
+func TestMenuItemsClearRebuildsDynamically(t *testing.T) {
+	bar := NewMenuBar(buttonFace(t))
+	recent := bar.AddMenu("File").AddSub("Recent")
+	recent.Add("old-a", nil).Add("old-b", nil)
+	if len(recent.entries) != 2 {
+		t.Fatalf("entries after 2 Adds = %d, want 2", len(recent.entries))
+	}
+
+	if recent.Clear() != recent {
+		t.Fatal("Clear() did not return the receiver for chaining")
+	}
+	if len(recent.entries) != 0 {
+		t.Fatalf("entries after Clear = %d, want 0 (menu emptied)", len(recent.entries))
+	}
+
+	recent.Add("x", nil).Add("y", nil).Add("z", nil)
+	rows := menuPopupStackRows(t, buildMenuPopup(recent, func() {}))
+	if len(rows) != 3 {
+		t.Fatalf("rebuilt popup rows = %d, want 3 (x,y,z reflected fresh on open)", len(rows))
+	}
+}
+
+// TestMenuItemsClearOnEmptyIsSafe guards the degenerate call.
+func TestMenuItemsClearOnEmptyIsSafe(t *testing.T) {
+	mi := NewMenuBar(buttonFace(t)).AddMenu("Empty")
+	if mi.Clear(); len(mi.entries) != 0 {
+		t.Fatalf("Clear() on an empty menu left %d entries, want 0", len(mi.entries))
+	}
+}
