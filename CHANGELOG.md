@@ -8,7 +8,19 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
-## [0.16.0] - 2026-08-03
+## [0.16.1] - 2026-08-04
+
+### Fixed
+
+- **A scrollbar-thumb drag no longer fights a re-arrange mid-drag.**
+  `updateVScroll`/`updateHScroll` re-clamp the scroll offset to keep the caret
+  visible on every arrange. A thumb drag scrolls the view *away* from the caret,
+  so on a host that arranges between drag moves (e.g. one that calls `Frame`
+  every frame while the tree is dirty), the caret-follow snapped the offset back
+  toward the caret every frame — the thumb couldn't reach the ends and felt
+  random to grab. The caret-follow is now suppressed while a thumb drag is
+  active (`vDragging`/`hDragging`); the drag owns the offset and the clamp still
+  keeps it valid. Hosts that arrange only on invalidation were unaffected.
 
 ### Added
 
