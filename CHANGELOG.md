@@ -8,7 +8,20 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
-## [0.19.0] - 2026-08-04
+## [0.20.0] - 2026-08-04
+
+### Added
+
+- **Activation events on `ListView` and `TreeView`.** A new `OnActivate`
+  callback fires when the user *acts on* a row rather than merely selecting it:
+  `ListView.OnActivate(func(int))` and `TreeView.OnActivate(func(*TreeNode))`,
+  fired by **Enter** on the selected row and by a **double-click**. Activation is
+  distinct from selection (`OnChanged`): selection moves the cursor, activation
+  says "open/act on this now". For `TreeView`, a double-click on a node that has
+  children toggles its expansion (the standard tree convention) and fires
+  `OnActivate` only on leaves; Enter activates whichever node is selected.
+  Enter is consumed only when it actually activates, so an unhandled Enter still
+  bubbles (e.g. to a dialog's default button). Additive; no golden change.
 
 ### Added
 

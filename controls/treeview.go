@@ -205,10 +205,11 @@ type TreeView struct {
 
 	rowH float32
 
-	selected  *TreeNode
-	ta        typeAhead // type-ahead prefix state (see OnKey)
-	focused   bool
-	onChanged func(*TreeNode)
+	selected   *TreeNode
+	ta         typeAhead // type-ahead prefix state (see OnKey)
+	focused    bool
+	onChanged  func(*TreeNode)
+	onActivate func(*TreeNode) // Enter / double-click on a leaf (see OnActivate)
 
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
@@ -279,6 +280,19 @@ func (t *TreeView) SetSelected(n *TreeNode) *TreeView {
 // nil fn is a valid, silent no-op.
 func (t *TreeView) OnChanged(fn func(*TreeNode)) *TreeView {
 	t.onChanged = fn
+	return t
+}
+
+// OnActivate registers fn to run when the user ACTIVATES a node — presses Enter
+// on the selected node, or double-clicks a LEAF — with that node. Activation is
+// distinct from selection (OnChanged) and from expanding: double-clicking a node
+// that HAS children toggles its expansion (the standard tree convention) rather
+// than activating it, so OnActivate fires for double-click only on leaves;
+// Enter activates whichever node is selected, leaf or not (expansion stays on
+// Right/Left). Never fires for a programmatic SetSelected. Replaces any
+// previously set callback; a nil fn is a valid, silent no-op.
+func (t *TreeView) OnActivate(fn func(*TreeNode)) *TreeView {
+	t.onActivate = fn
 	return t
 }
 
@@ -560,6 +574,15 @@ func (t *TreeView) OnPointer(e *input.PointerEvent) {
 		t.toggle(row.node)
 	} else {
 		t.selectUser(row.node)
+		if e.ClickCount == 2 {
+			// Double-click: a node WITH children toggles expansion (the
+			// standard tree convention); a leaf activates.
+			if len(row.node.Children) > 0 {
+				t.toggle(row.node)
+			} else if t.onActivate != nil {
+				t.onActivate(row.node)
+			}
+		}
 	}
 	e.Handled = true
 }
@@ -601,6 +624,14 @@ func (t *TreeView) OnKey(e *input.KeyEvent) {
 	case input.KeyLeft:
 		if idx >= 0 {
 			t.collapseOrJumpToParent(t.rows[idx])
+			e.Handled = true
+		}
+	case input.KeyEnter:
+		// Activate the selected node (leaf or parent). Consume ONLY when it
+		// actually activates so an unhandled Enter still bubbles (e.g. to a
+		// dialog's default button). Expansion stays on Right/Left.
+		if t.selected != nil && t.onActivate != nil {
+			t.onActivate(t.selected)
 			e.Handled = true
 		}
 	default:

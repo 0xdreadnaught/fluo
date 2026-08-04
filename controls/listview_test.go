@@ -1181,3 +1181,38 @@ func TestListViewHorizontalThumbAppearsAfterWideRowAdded(t *testing.T) {
 		t.Fatal("expected a horizontal thumb after adding a row far wider than the viewport")
 	}
 }
+
+// TestListViewOnActivate covers the v0.20.0 activation enrichment: Enter on the
+// selected row and a double-click both fire OnActivate; a single click selects
+// without activating.
+func TestListViewOnActivate(t *testing.T) {
+	l := NewListView(nil, newFakeListItems("a", "b", "c")).SetRowHeight(20)
+	var activated []int
+	l.OnActivate(func(i int) { activated = append(activated, i) })
+
+	r := input.NewRouter()
+	r.SetRoot(l)
+	layoutListView(l, 0, 0, 200, 100)
+	r.Focus(l)
+
+	l.selectUser(1)
+	r.KeyDown(input.KeyEnter, 0, 0)
+	if len(activated) != 1 || activated[0] != 1 {
+		t.Fatalf("Enter activate = %v, want [1]", activated)
+	}
+
+	activated = nil
+	l.OnPointer(&input.PointerEvent{Action: input.Press, Pos: render.Point{X: 10, Y: 5}, ClickCount: 2, Router: r})
+	if len(activated) != 1 || activated[0] != 0 {
+		t.Fatalf("double-click activate = %v, want [0]", activated)
+	}
+
+	activated = nil
+	l.OnPointer(&input.PointerEvent{Action: input.Press, Pos: render.Point{X: 10, Y: 25}, ClickCount: 1, Router: r})
+	if len(activated) != 0 {
+		t.Fatalf("single click activated = %v, want none (select only)", activated)
+	}
+	if l.selected != 1 {
+		t.Fatalf("single click selected = %d, want 1", l.selected)
+	}
+}

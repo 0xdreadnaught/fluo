@@ -773,3 +773,44 @@ func TestTreeViewClipsRowsToBounds(t *testing.T) {
 		t.Fatalf("Render popped %d clips, want 1 (an unbalanced push leaks the clip onto later widgets)", rr.pops)
 	}
 }
+
+// TestTreeViewOnActivate covers the v0.20.0 activation enrichment: Enter on the
+// selected node and a double-click on a LEAF fire OnActivate, while a
+// double-click on a PARENT toggles its expansion instead of activating.
+func TestTreeViewOnActivate(t *testing.T) {
+	leaf := NewTreeNode("leaf")
+	parent := NewTreeNode("parent", NewTreeNode("child"))
+	tv := NewTreeView(nil, leaf, parent) // rows: leaf(0), parent(1) collapsed
+	tv.rowH = 20
+	layoutTreeView(tv, 0, 0, 200, 100)
+
+	var activated []string
+	tv.OnActivate(func(n *TreeNode) { activated = append(activated, n.Label) })
+
+	r := input.NewRouter()
+	r.SetRoot(tv)
+	r.Focus(tv)
+
+	tv.selectUser(leaf)
+	r.KeyDown(input.KeyEnter, 0, 0)
+	if len(activated) != 1 || activated[0] != "leaf" {
+		t.Fatalf("Enter on leaf: activated = %v, want [leaf]", activated)
+	}
+
+	// Double-click a LEAF (row 0, label zone x=40) activates.
+	activated = nil
+	tv.OnPointer(&input.PointerEvent{Action: input.Press, Pos: render.Point{X: 40, Y: 5}, ClickCount: 2, Router: r})
+	if len(activated) != 1 || activated[0] != "leaf" {
+		t.Fatalf("double-click leaf: activated = %v, want [leaf]", activated)
+	}
+
+	// Double-click a PARENT (row 1) toggles expansion, does NOT activate.
+	activated = nil
+	tv.OnPointer(&input.PointerEvent{Action: input.Press, Pos: render.Point{X: 40, Y: 25}, ClickCount: 2, Router: r})
+	if len(activated) != 0 {
+		t.Fatalf("double-click parent: activated = %v, want none (toggles instead)", activated)
+	}
+	if !parent.Expanded() {
+		t.Fatal("double-click parent did not expand it")
+	}
+}

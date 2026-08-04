@@ -87,8 +87,9 @@ type ListView struct {
 
 	selected  int       // -1 == none
 	ta        typeAhead // list type-ahead prefix state (see OnKey)
-	focused   bool
-	onChanged func(int)
+	focused    bool
+	onChanged  func(int)
+	onActivate func(int) // Enter / double-click on a row (see OnActivate)
 
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
@@ -289,6 +290,18 @@ func (l *ListView) SetSelectedIndex(i int) *ListView {
 // a valid, silent no-op.
 func (l *ListView) OnChanged(fn func(int)) *ListView {
 	l.onChanged = fn
+	return l
+}
+
+// OnActivate registers fn to run when the user ACTIVATES a row — presses Enter
+// while a row is selected, or double-clicks a row — with the row's index.
+// Activation is distinct from selection (OnChanged): selection is "the cursor
+// is here", activation is "act on this now" (open it, load it). It never fires
+// for a programmatic selection change, and a double-click also fires OnChanged
+// for the select half of its first press. Replaces any previously set callback;
+// a nil fn is a valid, silent no-op.
+func (l *ListView) OnActivate(fn func(int)) *ListView {
+	l.onActivate = fn
 	return l
 }
 
@@ -833,6 +846,10 @@ func (l *ListView) OnPointer(e *input.PointerEvent) {
 			e.Handled = true
 		} else if idx, ok := l.rowAt(e.Pos); ok {
 			l.selectUser(idx)
+			// A double-click both selects (above) and activates.
+			if e.ClickCount == 2 && l.onActivate != nil {
+				l.onActivate(idx)
+			}
 			e.Handled = true
 		}
 	case input.Move:
@@ -883,6 +900,14 @@ func (l *ListView) OnKey(e *input.KeyEvent) {
 	case input.KeyEnd:
 		l.selectUser(clampRowIndex(n-1, n))
 		e.Handled = true
+	case input.KeyEnter:
+		// Activate the selected row. Consume ONLY when it actually activates
+		// (a selection exists and a handler is wired) so an unhandled Enter
+		// still bubbles to, say, a dialog's default button.
+		if l.selected >= 0 && l.onActivate != nil {
+			l.onActivate(l.selected)
+			e.Handled = true
+		}
 	default:
 		// Type-ahead: a printable key (a char event carries the rune; Ctrl/Alt
 		// chords are shortcuts, not text) jumps selection to the next item
