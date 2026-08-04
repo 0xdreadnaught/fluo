@@ -825,6 +825,19 @@ func (h *OverlayHost) OnPointer(e *input.PointerEvent) {
 	if idx == -1 {
 		if e.Action == input.Move {
 			h.diffPopupHover(nil)
+			// Hover-switch support: a Move that fell outside every popup is
+			// forwarded to the TOP popup's owner when the pointer is actually
+			// over it, so an owner like MenuBar can switch which top-level menu
+			// is open on hover while its popup still holds the capture. Bounded
+			// to the owner's own bounds (no stray delivery elsewhere in
+			// content); owner-less popups have nothing to forward to, so this
+			// is inert for every popup that didn't opt in by passing an owner.
+			if n := len(h.popups); n > 0 {
+				if owner := h.popups[n-1].owner; owner != nil &&
+					core.IsVisible(owner) && core.BoundsOf(owner).Contains(e.Pos) {
+					input.Bubble(input.HitPath(owner, e.Pos), e)
+				}
+			}
 		}
 		if e.Action == input.Press {
 			h.CloseAllPopups()

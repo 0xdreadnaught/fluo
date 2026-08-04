@@ -8,6 +8,21 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-08-04
+
+### Added
+
+- **`MenuBar` hover-switch.** Once a top-level menu is already open, moving the
+  pointer onto a different top-level title now switches to that menu (closing the
+  first, opening the second) — the standard desktop menu-bar flow. Gated so it
+  only switches while a menu is already open: hovering a title with nothing open
+  does nothing (the first open stays press-driven), and re-hovering the open
+  title is a no-op. Implemented by having `MenuBar` pass itself as its popup's
+  owner and `OverlayHost` forward an outside-popup hover to that owner (bounded
+  to the owner's bounds) while the popup holds the capture — the same
+  forwarding-from-within-a-captured-hover pattern submenu open-on-hover already
+  uses. No API change; no golden change.
+
 ## [0.17.0] - 2026-08-04
 
 ### Added

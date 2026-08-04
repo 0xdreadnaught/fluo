@@ -812,10 +812,16 @@ func (m *MenuBar) openMenu(idx int) {
 	m.popup = popup
 
 	anchor := m.cellRect(idx)
-	host.ShowPopup(popup, anchor, func() {
+	// Pass the MenuBar as the popup's OWNER (not the public ShowPopup, which
+	// leaves owner nil). Two payoffs: OverlayHost's ownerLive sweep auto-closes
+	// the menu if the bar leaves the live tree, and — the point here — the
+	// owner is what OverlayHost forwards an outside-popup hover to, so moving
+	// onto a sibling title while this menu is open reaches OnPointer and
+	// switches menus (see OnPointer's Move case).
+	host.showPopup(popup, anchor, func() {
 		m.openIdx = -1
 		m.popup = nil
-	})
+	}, true, false, m)
 }
 
 // OnPointer implements input.PointerHandler: Move/Leave update hoverIdx (-1
@@ -828,6 +834,15 @@ func (m *MenuBar) OnPointer(e *input.PointerEvent) {
 	case input.Move:
 		if idx, ok := m.cellAt(e.Pos); ok {
 			m.hoverIdx = idx
+			// Hover-switch: once a menu is ALREADY open, moving onto a
+			// different top-level title switches to it (openMenu no-ops on the
+			// same idx). Gated on openIdx != -1 so hovering never OPENS from a
+			// closed bar — the first open stays press-driven. With no menu
+			// open there is no popup, no owner, and OverlayHost never forwards
+			// a Move here in the first place, so this is doubly guarded.
+			if m.openIdx != -1 && idx != m.openIdx {
+				m.openMenu(idx)
+			}
 		} else {
 			m.hoverIdx = -1
 		}

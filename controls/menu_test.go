@@ -553,3 +553,66 @@ func TestMenuDisabledItemInertAndSiblingUnaffected(t *testing.T) {
 		t.Fatalf("PopupCount after enabled item click = %d, want 0 (closed)", host.PopupCount())
 	}
 }
+
+// --- MenuBar hover-switch (v0.17.1 enrichment) --------------------------
+
+// TestMenuHoverSwitchesWhileOpen is the headline: with one top-level menu
+// already open, moving the pointer onto a DIFFERENT top-level title switches
+// the open menu to it (closing the first, opening the second) — the textbook
+// desktop menu-bar flow. Drives the full path: the open popup holds the
+// router capture, so the Move reaches OverlayHost, which forwards it to the
+// bar (the popup owner), whose OnPointer switches menus.
+func TestMenuHoverSwitchesWhileOpen(t *testing.T) {
+	bar, host, r, _ := newTestMenuBar(t)
+
+	clickAt(r, rectCenter(bar.cellRect(0))) // open File
+	if bar.openIdx != 0 || host.PopupCount() != 1 {
+		t.Fatalf("after opening File: openIdx=%d PopupCount=%d, want 0/1", bar.openIdx, host.PopupCount())
+	}
+
+	r.PointerMove(rectCenter(bar.cellRect(1)), 0) // hover Edit
+
+	if bar.openIdx != 1 {
+		t.Fatalf("openIdx after hovering Edit = %d, want 1 (menu switched on hover)", bar.openIdx)
+	}
+	if host.PopupCount() != 1 {
+		t.Fatalf("PopupCount after switch = %d, want 1 (File's popup closed, Edit's opened)", host.PopupCount())
+	}
+}
+
+// TestMenuHoverDoesNotOpenWhenClosed is the first gate: with NO menu open,
+// hovering a title must not open anything — the first open stays press-driven.
+func TestMenuHoverDoesNotOpenWhenClosed(t *testing.T) {
+	bar, host, r, _ := newTestMenuBar(t)
+
+	r.PointerMove(rectCenter(bar.cellRect(1)), 0) // hover Edit with nothing open
+
+	if bar.openIdx != -1 {
+		t.Fatalf("openIdx after hover with nothing open = %d, want -1 (hover must not open)", bar.openIdx)
+	}
+	if host.PopupCount() != 0 {
+		t.Fatalf("PopupCount = %d, want 0 (hover on a closed bar opens nothing)", host.PopupCount())
+	}
+	if bar.hoverIdx != 1 {
+		t.Fatalf("hoverIdx = %d, want 1 (hover VISUAL still tracks, it just doesn't open)", bar.hoverIdx)
+	}
+}
+
+// TestMenuHoverSameTitleNoop is the second gate: hovering within the
+// already-open title does not churn the popup (openMenu no-ops on the same
+// index).
+func TestMenuHoverSameTitleNoop(t *testing.T) {
+	bar, host, r, _ := newTestMenuBar(t)
+
+	clickAt(r, rectCenter(bar.cellRect(0))) // open File
+	openPopup := bar.popup
+
+	r.PointerMove(rectCenter(bar.cellRect(0)), 0) // hover the SAME title
+
+	if bar.openIdx != 0 {
+		t.Fatalf("openIdx after same-title hover = %d, want 0 (unchanged)", bar.openIdx)
+	}
+	if host.PopupCount() != 1 || bar.popup != openPopup {
+		t.Fatalf("same-title hover churned the popup (count=%d, same=%v), want no change", host.PopupCount(), bar.popup == openPopup)
+	}
+}
