@@ -828,6 +828,17 @@ func (h *OverlayHost) OnPointer(e *input.PointerEvent) {
 		}
 		if e.Action == input.Press {
 			h.CloseAllPopups()
+			// O5: a light-dismiss press moves focus like an ordinary click —
+			// onto whatever it hit in content, or clear — so the just-dismissed
+			// opener (e.g. a ComboBox) doesn't keep focus and keep eating keys
+			// (Space reopening a just-closed dropdown). FocusFromPath only
+			// FOCUSES; it never delivers the press, so the dismiss can't also
+			// activate what's underneath.
+			if h.router != nil && h.content != nil {
+				if !h.router.FocusFromPath(input.HitPath(h.content, e.Pos)) {
+					h.router.Focus(nil)
+				}
+			}
 			e.Handled = true
 		}
 		return
@@ -845,6 +856,15 @@ func (h *OverlayHost) OnPointer(e *input.PointerEvent) {
 	path := input.HitPath(target, e.Pos)
 	if e.Action == input.Move {
 		h.diffPopupHover(path)
+	}
+	// N1: run press-to-focus for a press forwarded into a modal-captured popup.
+	// The captured path bypasses the router's own uncaptured press-to-focus, so
+	// without this a focusable widget INSIDE a modal popup (e.g. a TextBox in a
+	// ShowModalPopup surface) can be clicked but never focused (Tab works via
+	// the focus scope, click didn't). Focus before Bubble, like the router's
+	// own uncaptured press path.
+	if e.Action == input.Press && h.router != nil {
+		h.router.FocusFromPath(path)
 	}
 	input.Bubble(path, e)
 }

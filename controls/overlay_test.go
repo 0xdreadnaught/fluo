@@ -1304,3 +1304,62 @@ func TestOverlayKeepsPopupWhileOwnerVisible(t *testing.T) {
 		t.Fatal("popup wrongly closed while the owner is still visible")
 	}
 }
+
+// TestOverlayLightDismissMovesFocus covers O5: a light-dismiss press must move
+// focus off the just-dismissed opener (else Space reopens a just-closed
+// ComboBox). A dismiss-press on non-focusable empty content clears focus.
+func TestOverlayLightDismissMovesFocus(t *testing.T) {
+	r := input.NewRouter()
+	host := NewOverlayHost()
+	host.SetRouter(r)
+	cb := NewComboBox(buttonFace(t))
+	host.SetContent(NewStackPanel(Vertical).Add(cb))
+	r.SetRoot(host)
+	core.MeasureWidget(host, render.Size{W: 300, H: 220})
+	core.ArrangeWidget(host, render.Rect{X: 0, Y: 0, W: 300, H: 220})
+
+	r.Focus(cb)
+	cb.openPopup()
+	if r.Focused() != core.Widget(cb) {
+		t.Fatalf("setup: ComboBox not focused (got %v)", r.Focused())
+	}
+
+	// Light-dismiss: press well outside the ComboBox and its dropdown.
+	host.OnPointer(&input.PointerEvent{Action: input.Press, Pos: render.Point{X: 280, Y: 210}, Router: r})
+	if r.Focused() == core.Widget(cb) {
+		t.Fatal("light-dismiss left the ComboBox focused — Space would reopen the just-closed dropdown (O5)")
+	}
+	if cb.open {
+		t.Fatal("light-dismiss did not close the popup")
+	}
+}
+
+// TestModalPopupClickFocusesInnerWidget covers N1: clicking a focusable widget
+// inside a modal-captured popup must focus it (Tab already works via the scope;
+// click must too).
+func TestModalPopupClickFocusesInnerWidget(t *testing.T) {
+	r := input.NewRouter()
+	host := NewOverlayHost()
+	host.SetRouter(r)
+	host.SetContent(NewStackPanel(Vertical))
+	r.SetRoot(host)
+	arrange := func() {
+		core.MeasureWidget(host, render.Size{W: 300, H: 220})
+		core.ArrangeWidget(host, render.Rect{X: 0, Y: 0, W: 300, H: 220})
+	}
+	arrange()
+
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true)
+	tb.SetText("edit me")
+	host.ShowModalPopup(NewStackPanel(Vertical).Add(tb), render.Rect{X: 40, Y: 40, W: 120, H: 40}, nil)
+	arrange()
+
+	b := tb.Bounds()
+	if b.W == 0 || b.H == 0 {
+		t.Fatalf("TextBox not arranged inside the popup: %+v", b)
+	}
+	host.OnPointer(&input.PointerEvent{Action: input.Press, Pos: render.Point{X: b.X + b.W/2, Y: b.Y + b.H/2}, Router: r})
+	if r.Focused() != core.Widget(tb) {
+		t.Fatalf("click inside modal popup did not focus the TextBox (N1); focused=%v", r.Focused())
+	}
+}

@@ -512,7 +512,7 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 			target = path[len(path)-1]
 		}
 		e.ClickCount = r.clickCountFor(b, p, e.Time, target)
-		r.focusFromPath(path)
+		r.FocusFromPath(path)
 	}
 	Bubble(path, e)
 	return e.Handled
@@ -535,21 +535,29 @@ func (r *Router) PointerWheel(delta render.Point, p render.Point, mods Modifiers
 	Bubble(path, &PointerEvent{Action: Wheel, Pos: p, Delta: delta, Mods: mods, Time: r.timeNow(), Router: r})
 }
 
-// focusFromPath implements press-to-focus: given the hit-test path (root→
-// leaf) of an uncaptured press, it walks leaf→root and focuses the first
-// widget that implements Focusable with AcceptsFocus() == true. If no widget
-// on the path qualifies — including an empty path, i.e. a press that hit
-// nothing — focus is RETAINED: pressing on a non-focusable widget (or empty
-// space) leaves whatever is currently focused alone rather than clearing it.
-// Focus(nil) remains available for callers that want to clear focus
-// explicitly. Focus itself is a no-op when the target is already focused.
-func (r *Router) focusFromPath(path []core.Widget) {
+// FocusFromPath implements press-to-focus: given a hit-test path (root→leaf),
+// it walks leaf→root and focuses the first widget that implements Focusable
+// with AcceptsFocus() == true, returning whether it focused something. If no
+// widget on the path qualifies — including an empty path, i.e. a press that hit
+// nothing — focus is RETAINED (this is what makes pressing empty space or a
+// non-focusable widget leave the current focus alone) and it returns false; a
+// caller that instead wants "focus, else clear" can Focus(nil) on false.
+//
+// It is exported so a host that delivers a press over a path it computed itself
+// applies the SAME focus-on-press semantics the router's own uncaptured path
+// does: an OverlayHost forwarding a press into a modal-captured popup (so
+// clicking a focusable inside it focuses it, matching Tab), or moving focus off
+// a just-light-dismissed control. It only moves FOCUS — it never delivers or
+// activates the press, so a dismiss-click can't also trigger what's underneath.
+// Focus itself is a no-op when the target is already focused.
+func (r *Router) FocusFromPath(path []core.Widget) bool {
 	for i := len(path) - 1; i >= 0; i-- {
 		if f, ok := path[i].(Focusable); ok && f.AcceptsFocus() {
 			r.Focus(path[i])
-			return
+			return true
 		}
 	}
+	return false
 }
 
 // Focus sets w as the focused widget, or clears focus entirely when w is

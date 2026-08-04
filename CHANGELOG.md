@@ -8,6 +8,32 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.16.4] - 2026-08-04
+
+### Added
+
+- **`Router.FocusFromPath(path []core.Widget) bool`** — the router's
+  press-to-focus (focus the first `Focusable` with `AcceptsFocus()==true` on a
+  hit path, scanned leaf→root), now exported so a host delivering a press over a
+  path it computed itself applies the same focus-on-press semantics. Returns
+  whether it focused something (a caller wanting "focus, else clear" can
+  `Focus(nil)` on false). It only moves FOCUS — never delivers or activates the
+  press.
+
+### Fixed
+
+- **Clicking a focusable widget inside a modal popup now focuses it (N1).** A
+  press forwarded into a modal-captured popup bypassed the router's own
+  press-to-focus, so a focusable widget inside a `ShowModalPopup` surface (e.g. a
+  `TextBox`) could be clicked but never focused — Tab reached it via the focus
+  scope, a click did not. `OverlayHost` now runs press-to-focus on the forwarded
+  press.
+- **Light-dismissing a popup moves focus off the dismissed opener (O5).**
+  Clicking outside an open popup closed it but left the opener focused, so keys
+  still went to it (Space reopening a just-closed `ComboBox`). The dismiss press
+  now moves focus like an ordinary click — onto whatever it hit, or clears it —
+  without activating anything underneath.
+
 ## [0.16.3] - 2026-08-04
 
 ### Fixed
