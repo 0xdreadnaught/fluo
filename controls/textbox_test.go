@@ -4454,3 +4454,74 @@ func TestTextBoxThumbDragSurvivesReArrange(t *testing.T) {
 		t.Fatalf("re-arrange snapped vscroll back mid-drag: %v -> %v (caret-follow fought the thumb drag)", scrolled, tb.vscroll)
 	}
 }
+
+// TestTextBoxWheelScrollSurvivesReArrange reproduces the RE-FRAMED root cause
+// (relay #3028): scrolling is caret-CLAMPED. Caret at line 1 (load-at-top);
+// wheel down; then a re-arrange (what a per-frame-Frame host does) runs
+// updateVScroll's caret-follow, which pins vscroll back to the caret (top).
+// The v0.16.1 vDragging guard does NOT cover the wheel, so this still resets.
+// The fix is "manual scroll sticks until the caret moves".
+func TestTextBoxWheelScrollSurvivesReArrange(t *testing.T) {
+	tb := newOverflowingMultilineTextBox(t)
+	tb.SetCaret(0)
+	arrange := func() { core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50}) }
+	arrange()
+	if tb.vscroll != 0 {
+		t.Fatalf("setup: vscroll = %v, want 0", tb.vscroll)
+	}
+
+	// Wheel down (no vDragging — this is the wheel path).
+	if !tb.wheelScrollV(scrollWheelStep) {
+		t.Fatal("wheel down reported no movement on overflowing content")
+	}
+	scrolled := tb.vscroll
+	if scrolled <= 0 {
+		t.Fatalf("wheel did not scroll (vscroll = %v)", scrolled)
+	}
+
+	// A re-arrange between notches (a per-frame Frame host) must not pin
+	// vscroll back to the caret. It currently DOES (caret at top) -> reset.
+	arrange()
+	if tb.vscroll < scrolled-0.01 {
+		t.Fatalf("re-arrange pinned vscroll back to the caret after a wheel: %v -> %v (caret-clamped scroll)", scrolled, tb.vscroll)
+	}
+}
+
+// TestTextBoxVerticalTrackHLaneAware covers symptom 3 (relay #3028: thumb
+// draggable past the bottom): when the horizontal bar also shows, the vertical
+// track height must be the content viewport height (contentHeight), so the
+// thumb's maxOffset matches updateVScroll's clamp and the thumb stays inside
+// its track instead of overshooting by one gutter.
+func TestTextBoxVerticalTrackHLaneAware(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true).SetLineNumbers(true)
+	tb.SetText(strings.Repeat("wwwwwwwwww ", 20) + strings.Repeat("\nx", 30)) // long line + many rows
+	tb.SetWidth(200)
+	tb.SetHeight(80)
+	arrange := func() { core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 80}) }
+	core.MeasureWidget(tb, render.Size{W: 200, H: 80})
+	arrange()
+
+	if !tb.hScrollShown || !tb.vScrollShown {
+		t.Fatalf("want both scrollbars (h=%v v=%v)", tb.hScrollShown, tb.vScrollShown)
+	}
+	track, _ := tb.vScrollTrack()
+	if track.H != tb.contentHeight() {
+		t.Fatalf("vScrollTrack.H = %v, want contentHeight %v (h-lane-aware)", track.H, tb.contentHeight())
+	}
+
+	// Scroll to the max (caret at top, wheel down hard). The thumb must not
+	// extend past the track's bottom.
+	tb.SetCaret(0)
+	arrange()
+	for i := 0; i < 60; i++ {
+		tb.wheelScrollV(scrollWheelStep)
+	}
+	arrange()
+	thumb, ok := tb.vScrollThumbRect()
+	if !ok {
+		t.Fatal("no vScrollThumbRect")
+	}
+	if thumb.Y+thumb.H > track.Y+track.H+0.01 {
+		t.Fatalf("thumb bottom %v overshoots track bottom %v", thumb.Y+thumb.H, track.Y+track.H)
+	}
+}
