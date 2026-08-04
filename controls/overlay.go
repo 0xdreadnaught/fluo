@@ -24,6 +24,16 @@ type popupEntry struct {
 	onDismiss func()
 	modal     bool
 
+	// owner is the widget this popup belongs to (e.g. the ComboBox that opened
+	// its dropdown), or nil for owner-less popups. When non-nil, ArrangeContent
+	// auto-closes the popup once the owner leaves the live tree — hidden by a
+	// tab switch, or detached by SetContent (see ownerLive). Without this an
+	// orphaned modal popup would keep the host capture engaged and the owner's
+	// own open-state stuck (e.g. ComboBox.open never resets, so the box is dead
+	// for life). The public ShowPopup* entry points pass nil (never swept);
+	// same-package controls that ARE owned (ComboBox) call showPopup directly.
+	owner core.Widget
+
 	// focusScope records that showPopup pushed an input.Router focus scope
 	// for this popup, so ClosePopup knows to pop it again — see
 	// showPopupTrapFocus.
@@ -259,7 +269,7 @@ func (h *OverlayHost) SetTimers(q *timers.Queue) *OverlayHost {
 // comment's "Focus trapping" paragraph, and ShowModalPopup for the
 // dialog-shaped popup that does.
 func (h *OverlayHost) ShowPopup(popup core.Widget, anchor render.Rect, onDismiss func()) {
-	h.showPopup(popup, anchor, onDismiss, true, false)
+	h.showPopup(popup, anchor, onDismiss, true, false, nil)
 }
 
 // ShowPopupNonModal opens popup exactly like ShowPopup — same placement,
@@ -273,7 +283,7 @@ func (h *OverlayHost) ShowPopup(popup core.Widget, anchor render.Rect, onDismiss
 // EVERY popup regardless of which is topmost — see the type doc comment's
 // "Modal vs non-modal popups" paragraph.
 func (h *OverlayHost) ShowPopupNonModal(popup core.Widget, anchor render.Rect, onDismiss func()) {
-	h.showPopup(popup, anchor, onDismiss, false, false)
+	h.showPopup(popup, anchor, onDismiss, false, false, nil)
 }
 
 // ShowModalPopup opens popup as a MODAL popup that ALSO TRAPS KEYBOARD FOCUS
@@ -321,7 +331,7 @@ func (h *OverlayHost) ShowModalPopup(popup core.Widget, anchor render.Rect, onDi
 // NOT trap — see the type doc comment's "Focus trapping" paragraph for why
 // keeping focus on the opener is load-bearing for ComboBox and MenuBar.
 func (h *OverlayHost) showPopupTrapFocus(popup core.Widget, anchor render.Rect, onDismiss func()) {
-	h.showPopup(popup, anchor, onDismiss, true, true)
+	h.showPopup(popup, anchor, onDismiss, true, true, nil)
 }
 
 // showPopup is ShowPopup/ShowPopupNonModal/showPopupTrapFocus's shared
@@ -331,8 +341,8 @@ func (h *OverlayHost) showPopupTrapFocus(popup core.Widget, anchor render.Rect, 
 // PopFocusScope), re-parent, reset the stale popupHover (see the field's doc
 // comment and popupHoverGen's), invalidate measure, and — modal only —
 // capture the wired router, plus push its focus scope when trapping.
-func (h *OverlayHost) showPopup(popup core.Widget, anchor render.Rect, onDismiss func(), modal, trapFocus bool) {
-	h.popups = append(h.popups, popupEntry{w: popup, anchor: anchor, onDismiss: onDismiss, modal: modal, focusScope: trapFocus})
+func (h *OverlayHost) showPopup(popup core.Widget, anchor render.Rect, onDismiss func(), modal, trapFocus bool, owner core.Widget) {
+	h.popups = append(h.popups, popupEntry{w: popup, anchor: anchor, onDismiss: onDismiss, modal: modal, owner: owner, focusScope: trapFocus})
 	core.SetParent(popup, h)
 	// popup is now topmost: whatever popupHover was tracking (if anything)
 	// belonged to the previous topmost (or nothing, if this is the first
@@ -574,7 +584,37 @@ func (h *OverlayHost) MeasureContent(available render.Size) render.Size {
 // the popup widget's own alignment, since the rect handed to ArrangeWidget
 // already equals its desired size on both axes — and finally stacks every
 // open toast in the host's corner (see arrangeToasts).
+// ownerLive reports whether a popup's owner is still in the live tree:
+// reachable from this OverlayHost through ancestors that are ALL visible. A
+// hidden ancestor (a tab switch that hid the owner's subtree) fails the
+// visibility check; a detached owner (SetContent removed its subtree, so its
+// parent chain no longer reaches h) walks off to a nil parent without ever
+// hitting h. Either way the owner is gone and its popup is orphaned.
+func (h *OverlayHost) ownerLive(w core.Widget) bool {
+	for n := w; n != nil; n = core.ParentOf(n) {
+		if !core.IsVisible(n) {
+			return false
+		}
+		if n == core.Widget(h) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *OverlayHost) ArrangeContent(bounds render.Rect) {
+	// Close any OWNED popup whose owner has left the live tree (hidden or
+	// detached) before laying out. ClosePopup fires onDismiss — resetting the
+	// owner's open-state (e.g. ComboBox.open) — and releases the host capture
+	// once the last modal popup goes, so an orphaned dropdown can't strand the
+	// box or the capture. Snapshot first: ClosePopup mutates h.popups.
+	if len(h.popups) > 0 {
+		for _, p := range append([]popupEntry(nil), h.popups...) {
+			if p.owner != nil && !h.ownerLive(p.owner) {
+				h.ClosePopup(p.w)
+			}
+		}
+	}
 	if h.content != nil {
 		core.ArrangeWidget(h.content, bounds)
 	}

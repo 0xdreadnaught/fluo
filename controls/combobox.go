@@ -194,10 +194,15 @@ func (c *ComboBox) openPopup() {
 	c.popup = popup
 
 	anchor := c.Bounds()
-	host.ShowPopup(popup, anchor, func() {
+	// Pass the ComboBox as the popup's OWNER (via the same-package showPopup)
+	// so the OverlayHost auto-closes the dropdown if this ComboBox is hidden
+	// (a tab switch) or detached (SetContent) while it's open — otherwise the
+	// dropdown lingers, its modal capture stays engaged, and c.open never
+	// resets, leaving the box dead for life (see popupEntry.owner / ownerLive).
+	host.showPopup(popup, anchor, func() {
 		c.open = false
 		c.popup = nil
-	})
+	}, true, false, c)
 }
 
 // closePopup explicitly closes the open popup (Esc, or a row's own click) by

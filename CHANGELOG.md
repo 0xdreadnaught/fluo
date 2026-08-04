@@ -8,6 +8,21 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-08-04
+
+### Fixed
+
+- **An `OverlayHost` popup no longer outlives a hidden or detached owner.** A
+  `ComboBox` whose dropdown was open when the box got hidden (a tab switch) or
+  detached (`SetContent`) used to leave the dropdown floating — its modal
+  capture stayed engaged (all input routed to the host) and the box's `open`
+  flag never reset, so the control was dead for life. Owned popups now record
+  their owner; on the next arrange the host closes any popup whose owner has
+  left the live tree (unreachable from the host through visible ancestors),
+  firing its `onDismiss` (which resets the owner's state) and releasing the host
+  capture. The public `ShowPopup`/`ShowPopupNonModal`/`ShowModalPopup` entry
+  points are owner-less and never swept — no API change.
+
 ## [0.16.2] - 2026-08-04
 
 ### Fixed

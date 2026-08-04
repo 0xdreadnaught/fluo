@@ -1217,3 +1217,90 @@ func TestShowPopupWithFocusablesStillDoesNotTrap(t *testing.T) {
 		}
 	}
 }
+
+// TestOverlayClosesComboBoxPopupWhenOwnerHidden / ...Detached cover O3: a
+// ComboBox dropdown is an OWNED modal popup; if the ComboBox leaves the live
+// tree (hidden by a tab switch, or detached by SetContent) while open, the
+// OverlayHost must auto-close the orphaned popup on the next arrange — else the
+// modal capture stays engaged and c.open never resets, leaving the box dead for
+// life.
+func TestOverlayClosesComboBoxPopupWhenOwnerHidden(t *testing.T) {
+	r := input.NewRouter()
+	host := NewOverlayHost()
+	host.SetRouter(r)
+	cb := NewComboBox(buttonFace(t))
+	host.SetContent(NewStackPanel(Vertical).Add(cb))
+	r.SetRoot(host)
+	arrange := func() {
+		core.MeasureWidget(host, render.Size{W: 300, H: 200})
+		core.ArrangeWidget(host, render.Rect{X: 0, Y: 0, W: 300, H: 200})
+	}
+	arrange()
+
+	cb.openPopup()
+	if !cb.open {
+		t.Fatal("ComboBox did not open")
+	}
+	if r.Captured() != core.Widget(host) {
+		t.Fatalf("host not captured on modal popup open, got %v", r.Captured())
+	}
+
+	cb.SetVisible(false) // owner hidden (tab switch)
+	arrange()
+	if cb.open {
+		t.Fatal("popup not closed after owner hidden — ComboBox stuck open (dead for life)")
+	}
+	if r.Captured() == core.Widget(host) {
+		t.Fatal("host capture not released after the orphaned popup closed")
+	}
+}
+
+func TestOverlayClosesComboBoxPopupWhenOwnerDetached(t *testing.T) {
+	r := input.NewRouter()
+	host := NewOverlayHost()
+	host.SetRouter(r)
+	cb := NewComboBox(buttonFace(t))
+	host.SetContent(NewStackPanel(Vertical).Add(cb))
+	r.SetRoot(host)
+	arrange := func() {
+		core.MeasureWidget(host, render.Size{W: 300, H: 200})
+		core.ArrangeWidget(host, render.Rect{X: 0, Y: 0, W: 300, H: 200})
+	}
+	arrange()
+
+	cb.openPopup()
+	if !cb.open || r.Captured() != core.Widget(host) {
+		t.Fatalf("setup: open=%v captured=%v", cb.open, r.Captured())
+	}
+
+	host.SetContent(NewStackPanel(Vertical)) // detach the owner's subtree
+	arrange()
+	if cb.open {
+		t.Fatal("popup not closed after owner detached via SetContent")
+	}
+	if r.Captured() == core.Widget(host) {
+		t.Fatal("host capture not released after the orphaned popup closed")
+	}
+}
+
+// TestOverlayKeepsPopupWhileOwnerVisible guards against over-closing: a healthy
+// visible ComboBox keeps its dropdown across arranges.
+func TestOverlayKeepsPopupWhileOwnerVisible(t *testing.T) {
+	r := input.NewRouter()
+	host := NewOverlayHost()
+	host.SetRouter(r)
+	cb := NewComboBox(buttonFace(t))
+	host.SetContent(NewStackPanel(Vertical).Add(cb))
+	r.SetRoot(host)
+	arrange := func() {
+		core.MeasureWidget(host, render.Size{W: 300, H: 200})
+		core.ArrangeWidget(host, render.Rect{X: 0, Y: 0, W: 300, H: 200})
+	}
+	arrange()
+	cb.openPopup()
+	arrange()
+	arrange()
+	if !cb.open {
+		t.Fatal("popup wrongly closed while the owner is still visible")
+	}
+}
