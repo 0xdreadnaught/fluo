@@ -469,6 +469,55 @@ func TestHiddenCaptorSelfHealsOnWheel(t *testing.T) {
 	}
 }
 
+// TestCaptureReengagesAfterHeal is the closing guarantee on the self-heal: a
+// heal-to-empty must leave the router in a clean, fully re-capturable state —
+// not merely un-wedged. After a dead captor is popped, a FRESH press on a live
+// capturable widget must engage capture normally (Captured() becomes that
+// widget) and route subsequent events to it. This is what rules out a heal that
+// unwedges input but leaves some residue that swallows the next capture (the
+// shape of a "the menu won't open after the panel closed" symptom); healCapture
+// only slices the stack, touching no other router state, and this proves it.
+func TestCaptureReengagesAfterHeal(t *testing.T) {
+	a := &probe{name: "a", capturing: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	sub := (&probe{name: "sub"}).setChild(a)
+	sub.SetWidth(50)
+	sub.SetHeight(50)
+	c := &probe{name: "c", capturing: true} // a second, still-visible capturable widget
+	c.SetWidth(50)
+	c.SetHeight(50)
+	root := controls.NewCanvas().Add(sub, 0, 0).Add(c, 60, 0)
+	layout(root, 200, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // press on a -> captures
+	if r.Captured() != core.Widget(a) {
+		t.Fatalf("Captured() = %v, want a", r.Captured())
+	}
+
+	sub.SetVisible(false) // orphan a's capture
+
+	// A fresh press on c: the dead captor a heals away, and the SAME press then
+	// hit-tests to c, which engages its own capture normally.
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 70, Y: 10}, 0)
+	if r.Captured() != core.Widget(c) {
+		t.Fatalf("Captured() after heal + fresh press = %v, want c (capture must re-engage cleanly)", r.Captured())
+	}
+
+	// And c's capture is genuinely live: a move outside c's bounds still goes to
+	// c (capture bypasses hit-testing), exactly as a first-ever capture would.
+	r.PointerMove(render.Point{X: 40, Y: 10}, 0) // over the hidden sub, not c
+	if got := c.events; len(got) != 2 || got[0] != "press" || got[1] != "move" {
+		t.Fatalf("c.events = %v, want [press move] (re-engaged capture routes normally)", got)
+	}
+	if r.Captured() != core.Widget(c) {
+		t.Fatalf("Captured() after captured move = %v, want c", r.Captured())
+	}
+}
+
 // TestNestedCaptureRestores is the primary regression for Capture/Release's
 // nesting contract: capturing while another widget already holds the grab
 // pushes over it, and Release pops back to that previous captor rather than
