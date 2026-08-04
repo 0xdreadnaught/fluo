@@ -197,6 +197,16 @@ type TextBox struct {
 	maxLineWRev uint64
 	maxLineWOK  bool
 
+	// needScrollToCaret is set true by every caret-MOVING mutation (SetText,
+	// SetCaret, Select, replaceRange) and consumed once per ArrangeContent. It
+	// gates updateVScroll/updateHScroll's scroll-to-caret: the caret is
+	// revealed only on a layout that follows a caret move, so a manual scroll
+	// (wheel/thumb) PERSISTS across any other re-arrange (a resize, or a host
+	// that calls Frame every frame) instead of being pinned back to the caret.
+	// This is fluo's documented manual-scroll model made explicit rather than
+	// relying on the host to arrange only on invalidation.
+	needScrollToCaret bool
+
 	// desiredCol and desiredColValid track the "desired column" Up/Down
 	// navigation preserves across lines shorter than it (see
 	// moveCaretVertical): desiredColValid is false whenever the caret last
@@ -295,6 +305,7 @@ func (t *TextBox) SetText(s string) *TextBox {
 	t.runes = []rune(s)
 	t.caret = len(t.runes)
 	t.anchor = t.caret
+	t.needScrollToCaret = true
 	t.rev++
 	t.InvalidateArrange()
 	if t.wrapping() {
@@ -621,6 +632,7 @@ func (t *TextBox) SetCaret(i int) *TextBox {
 	t.caret = i
 	t.anchor = i
 	t.desiredColValid = false
+	t.needScrollToCaret = true
 	t.InvalidateArrange()
 	t.restartBlink()
 	return t
@@ -637,6 +649,7 @@ func (t *TextBox) Select(anchor, caret int) *TextBox {
 	t.anchor = clampInt(anchor, 0, len(t.runes))
 	t.caret = clampInt(caret, 0, len(t.runes))
 	t.desiredColValid = false
+	t.needScrollToCaret = true
 	t.InvalidateArrange()
 	t.restartBlink()
 	return t
@@ -684,6 +697,7 @@ func (t *TextBox) replaceRange(start, end int, s string) {
 	t.caret = start + len(ins)
 	t.anchor = t.caret
 	t.desiredColValid = false
+	t.needScrollToCaret = true
 	t.rev++
 	t.InvalidateArrange()
 	if t.wrapping() {
@@ -2268,6 +2282,11 @@ func (t *TextBox) ArrangeContent(bounds render.Rect) {
 
 	t.updateHScroll(t.contentWidth())
 	t.updateVScroll(t.contentHeight())
+
+	// Consumed: a caret move re-syncs the scroll to the caret on the NEXT
+	// layout only (both updates above read the flag for this pass). A
+	// subsequent re-arrange with no caret move leaves a manual scroll in place.
+	t.needScrollToCaret = false
 }
 
 // updateHScroll clamps hscroll into a range that keeps the caret's display
@@ -2287,11 +2306,10 @@ func (t *TextBox) updateHScroll(innerW float32) {
 		return
 	}
 
-	// A horizontal-thumb drag owns hscroll: skip the caret-follow while
-	// dragging (same reason as updateVScroll — a mid-drag re-arrange would
-	// otherwise snap hscroll back toward the caret and fight the drag). The
-	// clamp below still keeps the dragged offset valid.
-	if !t.hDragging {
+	// Scroll to reveal the caret only on a caret-move layout and not while a
+	// horizontal-thumb drag owns hscroll (same manual-scroll model as
+	// updateVScroll). The clamp below still keeps hscroll valid.
+	if t.needScrollToCaret && !t.hDragging {
 		caretX := t.caretX()
 
 		if caretX-t.hscroll < 0 {
@@ -2330,11 +2348,12 @@ func (t *TextBox) updateVScroll(innerH float32) {
 		return
 	}
 
-	// A thumb drag owns vscroll: while dragging, skip the caret-follow below
-	// (it would snap vscroll back toward the caret and FIGHT the drag on a host
-	// that re-arranges between drag moves — an unconditional per-frame Frame).
-	// The [0, maxScroll] clamp still runs, keeping the dragged offset valid.
-	if !t.vDragging {
+	// Scroll to reveal the caret ONLY on a layout that follows a caret move
+	// (needScrollToCaret) and not while a thumb drag owns the offset. Any other
+	// re-arrange — a resize, or a host that calls Frame every frame — leaves a
+	// manual scroll (wheel/thumb) in place instead of pinning it back to the
+	// caret. The [0, maxScroll] clamp below still runs, keeping vscroll valid.
+	if t.needScrollToCaret && !t.vDragging {
 		lh := t.lineHeight()
 		var row int
 		if t.wrapping() {
