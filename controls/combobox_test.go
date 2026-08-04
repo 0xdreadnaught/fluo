@@ -413,3 +413,28 @@ func TestComboBoxOpenStateClampsAtEnds(t *testing.T) {
 		t.Fatalf("Down at bottom = %d, want 1 (clamped)", combo.active)
 	}
 }
+
+// TestComboBoxHoverMovesCursor is the F-A regression (v0.20.2): the mouse and
+// the keyboard share ONE cursor, so hovering a row moves `active` onto it —
+// there is never a separate keyboard highlight left lit on another row.
+func TestComboBoxHoverMovesCursor(t *testing.T) {
+	combo, host, r := newTestCombo(t, []string{"a", "b", "c"})
+	r.Focus(combo)
+
+	r.KeyDown(input.KeyDown, 0, 0) // open (active = selected = -1)
+	r.KeyDown(input.KeyDown, 0, 0) // active -> 0
+	r.KeyDown(input.KeyDown, 0, 0) // active -> 1 (keyboard cursor on row 1)
+	if combo.active != 1 {
+		t.Fatalf("active after keyboard nav = %d, want 1", combo.active)
+	}
+
+	layoutOverlay(host, 300, 300) // arrange the popup rows
+	rows := popupRows(t, combo)
+
+	// Hover row 0: the shared cursor moves to it (not a second, independent
+	// highlight left on row 1).
+	r.PointerMove(rectCenter(core.BoundsOf(rows[0])), 0)
+	if combo.active != 0 {
+		t.Fatalf("active after hovering row 0 = %d, want 0 (hover moves the shared cursor — no dual highlight)", combo.active)
+	}
+}

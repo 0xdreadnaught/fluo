@@ -68,6 +68,7 @@ func NewComboBox(face *text.Face) *ComboBox {
 	c := &ComboBox{
 		face:     face,
 		selected: -1,
+		active:   -1,
 		enabled:  true,
 		colors:   th.Color,
 		metrics:  th.Metric,
@@ -239,6 +240,7 @@ func (c *ComboBox) buildPopup() core.Widget {
 			c.selectUser(idx)
 			c.closePopup()
 		})
+		row.onHover = func(idx int) { c.active = idx } // mouse shares the keyboard cursor
 		stack.Add(row)
 	}
 	return newComboPopupCard(stack, c.colors, c.metrics)
@@ -552,9 +554,11 @@ func (card *comboPopupCard) Render(r render.Renderer) {
 }
 
 // comboRow is one item row inside an open ComboBox's popup: a left-aligned
-// TextBlock, filled Highlight when it is EITHER hovered OR the currently
-// selected item (see Render — classic combos give both the same look),
-// clickable (selects + closes on release-inside, via onSelect).
+// TextBlock, filled Highlight when it is the ComboBox's current cursor row (see
+// Render / the active field). Mouse and keyboard share ONE cursor: hovering a
+// row moves the cursor to it (onHover), and the arrow keys move the same cursor
+// (ComboBox.OnKey), so exactly one row is ever lit. Clickable (selects + closes
+// on release-inside, via onSelect).
 type comboRow struct {
 	core.Element
 
@@ -568,6 +572,11 @@ type comboRow struct {
 	// through an already-built popup without rebuilding it — the row reads the
 	// live value each frame, exactly as it reads hover.
 	active func() int
+
+	// onHover (may be nil) moves the ComboBox's cursor onto this row when the
+	// pointer enters it, so the mouse and the keyboard drive the same single
+	// highlight (see OnPointer / the type doc comment).
+	onHover func(index int)
 
 	onSelect func(index int)
 
@@ -651,13 +660,12 @@ func (row *comboRow) Children() []core.Widget {
 }
 
 // Render fills the row's bounds with Highlight (and recolors the label
-// HighlightText) when the row is EITHER the current selection OR hovered —
-// classic combo popups highlight the hovered row exactly like the selected
-// one, with no separate visual for the two — else leaves it transparent
-// (showing the popup card's own WindowWell through) with WindowText label
-// color.
+// HighlightText) when the row is the ComboBox's current cursor row — the single
+// highlight both hover and the arrow keys drive (see the type doc comment and
+// OnPointer) — else leaves it transparent (showing the popup card's own
+// WindowWell through) with WindowText label color.
 func (row *comboRow) Render(r render.Renderer) {
-	highlighted := (row.active != nil && row.index == row.active()) || row.click.Hover()
+	highlighted := row.active != nil && row.index == row.active()
 
 	labelColor := row.colors.WindowText
 	if highlighted {
@@ -670,5 +678,11 @@ func (row *comboRow) Render(r render.Renderer) {
 // OnPointer implements input.PointerHandler, delegating the entire
 // press/release/hover state machine to the embedded ClickBehavior.
 func (row *comboRow) OnPointer(e *input.PointerEvent) {
+	// A pointer Enter moves the ComboBox's cursor onto this row, unifying the
+	// mouse highlight with the keyboard one (see the type doc comment) so the
+	// two can never light two different rows at once.
+	if e.Action == input.Enter && row.onHover != nil {
+		row.onHover(row.index)
+	}
 	row.click.HandlePointer(e, row)
 }

@@ -9,6 +9,13 @@ import (
 // keystrokes. After a longer pause the next printable key starts a fresh
 // prefix, matching the OS list-box convention: a deliberate pause means "new
 // search", not "extend the previous one".
+//
+// The pause is measured with KeyEvent.Time, which is 0 unless the host installed
+// a clock via Router.SetTimeSource (the app.Run window path does — glfw.GetTime;
+// see app.window). A host that embeds fluo through app.Surface into its own GL
+// loop should install one too, or this time-based reset never fires and the
+// prefix only resets on a repeated key — the same host-clock dependency
+// double-click timing and the caret blink already carry.
 const typeAheadResetSeconds = 0.5
 
 // typeAhead is the shared list type-ahead state — a case-insensitive prefix

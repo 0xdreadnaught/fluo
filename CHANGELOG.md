@@ -8,7 +8,25 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
-## [0.20.1] - 2026-08-04
+## [0.20.2] - 2026-08-04
+
+### Fixed
+
+- **`ComboBox` open dropdown no longer shows two highlighted rows.** The keyboard
+  cursor and the mouse hover were independent highlights, so after arrow-
+  navigating to one row, moving the mouse over another lit both at once. Mouse
+  and keyboard now share one cursor: hovering a row moves the `active` cursor to
+  it, and the row highlight is driven solely by that cursor, so exactly one row
+  is ever lit. Also initializes `active` to -1 in `NewComboBox` for consistency
+  with `selected` (it was already set on every open, so this is a latent-only
+  tidy). No API or golden change.
+
+### Documentation
+
+- Documented that list type-ahead's pause-reset uses `KeyEvent.Time` and so
+  depends on the host installing a clock via `Router.SetTimeSource` (the
+  `app.Run` window path already does; an `app.Surface` embedder should too) —
+  the same host-clock dependency double-click timing and the caret blink carry.
 
 ### Added
 
