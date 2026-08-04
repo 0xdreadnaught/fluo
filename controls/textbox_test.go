@@ -4420,3 +4420,37 @@ func TestTextBoxHorizontalScrollbarReservesBottomLane(t *testing.T) {
 		t.Fatalf("dragHScroll did not move hscroll (%v -> %v)", before, tb.hscroll)
 	}
 }
+
+// TestTextBoxThumbDragSurvivesReArrange reproduces the multi-frame thumb-drag
+// bug: a host that calls Frame every frame (re-arrange between drag moves)
+// must not let updateVScroll's caret-follow snap vscroll back toward the caret
+// mid-drag. The caret is at the top; a thumb drag scrolls the view DOWN (caret
+// off-screen); a re-arrange between moves must NOT yank vscroll back to 0.
+func TestTextBoxThumbDragSurvivesReArrange(t *testing.T) {
+	tb := newOverflowingMultilineTextBox(t)
+	tb.SetCaret(0)
+	arrange := func() { core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50}) }
+	arrange()
+	if tb.vscroll != 0 {
+		t.Fatalf("setup: vscroll = %v, want 0", tb.vscroll)
+	}
+
+	// Grab the thumb and drag it to the bottom of the track.
+	track, ok := tb.vScrollTrack()
+	if !ok {
+		t.Fatal("no vScrollTrack")
+	}
+	tb.vDragging, tb.vDragGrab = true, 0
+	tb.dragVScroll(track.Y + track.H)
+	scrolled := tb.vscroll
+	if scrolled <= 0 {
+		t.Fatalf("thumb drag did not scroll (vscroll = %v)", scrolled)
+	}
+
+	// A per-frame re-arrange fires BETWEEN drag moves (what an unconditional
+	// per-frame Frame does). It must not fight the active drag.
+	arrange()
+	if tb.vscroll < scrolled-0.01 {
+		t.Fatalf("re-arrange snapped vscroll back mid-drag: %v -> %v (caret-follow fought the thumb drag)", scrolled, tb.vscroll)
+	}
+}

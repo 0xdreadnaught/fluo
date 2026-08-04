@@ -2287,13 +2287,19 @@ func (t *TextBox) updateHScroll(innerW float32) {
 		return
 	}
 
-	caretX := t.caretX()
+	// A horizontal-thumb drag owns hscroll: skip the caret-follow while
+	// dragging (same reason as updateVScroll — a mid-drag re-arrange would
+	// otherwise snap hscroll back toward the caret and fight the drag). The
+	// clamp below still keeps the dragged offset valid.
+	if !t.hDragging {
+		caretX := t.caretX()
 
-	if caretX-t.hscroll < 0 {
-		t.hscroll = caretX
-	}
-	if caretX-t.hscroll > innerW {
-		t.hscroll = caretX - innerW
+		if caretX-t.hscroll < 0 {
+			t.hscroll = caretX
+		}
+		if caretX-t.hscroll > innerW {
+			t.hscroll = caretX - innerW
+		}
 	}
 	if t.hscroll < 0 {
 		t.hscroll = 0
@@ -2324,20 +2330,26 @@ func (t *TextBox) updateVScroll(innerH float32) {
 		return
 	}
 
-	lh := t.lineHeight()
-	var row int
-	if t.wrapping() {
-		row, _ = t.rowCol(t.caret)
-	} else {
-		row, _ = t.lineCol(t.caret)
-	}
-	caretY := float32(row) * lh
+	// A thumb drag owns vscroll: while dragging, skip the caret-follow below
+	// (it would snap vscroll back toward the caret and FIGHT the drag on a host
+	// that re-arranges between drag moves — an unconditional per-frame Frame).
+	// The [0, maxScroll] clamp still runs, keeping the dragged offset valid.
+	if !t.vDragging {
+		lh := t.lineHeight()
+		var row int
+		if t.wrapping() {
+			row, _ = t.rowCol(t.caret)
+		} else {
+			row, _ = t.lineCol(t.caret)
+		}
+		caretY := float32(row) * lh
 
-	if caretY-t.vscroll < 0 {
-		t.vscroll = caretY
-	}
-	if caretY-t.vscroll > innerH-lh {
-		t.vscroll = caretY - (innerH - lh)
+		if caretY-t.vscroll < 0 {
+			t.vscroll = caretY
+		}
+		if caretY-t.vscroll > innerH-lh {
+			t.vscroll = caretY - (innerH - lh)
+		}
 	}
 	if t.vscroll < 0 {
 		t.vscroll = 0
