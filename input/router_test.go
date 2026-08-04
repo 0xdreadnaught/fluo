@@ -333,6 +333,142 @@ func TestWheelUnderCapture(t *testing.T) {
 	}
 }
 
+// TestHiddenCaptorSelfHealsOnMove is the primary capture self-heal regression:
+// a widget captures the pointer (a drag), then an ANCESTOR is hidden mid-drag
+// (SetVisible(false) — a panel collapses, a tab switches) with no Detach or
+// Release. The captor is now invisible but still on the capture stack, so
+// without healing every pointer event would keep routing to it and input would
+// wedge. The next PointerMove must pop the dead captor, clear the capture, and
+// fall through to normal hit-testing so the widget actually under the pointer
+// gets the event. Mirrors TestKeyNotDeliveredIntoHiddenSubtree on the pointer
+// side; note the ancestor walk — a's own visible flag stays true.
+func TestHiddenCaptorSelfHealsOnMove(t *testing.T) {
+	a := &probe{name: "a", capturing: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	sub := (&probe{name: "sub"}).setChild(a)
+	sub.SetWidth(50)
+	sub.SetHeight(50)
+	b := &probe{name: "b"}
+	b.SetWidth(50)
+	b.SetHeight(50)
+	root := controls.NewCanvas().Add(sub, 0, 0).Add(b, 60, 0)
+	layout(root, 200, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // press on a -> captures
+	if r.Captured() != core.Widget(a) {
+		t.Fatalf("Captured() = %v, want a", r.Captured())
+	}
+
+	// Hide a's ANCESTOR mid-drag. a's own visible flag stays true; only the
+	// container above it is hidden, so this exercises the ancestor walk.
+	sub.SetVisible(false)
+	if !core.IsVisible(a) {
+		t.Fatal("a is hidden itself, want visible (the test must exercise the ancestor walk)")
+	}
+
+	// Next move over b: the dead captor is popped, capture clears, and the
+	// event falls through to hit-testing — b gets a normal enter+move, a gets
+	// nothing more.
+	r.PointerMove(render.Point{X: 70, Y: 10}, 0)
+	if r.Captured() != nil {
+		t.Fatalf("Captured() after captor hidden = %v, want nil (self-heal must pop the dead captor)", r.Captured())
+	}
+	if got := a.events; len(got) != 1 || got[0] != "press" {
+		t.Fatalf("a.events after hidden move = %v, want exactly [press] (no move to the hidden captor)", got)
+	}
+	if got := b.events; len(got) != 2 || got[0] != "enter" || got[1] != "move" {
+		t.Fatalf("b.events after heal = %v, want [enter move] (event fell through to hit-testing)", got)
+	}
+}
+
+// TestNestedCaptureHealRestoresOuter proves the self-heal honors nesting the
+// same way Release does: when an INNER captor is hidden but an OUTER one is
+// still live, healing pops only the dead inner entry and restores the outer
+// capture — it does not clear capture outright. This is the real-world shape
+// for us: an OverlayHost holds a modal capture while a popup-internal drag
+// captures over it, and the popup (the inner captor's subtree) gets hidden.
+// Driven through PointerButton to also cover that dispatch entry point.
+func TestNestedCaptureHealRestoresOuter(t *testing.T) {
+	h := &probe{name: "h"} // the outer/host captor, always visible
+	h.SetWidth(200)
+	h.SetHeight(100)
+	w := &probe{name: "w"} // the inner captor, inside a hideable container
+	w.SetWidth(50)
+	w.SetHeight(50)
+	sub := (&probe{name: "sub"}).setChild(w)
+	sub.SetWidth(50)
+	sub.SetHeight(50)
+	root := controls.NewCanvas().Add(h, 0, 0).Add(sub, 0, 0)
+	layout(root, 200, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.Capture(h)
+	r.Capture(w) // nests over h
+	if r.Captured() != core.Widget(w) {
+		t.Fatalf("Captured() = %v, want w (inner nested capture)", r.Captured())
+	}
+
+	sub.SetVisible(false) // hide the inner captor's ancestor; h stays visible
+
+	// Any pointer dispatch heals: w is popped, h (still live) is restored and
+	// receives the press — capture is NOT dropped to nil.
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0)
+	if r.Captured() != core.Widget(h) {
+		t.Fatalf("Captured() after inner captor hidden = %v, want h (heal restores the outer capture, not nil)", r.Captured())
+	}
+	if got := h.events; len(got) != 1 || got[0] != "press" {
+		t.Fatalf("h.events = %v, want [press] (restored outer captor gets the event)", got)
+	}
+	if got := w.events; len(got) != 0 {
+		t.Fatalf("w.events = %v, want none (hidden inner captor gets nothing)", got)
+	}
+}
+
+// TestHiddenCaptorSelfHealsOnWheel covers the third dispatch entry point: a
+// wheel event under a now-hidden captor must heal the same way a move does —
+// pop the dead captor and route the wheel by hit-testing instead of feeding it
+// to the invisible widget.
+func TestHiddenCaptorSelfHealsOnWheel(t *testing.T) {
+	a := &probe{name: "a", capturing: true}
+	a.SetWidth(50)
+	a.SetHeight(50)
+	sub := (&probe{name: "sub"}).setChild(a)
+	sub.SetWidth(50)
+	sub.SetHeight(50)
+	b := &probe{name: "b"}
+	b.SetWidth(50)
+	b.SetHeight(50)
+	root := controls.NewCanvas().Add(sub, 0, 0).Add(b, 60, 0)
+	layout(root, 200, 100)
+
+	r := input.NewRouter()
+	r.SetRoot(root)
+
+	r.PointerButton(input.ButtonLeft, true, render.Point{X: 10, Y: 10}, 0) // press on a -> captures
+	if r.Captured() != core.Widget(a) {
+		t.Fatalf("Captured() = %v, want a", r.Captured())
+	}
+
+	sub.SetVisible(false)
+
+	r.PointerWheel(render.Point{X: 0, Y: 1}, render.Point{X: 70, Y: 10}, 0) // over b
+	if r.Captured() != nil {
+		t.Fatalf("Captured() after captor hidden = %v, want nil (wheel dispatch must heal too)", r.Captured())
+	}
+	if got := a.events; len(got) != 1 || got[0] != "press" {
+		t.Fatalf("a.events after hidden wheel = %v, want exactly [press] (no wheel to the hidden captor)", got)
+	}
+	if got := b.events; len(got) != 1 || got[0] != "wheel" {
+		t.Fatalf("b.events after heal = %v, want [wheel] (event fell through to hit-testing)", got)
+	}
+}
+
 // TestNestedCaptureRestores is the primary regression for Capture/Release's
 // nesting contract: capturing while another widget already holds the grab
 // pushes over it, and Release pops back to that previous captor rather than

@@ -8,6 +8,22 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.16.7] - 2026-08-04
+
+### Fixed
+
+- **Pointer capture self-heals when the captor is hidden mid-drag.** A widget
+  holding the pointer grab that was hidden without a matching `Release` —
+  `SetVisible(false)` on the captor or any container above it (a panel
+  collapsing, a tab switching), with no `Detach` — stayed on the capture stack,
+  so every subsequent pointer event kept routing to the now-invisible widget and
+  input wedged with no path able to recompute. Each pointer dispatch
+  (`PointerMove`/`PointerButton`/`PointerWheel`) now pops any non-live captor off
+  the top of the nested capture stack first (ancestor-visibility test, the same
+  one focus heals against in `dispatchKey`), restoring the outer capture beneath
+  a dead inner one or falling back to normal hit-testing. Purely additive: it
+  only fires on an already-wedged state, so live captures are unaffected.
+
 ## [0.16.6] - 2026-08-04
 
 ### Fixed

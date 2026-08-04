@@ -268,6 +268,31 @@ func (r *Router) Captured() core.Widget {
 	return r.captureStack[len(r.captureStack)-1]
 }
 
+// healCapture pops any captors that have gone non-live off the top of the
+// nested capture stack, restoring the outer capture beneath a dead inner one
+// (the same nesting Release honors) or emptying the stack so dispatch falls
+// back to normal hit-testing. A widget can lose its capture WITHOUT a matching
+// Release: SetVisible(false) on the captor or any container above it hides it
+// mid-drag with no teardown call. Detach covers explicit subtree removal (a
+// popup closing); this covers the silent-hide case. Without it a live capture
+// keeps bypassing hit-testing, so every subsequent pointer event routes to the
+// now-invisible captor and pointer input wedges with no path able to recompute.
+//
+// Liveness is the same ancestor-visibility test focus heals against in
+// dispatchKey (inVisibleSubtree): the captor and every ancestor along its
+// core.ParentOf chain must be core.IsVisible. An unparented captor still counts
+// as visible — an explicit detach routes through Detach, not here — so this
+// targets only the hidden case. Called at the head of every pointer dispatch,
+// before Captured() is consulted; a nil/empty stack is a no-op.
+func (r *Router) healCapture() {
+	for len(r.captureStack) > 0 {
+		if inVisibleSubtree(r.captureStack[len(r.captureStack)-1]) {
+			return
+		}
+		r.captureStack = r.captureStack[:len(r.captureStack)-1]
+	}
+}
+
 // subtreeContainsIdentity reports whether target is w itself, or appears
 // anywhere within w's subtree, walked via Children() (compared by identity,
 // ==). Used by Detach to determine subtree membership — deliberately a
@@ -440,6 +465,7 @@ func (r *Router) updateHover(newPath []core.Widget) {
 // Otherwise it hit-tests, updates hover (Enter/Leave), bubbles a Move event
 // leaf→root, and returns the cursor from the new hover path.
 func (r *Router) PointerMove(p render.Point, mods Modifiers) Cursor {
+	r.healCapture()
 	if top := r.Captured(); top != nil {
 		r.deliverCaptured(&PointerEvent{Action: Move, Pos: p, Mods: mods, Time: r.timeNow(), Router: r})
 		if cs, ok := top.(CursorShaper); ok {
@@ -489,6 +515,7 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 	}
 	e := &PointerEvent{Action: action, Pos: p, Button: b, Mods: mods, Time: r.timeNow(), Router: r}
 
+	r.healCapture()
 	// ClickCount is assigned once the receiving widget is known, so a
 	// multi-click run stays scoped to that one widget (see clickCountFor). The
 	// receiving widget is the captured widget while a capture is active, else
@@ -522,6 +549,7 @@ func (r *Router) PointerButton(b Button, press bool, p render.Point, mods Modifi
 // leaf→root like a pointer event (Action: Wheel), or going only to the
 // captured widget if one holds the pointer grab.
 func (r *Router) PointerWheel(delta render.Point, p render.Point, mods Modifiers) {
+	r.healCapture()
 	if r.Captured() != nil {
 		r.deliverCaptured(&PointerEvent{Action: Wheel, Pos: p, Delta: delta, Mods: mods, Time: r.timeNow(), Router: r})
 		return
