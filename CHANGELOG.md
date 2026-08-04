@@ -8,20 +8,8 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
-## [0.16.2] - 2026-08-04
-
 ### Fixed
 
-- **Manual scroll (wheel/thumb) persists across re-arranges.** `updateVScroll`/
-  `updateHScroll` re-clamp the scroll offset to keep the caret visible on every
-  arrange — fluo's intended "manual scroll sticks until you move the caret"
-  model, but it only held because the host arranges just on invalidation. Now
-  the scroll-to-caret is gated on a `needScrollToCaret` flag set by the
-  caret-moving mutations (`SetText`/`SetCaret`/`Select`/`replaceRange`) and
-  consumed once per layout, so a resize (or any non-caret re-arrange) leaves a
-  manual scroll in place instead of snapping it back to the caret. Supersedes
-  the v0.16.1 `vDragging` guard (covers the wheel too). Typing/click/arrows
-  still reveal the caret (they move it, setting the flag).
 - **Vertical scrollbar thumb can no longer be dragged past the track bottom.**
   `vScrollTrack.H` now uses the content viewport height (`contentHeight`, which
   the horizontal lane shortens) instead of the full bounds height, so the

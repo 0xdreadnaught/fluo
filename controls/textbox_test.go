@@ -4455,37 +4455,6 @@ func TestTextBoxThumbDragSurvivesReArrange(t *testing.T) {
 	}
 }
 
-// TestTextBoxWheelScrollSurvivesReArrange reproduces the RE-FRAMED root cause
-// (relay #3028): scrolling is caret-CLAMPED. Caret at line 1 (load-at-top);
-// wheel down; then a re-arrange (what a per-frame-Frame host does) runs
-// updateVScroll's caret-follow, which pins vscroll back to the caret (top).
-// The v0.16.1 vDragging guard does NOT cover the wheel, so this still resets.
-// The fix is "manual scroll sticks until the caret moves".
-func TestTextBoxWheelScrollSurvivesReArrange(t *testing.T) {
-	tb := newOverflowingMultilineTextBox(t)
-	tb.SetCaret(0)
-	arrange := func() { core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50}) }
-	arrange()
-	if tb.vscroll != 0 {
-		t.Fatalf("setup: vscroll = %v, want 0", tb.vscroll)
-	}
-
-	// Wheel down (no vDragging — this is the wheel path).
-	if !tb.wheelScrollV(scrollWheelStep) {
-		t.Fatal("wheel down reported no movement on overflowing content")
-	}
-	scrolled := tb.vscroll
-	if scrolled <= 0 {
-		t.Fatalf("wheel did not scroll (vscroll = %v)", scrolled)
-	}
-
-	// A re-arrange between notches (a per-frame Frame host) must not pin
-	// vscroll back to the caret. It currently DOES (caret at top) -> reset.
-	arrange()
-	if tb.vscroll < scrolled-0.01 {
-		t.Fatalf("re-arrange pinned vscroll back to the caret after a wheel: %v -> %v (caret-clamped scroll)", scrolled, tb.vscroll)
-	}
-}
 
 // TestTextBoxVerticalTrackHLaneAware covers symptom 3 (relay #3028: thumb
 // draggable past the bottom): when the horizontal bar also shows, the vertical
