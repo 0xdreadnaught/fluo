@@ -82,6 +82,15 @@ func drawScrollThumb(r render.Renderer, track, thumb render.Rect, c theme.ColorT
 	drawRaised(r, thumb, c.ButtonFace, c)
 }
 
+// drawScrollThumbH is the horizontal analogue of drawScrollThumb: the opaque
+// track fill, a 1px shadow along the track's TOP edge (where the vertical one
+// puts it on the left), and the raised thumb.
+func drawScrollThumbH(r render.Renderer, track, thumb render.Rect, c theme.ColorTokens) {
+	r.FillRect(track, c.ButtonFace)
+	r.FillRect(render.Rect{X: track.X, Y: track.Y, W: track.W, H: 1}, c.ButtonShadow)
+	drawRaised(r, thumb, c.ButtonFace, c)
+}
+
 // drawRaisedRounded paints a raised 3D look on a rounded rect (pill/circle
 // button chrome): a `face`-filled interior with a light top-left / dark
 // bottom-right 1px bevel. StrokeRoundedRect only strokes a single flat

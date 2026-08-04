@@ -177,6 +177,26 @@ type TextBox struct {
 	vDragging bool
 	vDragGrab float32
 
+	// hScrollShown mirrors vScrollShown for the HORIZONTAL scrollbar (a
+	// wrap-off multi-line box whose widest line overflows the content width):
+	// cached once per ArrangeContent (jointly with vScrollShown, since each
+	// lane's reservation can trigger the other), then read by contentHeight,
+	// hScrollTrack, RenderOverlay, and OnPointer. Always false while wrapping
+	// or single-line (no horizontal overflow to scroll).
+	hScrollShown bool
+	// hDragging/hDragGrab mirror vDragging/vDragGrab for a horizontal-thumb
+	// drag (see dragHScroll).
+	hDragging bool
+	hDragGrab float32
+
+	// maxLineW caches the widest logical line's width (logical px), keyed by
+	// maxLineWRev == rev; it drives the horizontal scrollbar's thumb size and
+	// scroll clamp (the whole document's extent, not just the caret's line).
+	// Recomputed lazily by maxLineWidth when the text revision changes.
+	maxLineW    float32
+	maxLineWRev uint64
+	maxLineWOK  bool
+
 	// desiredCol and desiredColValid track the "desired column" Up/Down
 	// navigation preserves across lines shorter than it (see
 	// moveCaretVertical): desiredColValid is false whenever the caret last
@@ -1621,6 +1641,9 @@ func (t *TextBox) fullContentWidth() float32 {
 // ArrangeContent computes as innerH.
 func (t *TextBox) contentHeight() float32 {
 	h := t.Bounds().H - 2*t.metrics.PaddingM
+	if t.hScrollShown {
+		h -= t.metrics.ScrollGutter // reserve the bottom horizontal-scrollbar lane
+	}
 	if h < 0 {
 		h = 0
 	}
@@ -1662,11 +1685,15 @@ func (t *TextBox) contentWidth() float32 {
 // the dedicated PushClip DataGrid uses around its cells (see datagrid.go).
 func (t *TextBox) textClipRect(bounds render.Rect) render.Rect {
 	pad := t.metrics.PaddingM
+	h := bounds.H
+	if t.hScrollShown {
+		h -= pad + t.metrics.ScrollGutter // exclude the reserved bottom horizontal lane
+	}
 	return render.Rect{
 		X: bounds.X + pad + t.gutterWidth(),
 		Y: bounds.Y,
 		W: t.contentWidth(),
-		H: bounds.H,
+		H: h,
 	}
 }
 
@@ -1951,6 +1978,46 @@ func (t *TextBox) caretLineWidth() float32 {
 	return t.xOfInLine(line, t.lineEnd(line)-t.lineStart(line))
 }
 
+// maxLineWidth returns the width (logical px) of the widest logical line in
+// the document — the horizontal analogue of totalContentHeight, driving the
+// horizontal scrollbar's thumb size and the hscroll clamp (so scrolling spans
+// the whole document's width, not just the caret's own line). Cached by text
+// revision (rev): recomputed only when the text changes, O(total runes) then.
+func (t *TextBox) maxLineWidth() float32 {
+	if t.maxLineWOK && t.maxLineWRev == t.rev {
+		return t.maxLineW
+	}
+	var w float32
+	if t.multiline {
+		n := t.lineCount()
+		for i := 0; i < n; i++ {
+			if lw := t.xOfInLine(i, t.lineEnd(i)-t.lineStart(i)); lw > w {
+				w = lw
+			}
+		}
+	} else {
+		w = t.xOf(len(t.runes))
+	}
+	t.maxLineW, t.maxLineWRev, t.maxLineWOK = w, t.rev, true
+	return w
+}
+
+// computeShowHScroll decides whether the horizontal scrollbar shows: a
+// wrap-off multi-line box (wrapping pins hscroll at 0, so a wrapped box never
+// scrolls horizontally) whose widest line overflows the content width. Uses
+// contentWidth (gutter- and vertical-lane-aware) so the decision reflects the
+// space text actually gets.
+func (t *TextBox) computeShowHScroll() bool {
+	if !t.multiline || t.wrapping() {
+		return false
+	}
+	cw := t.contentWidth()
+	if cw <= 0 {
+		return false
+	}
+	return t.maxLineWidth() > cw
+}
+
 // moveCaretVertical implements Up/Down (delta -1/+1) in multi-line mode:
 // moves the caret to the same column (see desiredCol/desiredColValid) on
 // the line above/below, clamped to [0, lineCount()-1] (Up on the first line
@@ -2187,17 +2254,20 @@ func (t *TextBox) MeasureContent(available render.Size) render.Size {
 // visualRows' own cache (keyed on that width) transparently recomputes on a
 // mismatch. No separate "re-wrap" step is needed beyond that cache lookup.
 func (t *TextBox) ArrangeContent(bounds render.Rect) {
-	// Refreshed first: contentWidth (used by updateHScroll below, and by
-	// every wrap-aware helper for the rest of this pass) depends on it.
-	t.vScrollShown = t.computeShowVScroll()
+	// Joint lane reservation. The two scrollbar lanes are mutually dependent:
+	// the vertical lane narrows contentWidth (which can push the widest line
+	// over the horizontal-overflow threshold), and the horizontal lane
+	// shortens contentHeight (which can push the row count over the vertical
+	// threshold). Two rounds settle it (the same shape as ListView's joint
+	// gutter resolution): each computeShow* reads the other lane's current
+	// decision, so a second pass reflects any lane the first pass turned on.
+	for i := 0; i < 2; i++ {
+		t.vScrollShown = t.computeShowVScroll()
+		t.hScrollShown = t.computeShowHScroll()
+	}
 
 	t.updateHScroll(t.contentWidth())
-
-	innerH := bounds.H - 2*t.metrics.PaddingM
-	if innerH < 0 {
-		innerH = 0
-	}
-	t.updateVScroll(innerH)
+	t.updateVScroll(t.contentHeight())
 }
 
 // updateHScroll clamps hscroll into a range that keeps the caret's display
@@ -2229,7 +2299,7 @@ func (t *TextBox) updateHScroll(innerW float32) {
 		t.hscroll = 0
 	}
 
-	maxScroll := t.caretLineWidth() - innerW
+	maxScroll := t.maxLineWidth() - innerW
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
@@ -2363,6 +2433,66 @@ func (t *TextBox) dragVScroll(posY float32) {
 	t.vscroll = scrollDragOffset(track.Y, track.H, thumb.H, posY, t.vDragGrab, maxOffset)
 }
 
+// --- Horizontal scroll thumb (shown only while a wrap-off line overflows) ---
+
+// hScrollTrack returns the horizontal thumb's track rect — a scrollGutter-tall
+// strip along the BOTTOM inner edge, spanning exactly the text content area
+// (from the line-number gutter's right edge, contentWidth wide, so it stops at
+// the vertical lane's left edge and leaves the bottom-right corner square for
+// the two lanes to meet). ok==false whenever hScrollShown is false.
+func (t *TextBox) hScrollTrack() (render.Rect, bool) {
+	if !t.hScrollShown {
+		return render.Rect{}, false
+	}
+	bounds := t.Bounds()
+	pad := t.metrics.PaddingM
+	gutter := t.metrics.ScrollGutter
+	w := t.contentWidth()
+	if w <= 0 {
+		return render.Rect{}, false
+	}
+	return render.Rect{
+		X: bounds.X + pad + t.gutterWidth(),
+		Y: bounds.Y + bounds.H - pad - gutter,
+		W: w,
+		H: gutter,
+	}, true
+}
+
+// hScrollThumbRect is the horizontal analogue of vScrollThumbRect: the thumb's
+// length/position along the track reflect hscroll against the whole document
+// width (maxLineWidth), via the same shared scrollThumb* math.
+func (t *TextBox) hScrollThumbRect() (render.Rect, bool) {
+	track, ok := t.hScrollTrack()
+	if !ok {
+		return render.Rect{}, false
+	}
+	total := t.maxLineWidth()
+	thumbW := scrollThumbLength(track.W, total)
+	maxOffset := total - track.W
+	thumbX := scrollThumbPos(track.X, track.W, thumbW, t.hscroll, maxOffset)
+	return render.Rect{X: thumbX, Y: track.Y, W: thumbW, H: track.H}, true
+}
+
+// dragHScroll maps an in-progress horizontal-thumb drag (pointer X) to hscroll,
+// mirroring dragVScroll: it moves the view independent of the caret and is
+// clamped to the whole document width.
+func (t *TextBox) dragHScroll(posX float32) {
+	track, ok := t.hScrollTrack()
+	if !ok {
+		return
+	}
+	thumb, ok := t.hScrollThumbRect()
+	if !ok {
+		return
+	}
+	maxOffset := t.maxLineWidth() - track.W
+	if maxOffset <= 0 {
+		return
+	}
+	t.hscroll = scrollDragOffset(track.X, track.W, thumb.W, posX, t.hDragGrab, maxOffset)
+}
+
 // wheelScrollV scrolls the multi-line view vertically by dy logical px,
 // clamped to [0, totalContentHeight - viewport] — the SAME bound the thumb
 // drag uses (dragVScroll's maxOffset), so wheel and drag agree on the end
@@ -2401,7 +2531,7 @@ func (t *TextBox) wheelScrollH(dx float32) bool {
 	if !t.multiline || t.wrapping() {
 		return false
 	}
-	maxScroll := t.caretLineWidth() - t.contentWidth()
+	maxScroll := t.maxLineWidth() - t.contentWidth()
 	if maxScroll <= 0 {
 		return false
 	}
@@ -2935,6 +3065,18 @@ func (t *TextBox) RenderOverlay(r render.Renderer) {
 		thumb, _ := t.vScrollThumbRect()
 		drawScrollThumb(r, track, thumb, t.colors)
 	}
+	if track, ok := t.hScrollTrack(); ok {
+		thumb, _ := t.hScrollThumbRect()
+		drawScrollThumbH(r, track, thumb, t.colors)
+	}
+	// Dead corner where both lanes meet: fill it as chrome so neither a track
+	// nor content shows through the square between the two thumbs.
+	if t.vScrollShown && t.hScrollShown {
+		b := t.Bounds()
+		pad := t.metrics.PaddingM
+		g := t.metrics.ScrollGutter
+		r.FillRect(render.Rect{X: b.Right() - pad - g, Y: b.Y + b.H - pad - g, W: g, H: g}, t.colors.ButtonFace)
+	}
 }
 
 // OnKey implements input.KeyHandler, the normative Task 6 keyboard map.
@@ -3195,7 +3337,7 @@ func (t *TextBox) OnPointer(e *input.PointerEvent) {
 	if !t.enabled {
 		if e.Router != nil && e.Router.Captured() == t {
 			e.Router.Release()
-			t.vDragging = false
+			t.vDragging, t.hDragging = false, false
 		}
 		return
 	}
@@ -3226,6 +3368,13 @@ func (t *TextBox) OnPointer(e *input.PointerEvent) {
 			e.Handled = true
 			return
 		}
+		if rect, ok := t.hScrollThumbRect(); ok && rect.Contains(e.Pos) {
+			t.hDragging = true
+			t.hDragGrab = e.Pos.X - rect.X
+			e.Router.Capture(t)
+			e.Handled = true
+			return
+		}
 		idx := t.caretIndexAtPos(e.Pos.X, e.Pos.Y)
 		switch {
 		case e.ClickCount == 2:
@@ -3246,6 +3395,8 @@ func (t *TextBox) OnPointer(e *input.PointerEvent) {
 		if e.Router.Captured() == t {
 			if t.vDragging {
 				t.dragVScroll(e.Pos.Y)
+			} else if t.hDragging {
+				t.dragHScroll(e.Pos.X)
 			} else {
 				idx := t.caretIndexAtPos(e.Pos.X, e.Pos.Y)
 				t.Select(t.anchor, idx)
@@ -3255,7 +3406,7 @@ func (t *TextBox) OnPointer(e *input.PointerEvent) {
 	case input.Release:
 		if e.Router.Captured() == t {
 			e.Router.Release()
-			t.vDragging = false
+			t.vDragging, t.hDragging = false, false
 			e.Handled = true
 		}
 	}

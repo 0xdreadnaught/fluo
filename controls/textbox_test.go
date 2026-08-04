@@ -4359,3 +4359,64 @@ func TestTextBoxSingleLineClipsScrolledTextToPadding(t *testing.T) {
 		t.Fatal("no selection fill painted; the scrolled-bleed case was not exercised")
 	}
 }
+
+// TestTextBoxHorizontalScrollbarReservesBottomLane covers the horizontal
+// scrollbar: a wrap-off box whose widest line overflows gets a bottom-lane
+// scrollbar (mirroring the vertical one's right lane); the text clip excludes
+// that lane so text never paints behind it; the two lanes leave a dead corner;
+// and dragging the thumb scrolls horizontally independent of the caret.
+func TestTextBoxHorizontalScrollbarReservesBottomLane(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true).SetLineNumbers(true)
+	long := strings.Repeat("wwwwwwwwww ", 20) // far wider than the box
+	tb.SetText(long + "\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9")
+	tb.SetWidth(200)
+	tb.SetHeight(80)
+	core.MeasureWidget(tb, render.Size{W: 200, H: 80})
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 80})
+
+	if !tb.hScrollShown {
+		t.Fatal("hScrollShown = false, want true (widest line overflows the content width)")
+	}
+	if !tb.vScrollShown {
+		t.Fatal("vScrollShown = false, want true (rows overflow the height)")
+	}
+
+	bounds := tb.Bounds()
+	pad := tb.metrics.PaddingM
+	g := tb.metrics.ScrollGutter
+
+	ht, ok := tb.hScrollTrack()
+	if !ok {
+		t.Fatal("hScrollTrack ok = false")
+	}
+	if wantY := bounds.Y + bounds.H - pad - g; ht.Y != wantY {
+		t.Fatalf("h-track Y = %v, want %v (bottom lane)", ht.Y, wantY)
+	}
+	if ht.H != g {
+		t.Fatalf("h-track H = %v, want gutter %v", ht.H, g)
+	}
+	if wantX := bounds.X + pad + tb.gutterWidth(); ht.X != wantX {
+		t.Fatalf("h-track X = %v, want %v (starts after the line-number gutter)", ht.X, wantX)
+	}
+
+	vtrack, _ := tb.vScrollTrack()
+	if ht.Right() > vtrack.X+0.01 {
+		t.Fatalf("h-track right = %v extends past the v-lane left edge %v (should stop, leaving the corner)", ht.Right(), vtrack.X)
+	}
+
+	vp := tb.textClipRect(bounds)
+	if wantBottom := bounds.Y + bounds.H - pad - g; vp.Y+vp.H != wantBottom {
+		t.Fatalf("text clip bottom = %v, want %v (excludes the h-lane)", vp.Y+vp.H, wantBottom)
+	}
+	if vp.Right() != vtrack.X {
+		t.Fatalf("text clip right = %v, want v-track X %v (excludes the v-lane)", vp.Right(), vtrack.X)
+	}
+
+	before := tb.hscroll
+	thumb, _ := tb.hScrollThumbRect()
+	tb.hDragging, tb.hDragGrab = true, 0
+	tb.dragHScroll(thumb.X + 40) // drag the thumb right
+	if tb.hscroll <= before {
+		t.Fatalf("dragHScroll did not move hscroll (%v -> %v)", before, tb.hscroll)
+	}
+}
