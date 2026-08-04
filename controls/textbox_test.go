@@ -4596,3 +4596,165 @@ func TestNeedScrollAuditManualThenCaretMove(t *testing.T) {
 		t.Fatalf("caret move to EOF did not re-reveal the caret (vscroll %v <= %v)", tb.vscroll, scrolled)
 	}
 }
+
+// --- Undo/Redo (v0.17.0 enrichment) -------------------------------------
+
+// typeRunes drives each rune through the real key path (KeyDown with a rune,
+// no Ctrl), the same route a host's char input takes — so typing records undo
+// history exactly as it would in production.
+func typeRunes(r *input.Router, s string) {
+	for _, c := range s {
+		r.KeyDown(input.Key(0), c, 0)
+	}
+}
+
+// TestUndoRedoRoundtrip is the core guarantee: an edit can be undone back to
+// the prior text and redone forward again, with CanUndo/CanRedo tracking state.
+func TestUndoRedoRoundtrip(t *testing.T) {
+	tb, _ := newFocusedTextBox(t, "")
+	tb.insertText("abc")
+
+	if !tb.CanUndo() || tb.CanRedo() {
+		t.Fatalf("after edit: CanUndo=%v CanRedo=%v, want true/false", tb.CanUndo(), tb.CanRedo())
+	}
+	if !tb.Undo() {
+		t.Fatal("Undo() = false, want true")
+	}
+	if tb.Text() != "" {
+		t.Fatalf("Text after undo = %q, want %q", tb.Text(), "")
+	}
+	if tb.CanUndo() || !tb.CanRedo() {
+		t.Fatalf("after undo: CanUndo=%v CanRedo=%v, want false/true", tb.CanUndo(), tb.CanRedo())
+	}
+	if !tb.Redo() {
+		t.Fatal("Redo() = false, want true")
+	}
+	if tb.Text() != "abc" {
+		t.Fatalf("Text after redo = %q, want %q", tb.Text(), "abc")
+	}
+	if c := tb.Caret(); c != 3 {
+		t.Fatalf("caret after redo = %d, want 3 (end of re-inserted text)", c)
+	}
+}
+
+// TestUndoCoalescesTypingRun proves a run of typed characters undoes as ONE
+// step, not one keystroke at a time — the whole point of coalescing.
+func TestUndoCoalescesTypingRun(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "")
+	typeRunes(r, "hello")
+
+	if tb.Text() != "hello" {
+		t.Fatalf("typed text = %q, want %q", tb.Text(), "hello")
+	}
+	if !tb.Undo() {
+		t.Fatal("Undo() = false, want true")
+	}
+	if tb.Text() != "" {
+		t.Fatalf("Text after one undo = %q, want %q (the whole run undoes at once)", tb.Text(), "")
+	}
+	if tb.CanUndo() {
+		t.Fatal("CanUndo after undoing the single coalesced run = true, want false")
+	}
+}
+
+// TestUndoBreaksAtWhitespace proves the run splits at spaces, so Ctrl+Z steps
+// word-by-word the way every editor does.
+func TestUndoBreaksAtWhitespace(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "")
+	typeRunes(r, "foo bar")
+
+	if !tb.Undo() || tb.Text() != "foo " {
+		t.Fatalf("undo 1: text = %q, want %q (removes the last word)", tb.Text(), "foo ")
+	}
+	if !tb.Undo() || tb.Text() != "foo" {
+		t.Fatalf("undo 2: text = %q, want %q (removes the space)", tb.Text(), "foo")
+	}
+	if !tb.Undo() || tb.Text() != "" {
+		t.Fatalf("undo 3: text = %q, want %q (removes the first word)", tb.Text(), "")
+	}
+}
+
+// TestBackspaceRunCoalesces proves consecutive single-rune Backspaces undo as
+// one step (and that insert vs delete are separate records).
+func TestBackspaceRunCoalesces(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "")
+	tb.insertText("abcd") // one insert record
+	r.KeyDown(input.KeyBackspace, 0, 0)
+	r.KeyDown(input.KeyBackspace, 0, 0) // deletes 'd' then 'c', coalesced
+
+	if tb.Text() != "ab" {
+		t.Fatalf("after two backspaces text = %q, want %q", tb.Text(), "ab")
+	}
+	if !tb.Undo() || tb.Text() != "abcd" {
+		t.Fatalf("undo of the backspace run: text = %q, want %q (both restored at once)", tb.Text(), "abcd")
+	}
+	if !tb.Undo() || tb.Text() != "" {
+		t.Fatalf("undo of the insert: text = %q, want %q", tb.Text(), "")
+	}
+}
+
+// TestRedoTruncatedByNewEdit is the PM's required divergence regression: after
+// an undo, a fresh edit must discard the stale redo path.
+func TestRedoTruncatedByNewEdit(t *testing.T) {
+	tb, _ := newFocusedTextBox(t, "")
+	tb.insertText("abc")
+	if !tb.Undo() {
+		t.Fatal("Undo() = false, want true")
+	}
+	if !tb.CanRedo() {
+		t.Fatal("CanRedo after undo = false, want true (redo available before the divergent edit)")
+	}
+	tb.insertText("x") // divergent edit
+	if tb.CanRedo() {
+		t.Fatal("CanRedo after a fresh edit = true, want false (stale redo path must be truncated)")
+	}
+	if tb.Text() != "x" {
+		t.Fatalf("Text = %q, want %q", tb.Text(), "x")
+	}
+}
+
+// TestSetTextClearsHistory proves a programmatic document load is a history
+// boundary: neither undo nor redo can cross it.
+func TestSetTextClearsHistory(t *testing.T) {
+	tb, _ := newFocusedTextBox(t, "")
+	tb.insertText("abc")
+	tb.Undo() // now redo is available too
+	tb.SetText("fresh")
+
+	if tb.CanUndo() || tb.CanRedo() {
+		t.Fatalf("after SetText: CanUndo=%v CanRedo=%v, want false/false", tb.CanUndo(), tb.CanRedo())
+	}
+	if tb.Undo() {
+		t.Fatal("Undo() after SetText = true, want false (history cleared)")
+	}
+	if tb.Text() != "fresh" {
+		t.Fatalf("Text = %q, want %q (undo must not resurrect pre-SetText content)", tb.Text(), "fresh")
+	}
+}
+
+// TestCtrlZKeyPathUndoesAndConsumes drives undo through the real Ctrl+Z key
+// path and asserts the event is consumed even when it is a no-op — so a focused
+// editor always claims Ctrl+Z from a host that also binds it.
+func TestCtrlZKeyPathUndoesAndConsumes(t *testing.T) {
+	tb, r := newFocusedTextBox(t, "")
+	typeRunes(r, "hi")
+
+	if consumed := r.KeyDown(input.KeyZ, 0, input.ModCtrl); !consumed {
+		t.Fatal("Ctrl+Z consumed = false, want true")
+	}
+	if tb.Text() != "" {
+		t.Fatalf("Text after Ctrl+Z = %q, want %q", tb.Text(), "")
+	}
+	// Ctrl+Shift+Z redoes.
+	if consumed := r.KeyDown(input.KeyZ, 0, input.ModCtrl|input.ModShift); !consumed {
+		t.Fatal("Ctrl+Shift+Z consumed = false, want true")
+	}
+	if tb.Text() != "hi" {
+		t.Fatalf("Text after Ctrl+Shift+Z = %q, want %q", tb.Text(), "hi")
+	}
+	// Empty history: still consumed (must not bubble to a host's own Ctrl+Z).
+	tb.SetText("") // clears history
+	if consumed := r.KeyDown(input.KeyZ, 0, input.ModCtrl); !consumed {
+		t.Fatal("Ctrl+Z with empty history consumed = false, want true (focused editor owns Ctrl+Z)")
+	}
+}

@@ -8,6 +8,25 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-08-04
+
+### Added
+
+- **Undo/redo in `TextBox`** — the first enrichment beyond the v0.2 roadmap.
+  `Ctrl+Z` undoes, `Ctrl+Y` / `Ctrl+Shift+Z` redo; public `Undo()`, `Redo()`,
+  `CanUndo()`, `CanRedo()` expose the same actions for a toolbar/menu. History is
+  recorded at `replaceRange`, the single mutation funnel every edit already flows
+  through, so typing, Backspace/Delete, word-delete, Cut, and Paste are all
+  covered. Consecutive single-rune typing (and single-rune Backspace/Delete)
+  **coalesce** into one step, breaking at whitespace, on a caret jump, and when
+  switching between insert and delete — so `Ctrl+Z` steps by word/line the way
+  every editor does rather than one keystroke at a time. A fresh edit after an
+  undo truncates the redo stack (the classic divergence rule); a programmatic
+  `SetText` is a history boundary (clears both stacks); history depth is capped
+  (oldest records drop). `Ctrl+Z`/`Ctrl+Y` are always consumed while the box is
+  focused, so a focused editor cleanly claims them from a host that also binds
+  them. No API breaks, no golden changes.
+
 ## [0.16.7] - 2026-08-04
 
 ### Fixed

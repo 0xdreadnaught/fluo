@@ -148,6 +148,18 @@ type TextBox struct {
 	// at realistic edit counts.
 	rev uint64
 
+	// undoStack/redoStack hold the edit history (see replaceRange's recording,
+	// recordEdit's coalescing, and Undo/Redo). undoStack grows as edits happen
+	// (consecutive single-rune typing / Backspace / Delete coalesce into one
+	// record so Ctrl+Z steps by word-ish runs); redoStack is populated by Undo
+	// and TRUNCATED by any fresh edit (the classic divergence rule — a new edit
+	// after an undo makes the old redo path stale). suppressHistory is set while
+	// Undo/Redo replay through replaceRange, so their own mutations don't record.
+	// SetText clears both (a programmatic document load is a fresh history).
+	undoStack       []editRecord
+	redoStack       []editRecord
+	suppressHistory bool
+
 	// rows, rowsWidth, rowsRev, and rowsValid together cache the visual-rows
 	// word-wrap layout (see visualRows/computeVisualRows): rows is valid
 	// (reusable without recomputing) exactly when rowsValid is true AND
@@ -305,6 +317,12 @@ func (t *TextBox) SetText(s string) *TextBox {
 	t.runes = []rune(s)
 	t.caret = len(t.runes)
 	t.anchor = t.caret
+	// A programmatic document load is a fresh start: the prior edit history
+	// belongs to the old contents, so undo must not cross it (see the
+	// undoStack field comment). Clearing here — not in replaceRange — is what
+	// makes SetText a history boundary while ordinary edits accumulate.
+	t.undoStack = nil
+	t.redoStack = nil
 	t.needScrollToCaret = true
 	t.rev++
 	t.InvalidateArrange()
@@ -655,6 +673,197 @@ func (t *TextBox) Select(anchor, caret int) *TextBox {
 	return t
 }
 
+// editKind classifies a replaceRange mutation for undo COALESCING (see
+// recordEdit). Only single-rune typing (editInsert) and single-rune Backspace
+// (editDelBack) / Delete (editDelFwd) coalesce into a run; everything else —
+// word-delete, paste, cut, typing over a selection, a programmatic
+// replaceRange — is editOther, always its own undo record.
+type editKind uint8
+
+const (
+	editOther editKind = iota
+	editInsert
+	editDelBack
+	editDelFwd
+)
+
+// maxUndoRecords caps undo depth: past it, the OLDEST records are dropped (the
+// edits themselves stand — only their undoability ages out). The bound keeps a
+// long editing session from growing the stack without limit; it is the same
+// "don't retain unboundedly" instinct an LRU cache applies, at the coarser
+// granularity of whole edit records.
+const maxUndoRecords = 256
+
+// editRecord reverses exactly one (possibly coalesced) edit: the edit it
+// records replaced runes[start:start+len(inserted)) with `inserted`, having
+// removed `removed` from [start:start+len(removed)) first. Undo restores
+// `removed`; Redo re-applies `inserted`. caretBefore/anchorBefore are the
+// selection as it stood BEFORE the edit, so undo lands the caret exactly where
+// the user was.
+type editRecord struct {
+	start        int
+	removed      []rune
+	inserted     []rune
+	caretBefore  int
+	anchorBefore int
+	kind         editKind
+}
+
+// isWordBreak reports whether r ends a coalescing run — any whitespace (space,
+// tab, newline). Breaking runs at whitespace is what makes Ctrl+Z step by
+// word/line the way every editor does, rather than unwinding a whole paragraph
+// of typing in one jump (or one rune at a time).
+func isWordBreak(r rune) bool { return unicode.IsSpace(r) }
+
+// recordEdit pushes (or coalesces into) an undo record for the edit about to
+// replace runes[start:end] with ins. It must run BEFORE replaceRange mutates
+// t.runes — it reads the removed runes (t.runes[start:end]) and the pre-edit
+// caret/anchor. Consecutive same-kind single-rune edits that stay contiguous
+// and don't cross a whitespace boundary merge into the current top record (see
+// coalesceEdit); anything else starts a fresh record. suppressHistory (Undo/
+// Redo replay) skips this entirely — the caller gates on it.
+func (t *TextBox) recordEdit(start, end int, ins []rune) {
+	removed := append([]rune(nil), t.runes[start:end]...)
+	kind := t.classifyEdit(start, end, ins)
+	if kind != editOther && len(t.undoStack) > 0 {
+		if t.coalesceEdit(&t.undoStack[len(t.undoStack)-1], start, end, ins, removed, kind) {
+			return
+		}
+	}
+	t.undoStack = append(t.undoStack, editRecord{
+		start:        start,
+		removed:      removed,
+		inserted:     append([]rune(nil), ins...),
+		caretBefore:  t.caret,
+		anchorBefore: t.anchor,
+		kind:         kind,
+	})
+	if n := len(t.undoStack); n > maxUndoRecords {
+		kept := make([]editRecord, maxUndoRecords)
+		copy(kept, t.undoStack[n-maxUndoRecords:])
+		t.undoStack = kept
+	}
+}
+
+// classifyEdit infers the coalescing kind from the edit's SHAPE plus the
+// pre-edit caret — no caller has to tell replaceRange what it is doing. A
+// single-rune insert with nothing removed is editInsert; a single-rune delete
+// is editDelBack when the caret sits at its RIGHT edge (Backspace) or editDelFwd
+// when at its LEFT edge (Delete); everything else is editOther.
+func (t *TextBox) classifyEdit(start, end int, ins []rune) editKind {
+	switch {
+	case end == start && len(ins) == 1:
+		return editInsert
+	case len(ins) == 0 && end-start == 1 && end == t.caret:
+		return editDelBack
+	case len(ins) == 0 && end-start == 1 && start == t.caret:
+		return editDelFwd
+	default:
+		return editOther
+	}
+}
+
+// coalesceEdit tries to merge the incoming edit into the top record, returning
+// whether it did. It merges only same-kind runs that stay contiguous with the
+// run so far and don't touch a whitespace boundary (see isWordBreak): typed
+// runes extend the run's inserted text; Backspace prepends removed runes and
+// walks start leftward; Delete appends removed runes at a fixed position. A
+// caret jump breaks contiguity (the position check fails) and starts a fresh
+// record on its own — no explicit "caret moved" hook is needed.
+func (t *TextBox) coalesceEdit(top *editRecord, start, end int, ins, removed []rune, kind editKind) bool {
+	if top.kind != kind {
+		return false
+	}
+	switch kind {
+	case editInsert:
+		if start != top.start+len(top.inserted) {
+			return false
+		}
+		r := ins[0]
+		if isWordBreak(r) || (len(top.inserted) > 0 && isWordBreak(top.inserted[len(top.inserted)-1])) {
+			return false
+		}
+		top.inserted = append(top.inserted, r)
+		return true
+	case editDelBack:
+		if end != top.start {
+			return false
+		}
+		r := removed[0]
+		if isWordBreak(r) || (len(top.removed) > 0 && isWordBreak(top.removed[0])) {
+			return false
+		}
+		top.removed = append([]rune{r}, top.removed...)
+		top.start = start
+		return true
+	case editDelFwd:
+		if start != top.start {
+			return false
+		}
+		r := removed[0]
+		if isWordBreak(r) || (len(top.removed) > 0 && isWordBreak(top.removed[len(top.removed)-1])) {
+			return false
+		}
+		top.removed = append(top.removed, r)
+		return true
+	}
+	return false
+}
+
+// Undo reverses the most recent edit (or coalesced run) and moves it onto the
+// redo stack, returning false with no effect when there is nothing to undo. It
+// replays through replaceRange under suppressHistory so the reversal is not
+// itself recorded, then restores the pre-edit caret/anchor so the caret lands
+// where the user was before the edit. OnChanged fires (the text really did
+// change), matching every other mutation.
+func (t *TextBox) Undo() bool {
+	if len(t.undoStack) == 0 {
+		return false
+	}
+	rec := t.undoStack[len(t.undoStack)-1]
+	t.undoStack = t.undoStack[:len(t.undoStack)-1]
+
+	t.suppressHistory = true
+	t.replaceRange(rec.start, rec.start+len(rec.inserted), string(rec.removed))
+	t.suppressHistory = false
+
+	t.caret = clampInt(rec.caretBefore, 0, len(t.runes))
+	t.anchor = clampInt(rec.anchorBefore, 0, len(t.runes))
+	t.desiredColValid = false
+	t.needScrollToCaret = true
+	t.redoStack = append(t.redoStack, rec)
+	return true
+}
+
+// Redo re-applies the most recently undone edit and moves it back onto the undo
+// stack, returning false with no effect when the redo stack is empty (including
+// after any fresh edit, which truncates it — see replaceRange). Like Undo it
+// replays under suppressHistory; replaceRange already leaves the caret in the
+// post-edit position, so no caret fixup is needed.
+func (t *TextBox) Redo() bool {
+	if len(t.redoStack) == 0 {
+		return false
+	}
+	rec := t.redoStack[len(t.redoStack)-1]
+	t.redoStack = t.redoStack[:len(t.redoStack)-1]
+
+	t.suppressHistory = true
+	t.replaceRange(rec.start, rec.start+len(rec.removed), string(rec.inserted))
+	t.suppressHistory = false
+
+	t.desiredColValid = false
+	t.needScrollToCaret = true
+	t.undoStack = append(t.undoStack, rec)
+	return true
+}
+
+// CanUndo reports whether there is anything to Undo — for wiring a toolbar/menu
+// item's enabled state.
+func (t *TextBox) CanUndo() bool { return len(t.undoStack) > 0 }
+
+// CanRedo reports whether there is anything to Redo (see Undo/Redo).
+func (t *TextBox) CanRedo() bool { return len(t.redoStack) > 0 }
+
 // replaceRange replaces runes[start:end] with s (both rune indices; callers
 // are responsible for passing a valid 0<=start<=end<=len(runes) range —
 // every call site below derives start/end from Selection() or an
@@ -689,6 +898,15 @@ func (t *TextBox) Select(anchor, caret int) *TextBox {
 // before the keystroke landed.
 func (t *TextBox) replaceRange(start, end int, s string) {
 	ins := []rune(s)
+	// Record this edit for undo BEFORE the buffer changes (recordEdit reads the
+	// about-to-be-removed runes and the pre-edit caret), unless we are mid
+	// Undo/Redo replay. Any genuine new edit also truncates the redo stack —
+	// the divergence rule: once you type after an undo, the old redo path is
+	// stale and replaying it would corrupt the document.
+	if !t.suppressHistory {
+		t.recordEdit(start, end, ins)
+		t.redoStack = t.redoStack[:0]
+	}
 	next := make([]rune, 0, len(t.runes)-(end-start)+len(ins))
 	next = append(next, t.runes[:start]...)
 	next = append(next, ins...)
@@ -3197,6 +3415,23 @@ func (t *TextBox) OnKey(e *input.KeyEvent) {
 			return
 		case input.KeyV:
 			t.pasteClipboard(e.Router)
+			e.Handled = true
+			return
+		case input.KeyZ:
+			// Ctrl+Z undo, Ctrl+Shift+Z redo. Handled is set whether or not
+			// there was anything to undo/redo: a focused editor OWNS Ctrl+Z, so
+			// it must not bubble to a host that also binds it (e.g. a canvas
+			// undoing its own model) just because the text history is empty —
+			// matching Ctrl+C, which also consumes even with nothing selected.
+			if shift {
+				t.Redo()
+			} else {
+				t.Undo()
+			}
+			e.Handled = true
+			return
+		case input.KeyY:
+			t.Redo()
 			e.Handled = true
 			return
 		case input.KeyHome:
