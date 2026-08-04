@@ -43,9 +43,12 @@ func TestBevels(t *testing.T) {
 // the controls that clip their own directly drawn content (TreeView,
 // TextBox) rather than relying on core.RenderWidget to clip children.
 type recordRenderer struct {
-	fills []filledRect
-	clips []render.Rect
-	pops  int
+	fills      []filledRect
+	clips      []render.Rect
+	pops       int
+	glyphQuads int                // total glyph quads across all DrawGlyphs calls
+	glyphCalls int                // number of DrawGlyphs calls
+	glyphs     []render.GlyphQuad // every emitted glyph quad, in order
 }
 
 // filledRect pins one recorded FillRect call.
@@ -75,6 +78,9 @@ func (r *recordRenderer) DrawQuad(dst, src render.Rect, tex render.TextureID, ti
 func (r *recordRenderer) DrawSDFQuads(quads []render.GlyphQuad, tex render.TextureID, c render.Color) {
 }
 func (r *recordRenderer) DrawGlyphs(quads []render.GlyphQuad, tex render.TextureID, c render.Color) {
+	r.glyphQuads += len(quads)
+	r.glyphCalls++
+	r.glyphs = append(r.glyphs, quads...)
 }
 func (r *recordRenderer) Scale() float32 { return 1 }
 func (r *recordRenderer) PushClip(rect render.Rect) {
