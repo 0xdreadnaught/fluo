@@ -206,6 +206,7 @@ type TreeView struct {
 	rowH float32
 
 	selected  *TreeNode
+	ta        typeAhead // type-ahead prefix state (see OnKey)
 	focused   bool
 	onChanged func(*TreeNode)
 
@@ -601,6 +602,16 @@ func (t *TreeView) OnKey(e *input.KeyEvent) {
 		if idx >= 0 {
 			t.collapseOrJumpToParent(t.rows[idx])
 			e.Handled = true
+		}
+	default:
+		// Type-ahead over the currently-visible (flattened) rows: a printable
+		// key jumps selection to the next row whose label matches the typed
+		// prefix. See typeAhead.feed.
+		if e.Rune != 0 && e.Mods&(input.ModCtrl|input.ModAlt) == 0 {
+			if next, ok := t.ta.feed(e.Time, e.Rune, n, idx, func(i int) string { return t.rows[i].node.Label }); ok {
+				t.selectUser(t.rows[next].node)
+				e.Handled = true
+			}
 		}
 	}
 }

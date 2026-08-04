@@ -8,6 +8,27 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-08-04
+
+### Added
+
+- **Type-ahead in `ComboBox`, `ListView`, and `TreeView`.** Typing a printable
+  key while one of these is focused jumps the selection to the next item whose
+  label matches the typed prefix — the standard OS list convention. Distinct
+  characters typed in quick succession accumulate into a prefix (`s` then `o`
+  jumps to the first "so…"), a repeated same character cycles through items
+  beginning with it, and a pause resets the prefix; matching is case-insensitive
+  and wraps. A still-matching selection holds when the prefix is extended rather
+  than jumping away. Shared, UI-agnostic implementation (`typeAhead`); existing
+  key handling (arrows, Home/End, Enter, Escape) is unchanged and takes
+  precedence.
+- **`input.KeyEvent.Time`** — the event's monotonic-seconds timestamp, from the
+  same clock `PointerEvent.Time` uses (`Router.SetTimeSource`), stamped by
+  `Router.KeyDown`/`KeyUp`. The keyboard twin of `PointerEvent.Time`: it lets a
+  handler time keystroke runs the way pointer handlers time click runs (it is
+  what type-ahead uses to reset its prefix after a pause). `0` means "unknown"
+  (no host clock installed / a hand-built synthetic event). Additive.
+
 ## [0.17.1] - 2026-08-04
 
 ### Added

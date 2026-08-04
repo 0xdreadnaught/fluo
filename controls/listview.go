@@ -85,7 +85,8 @@ type ListView struct {
 	// currently realized) without recomputing the visible range itself.
 	visibleFirst int
 
-	selected  int // -1 == none
+	selected  int       // -1 == none
+	ta        typeAhead // list type-ahead prefix state (see OnKey)
 	focused   bool
 	onChanged func(int)
 
@@ -882,5 +883,15 @@ func (l *ListView) OnKey(e *input.KeyEvent) {
 	case input.KeyEnd:
 		l.selectUser(clampRowIndex(n-1, n))
 		e.Handled = true
+	default:
+		// Type-ahead: a printable key (a char event carries the rune; Ctrl/Alt
+		// chords are shortcuts, not text) jumps selection to the next item
+		// matching the typed prefix. See typeAhead.feed.
+		if e.Rune != 0 && e.Mods&(input.ModCtrl|input.ModAlt) == 0 {
+			if next, ok := l.ta.feed(e.Time, e.Rune, n, l.selected, func(i int) string { return l.items.At(i) }); ok {
+				l.selectUser(next)
+				e.Handled = true
+			}
+		}
 	}
 }

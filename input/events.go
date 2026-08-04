@@ -151,10 +151,21 @@ type PointerEvent struct {
 
 // KeyEvent represents a keyboard event.
 type KeyEvent struct {
-	Action  Action // Press or Release
-	Key     Key    // keyboard key code
-	Rune    rune   // character code for char input events; else 0
-	Mods    Modifiers
+	Action Action // Press or Release
+	Key    Key    // keyboard key code
+	Rune   rune   // character code for char input events; else 0
+	Mods   Modifiers
+
+	// Time is the event's timestamp in monotonic seconds, from the same clock
+	// PointerEvent.Time uses (Router.SetTimeSource; a glfw host passes
+	// glfw.GetTime — see app.Run). It is the keyboard twin of that field: it
+	// lets a handler time keystroke runs the way PointerEvent.Time times click
+	// runs — e.g. list type-ahead resetting its prefix buffer after a pause. It
+	// is 0 ("unknown", not "the beginning of time") on every event when no host
+	// clock is installed, and on a synthetic event built by hand that does not
+	// set one. Stamped by both real dispatch entry points, KeyDown and KeyUp.
+	Time float64
+
 	Router  *Router
 	Handled bool
 }

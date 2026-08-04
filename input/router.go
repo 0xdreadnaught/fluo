@@ -1086,7 +1086,7 @@ func (r *Router) dispatchKey(e *KeyEvent) {
 // upstream handled the key, focused or not), do not count as a fluo widget
 // having taken the key.
 func (r *Router) KeyDown(k Key, rn rune, mods Modifiers) bool {
-	e := &KeyEvent{Action: Press, Key: k, Rune: rn, Mods: mods, Router: r}
+	e := &KeyEvent{Action: Press, Key: k, Rune: rn, Mods: mods, Time: r.timeNow(), Router: r}
 	hadFocus := r.focused != nil
 	r.dispatchKey(e)
 	consumed := hadFocus && e.Handled
@@ -1104,7 +1104,7 @@ func (r *Router) KeyDown(k Key, rn rune, mods Modifiers) bool {
 // KeyUp routes a key-release the same way KeyDown does (focused widget,
 // bubbling up the parent chain), with no Tab handling.
 func (r *Router) KeyUp(k Key, mods Modifiers) {
-	e := &KeyEvent{Action: Release, Key: k, Mods: mods, Router: r}
+	e := &KeyEvent{Action: Release, Key: k, Mods: mods, Time: r.timeNow(), Router: r}
 	r.dispatchKey(e)
 }
 

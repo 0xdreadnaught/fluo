@@ -42,7 +42,8 @@ type ComboBox struct {
 	chevron *TextBlock
 
 	items    []string
-	selected int // -1 == none
+	selected int       // -1 == none
+	ta       typeAhead // type-ahead prefix state (see OnKey)
 
 	enabled bool
 	focused bool
@@ -421,6 +422,16 @@ func (c *ComboBox) OnKey(e *input.KeyEvent) {
 			c.openPopup()
 		}
 		e.Handled = true
+	default:
+		// Type-ahead: a printable key selects the next item matching the typed
+		// prefix, whether the list is open or closed — the standard dropdown
+		// convention. See typeAhead.feed.
+		if e.Rune != 0 && e.Mods&(input.ModCtrl|input.ModAlt) == 0 {
+			if next, ok := c.ta.feed(e.Time, e.Rune, len(c.items), c.selected, func(i int) string { return c.items[i] }); ok {
+				c.selectUser(next)
+				e.Handled = true
+			}
+		}
 	}
 }
 
