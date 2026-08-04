@@ -397,7 +397,18 @@ func scrollDragOffset(trackStart, trackLen, thumbLen, posAlongAxis, grabOffset, 
 // popped — are never cropped). Covers both axes unchanged: the full bounds
 // were always the clip rect, on both X and Y, even before horizontal
 // scrolling existed.
+// ClipRect returns the content viewport — the bounds MINUS whichever scrollbar
+// gutters the last arrange reserved. RenderWidget clips only the children with
+// this rect; the thumbs draw in RenderOverlay AFTER the pop, so excluding the
+// gutters never crops them. Excluding them is what keeps content out of the
+// dead corner where the two gutters meet (neither opaque track paints it, so a
+// gutter-inclusive clip would let a horizontally+vertically overflowing child
+// bleed through there). Before the first arrange s.viewport is the zero rect;
+// fall back to the full bounds so nothing is clipped away wholesale.
 func (s *ScrollViewer) ClipRect() (render.Rect, bool) {
+	if s.viewport.W > 0 && s.viewport.H > 0 {
+		return s.viewport, true
+	}
 	return s.Bounds(), true
 }
 

@@ -733,7 +733,18 @@ func (l *ListView) shrinkPool(n int) {
 // the sunken bevel itself. The thumb gutter is included (within
 // contentBounds), so the thumb itself — drawn in RenderOverlay, which runs
 // after the clip is popped — is never cropped either way.
+// ClipRect returns the row viewport — the bevel-inset content rect MINUS
+// whichever scrollbar gutters the last arrange reserved. RenderWidget clips
+// only the children with this; the thumbs draw in RenderOverlay AFTER the pop,
+// so excluding the gutters never crops them. Excluding them keeps rows out of
+// the dead corner where the two gutters meet (neither opaque track paints it,
+// so a gutter-inclusive clip would let a horizontally+vertically overflowing
+// row bleed through there). Before the first arrange l.viewport is the zero
+// rect; fall back to the plain bevel-inset rect so nothing is clipped wholesale.
 func (l *ListView) ClipRect() (render.Rect, bool) {
+	if l.viewport.W > 0 && l.viewport.H > 0 {
+		return l.viewport, true
+	}
 	return l.contentBounds(), true
 }
 

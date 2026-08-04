@@ -580,7 +580,20 @@ func (g *DataGrid) Render(r render.Renderer) {
 // ArrangeContent's matching inset). Matches ListView.ClipRect in every other
 // respect (gutter included, so the thumb — drawn in RenderOverlay, after
 // this clip is popped — is never cropped).
+// ClipRect returns the body viewport — the bevel-inset rect below the header,
+// MINUS whichever scrollbar gutters the last arrange reserved. RenderWidget
+// clips only the children (the realized cells) with this; the header draws
+// self-clipped in Render and the thumbs draw in RenderOverlay AFTER the pop, so
+// excluding the gutters crops neither. Excluding them keeps cells out of the
+// dead corner where the two gutters meet (neither opaque track paints it, so a
+// gutter-inclusive clip would let a horizontally+vertically overflowing cell
+// bleed through there). Before the first arrange g.viewport is the zero rect;
+// fall back to the plain bevel-inset-minus-header rect so nothing is clipped
+// wholesale.
 func (g *DataGrid) ClipRect() (render.Rect, bool) {
+	if g.viewport.W > 0 && g.viewport.H > 0 {
+		return g.viewport, true
+	}
 	bw := g.metrics.BevelWidth
 	inset := g.Bounds().Inset(render.Thickness{Top: bw, Bottom: bw, Left: bw, Right: bw})
 	if inset.W < 0 {

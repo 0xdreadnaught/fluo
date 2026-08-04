@@ -280,16 +280,23 @@ func TestDataGridClipRectExcludesHeaderAndBevel(t *testing.T) {
 	if clip.X != bounds.X+bw {
 		t.Errorf("clip left = %v, want bounds.X+BevelWidth = %v", clip.X, bounds.X+bw)
 	}
-	if clip.Right() != bounds.Right()-bw {
-		t.Errorf("clip right = %v, want bounds.Right()-BevelWidth = %v", clip.Right(), bounds.Right()-bw)
+	// This fixture overflows vertically (30 rows) but not horizontally (the
+	// Star column soaks up the width), so the last arrange reserved the RIGHT
+	// gutter only. The clip's right edge must land on the viewport's — SHORT of
+	// the bevel-inset right by exactly the gutter — so cells stop where the
+	// vertical thumb's lane begins and never spill into the dead corner. The
+	// thumb itself draws in RenderOverlay after the clip pops, so excluding the
+	// gutter here does not crop it.
+	if clip.Right() != g.viewport.Right() {
+		t.Errorf("clip right = %v, want viewport right %v (cells must stop at the gutter)", clip.Right(), g.viewport.Right())
 	}
+	if clip.Right() >= bounds.Right()-bw {
+		t.Errorf("clip right %v does not exclude the reserved gutter (bevel-inset right is %v)", clip.Right(), bounds.Right()-bw)
+	}
+	// No horizontal overflow, so no bottom gutter: the clip reaches the
+	// bevel-inset bottom.
 	if clip.Bottom() != bounds.Bottom()-bw {
 		t.Errorf("clip bottom = %v, want bounds.Bottom()-BevelWidth = %v", clip.Bottom(), bounds.Bottom()-bw)
-	}
-
-	// The gutter is inside the clip, so the thumb is never cropped by it.
-	if clip.Right() < g.viewport.Right() {
-		t.Errorf("clip right %v is inside the viewport's %v: the thumb gutter was excluded", clip.Right(), g.viewport.Right())
 	}
 
 	// The clip must be doing real work: with a fractional offset the top
@@ -334,10 +341,10 @@ func TestClipRectsStayNonNegativeWhenTiny(t *testing.T) {
 }
 
 // TestListViewClipRectExcludesBevel is DataGrid's counterpart for ListView,
-// which has no header strip: the clip is simply the bevel-inset content
-// rect, and a partially-scrolled row at the top edge must genuinely
-// overhang it (otherwise the row's text paints over the sunken well's own
-// frame).
+// which has no header strip: the clip is the bevel-inset content rect minus
+// whichever thumb gutters the last arrange reserved, and a partially-scrolled
+// row at the top edge must genuinely overhang it (otherwise the row's text
+// paints over the sunken well's own frame).
 func TestListViewClipRectExcludesBevel(t *testing.T) {
 	theme.SetActive(theme.Light())
 	defer theme.SetActive(nil)
@@ -359,9 +366,18 @@ func TestListViewClipRectExcludesBevel(t *testing.T) {
 	}
 
 	bw := l.metrics.BevelWidth
+	// Vertical overflow (40 rows) but no horizontal overflow, so the last
+	// arrange reserved the RIGHT gutter only. The clip is the bevel-inset rect
+	// with that gutter carved off its right edge — rows stop where the thumb's
+	// lane begins, never under it and never into the dead corner. The thumb
+	// draws in RenderOverlay after the clip pops, so this does not crop it.
 	want := render.Rect{X: bounds.X + bw, Y: bounds.Y + bw, W: bounds.W - 2*bw, H: bounds.H - 2*bw}
+	want = want.Inset(render.Thickness{Right: l.gutter})
 	if clip != want {
-		t.Fatalf("ClipRect() = %+v, want the bevel-inset content rect %+v", clip, want)
+		t.Fatalf("ClipRect() = %+v, want the bevel-inset rect minus the reserved gutter %+v", clip, want)
+	}
+	if clip.Right() >= bounds.Right()-bw {
+		t.Fatalf("clip right %v does not exclude the reserved gutter (bevel-inset right is %v)", clip.Right(), bounds.Right()-bw)
 	}
 	if top := l.rowTop(l.visibleFirst); top >= clip.Y {
 		t.Fatalf("fixture: the top realized row starts at %v, at or below the clip's %v — nothing is actually cropped", top, clip.Y)

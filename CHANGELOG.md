@@ -8,6 +8,30 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.16.6] - 2026-08-04
+
+### Fixed
+
+- **`ScrollViewer`, `ListView`, and `DataGrid` clip content to the viewport, not
+  the full bounds (F3).** `ClipRect` returned the gutter-*inclusive* content rect,
+  so a child overflowing on both axes could paint into the dead corner where the
+  vertical and horizontal thumb lanes meet — the one spot neither opaque track
+  covers. All three now return the stored viewport (the content rect minus
+  whichever thumb gutters the last arrange reserved), so content stops at the lane
+  edge on every side. The thumbs draw in `RenderOverlay` after the clip pops and
+  are never cropped by this; before the first arrange each falls back to its
+  gutter-inclusive rect so nothing is clipped wholesale.
+
+## [0.16.5] - 2026-08-04
+
+### Fixed
+
+- **`DataGrid` header clips at the body viewport, not into the vertical thumb
+  gutter (F2).** The column-header strip clipped to `bounds - 2*bevel`, one
+  gutter-width wider than the body below it, so a header title in the last column
+  could paint into the reserved vertical-scrollbar lane. The header now clips to
+  the same right edge as the body viewport (`- gutter`).
+
 ## [0.16.4] - 2026-08-04
 
 ### Added
