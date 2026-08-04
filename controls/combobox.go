@@ -43,6 +43,7 @@ type ComboBox struct {
 
 	items    []string
 	selected int       // -1 == none
+	active   int       // keyboard highlight while the popup is open; commits to selected only on Enter (see OnKey)
 	ta       typeAhead // type-ahead prefix state (see OnKey)
 
 	enabled bool
@@ -191,6 +192,11 @@ func (c *ComboBox) openPopup() {
 	}
 
 	c.open = true
+	// The keyboard highlight starts on the current selection (or -1 / nothing
+	// when none), so the row that opens highlighted is the selected one and the
+	// first Up/Down moves from there. It is a preview cursor: only Enter commits
+	// it to the actual selection (see OnKey).
+	c.active = c.selected
 	popup := c.buildPopup()
 	c.popup = popup
 
@@ -229,7 +235,7 @@ func (c *ComboBox) closePopup() {
 func (c *ComboBox) buildPopup() core.Widget {
 	stack := NewStackPanel(Vertical)
 	for i, item := range c.items {
-		row := newComboRow(c.face, item, i, i == c.selected, c.colors, c.metrics, func(idx int) {
+		row := newComboRow(c.face, item, i, func() int { return c.active }, c.colors, c.metrics, func(idx int) {
 			c.selectUser(idx)
 			c.closePopup()
 		})
@@ -414,21 +420,57 @@ func (c *ComboBox) OnKey(e *input.KeyEvent) {
 	switch e.Key {
 	case input.KeyEscape:
 		if c.open {
-			c.closePopup()
+			c.closePopup() // closes WITHOUT committing active — selection untouched
 			e.Handled = true
 		}
-	case input.KeySpace, input.KeyEnter, input.KeyDown:
-		if !c.open {
+	case input.KeyDown:
+		if c.open {
+			c.active = clampRowIndex(c.active+1, len(c.items)) // move the highlight
+		} else {
 			c.openPopup()
 		}
 		e.Handled = true
+	case input.KeyUp:
+		// Up only means something while open (move the highlight); with the
+		// popup closed it is left unconsumed so it can bubble.
+		if c.open {
+			c.active = clampRowIndex(c.active-1, len(c.items))
+			e.Handled = true
+		}
+	case input.KeyEnter:
+		if c.open {
+			if c.active >= 0 {
+				c.selectUser(c.active) // COMMIT the highlight (fires OnChanged if it changed)
+			}
+			c.closePopup()
+		} else {
+			c.openPopup()
+		}
+		e.Handled = true
+	case input.KeySpace:
+		if !c.open {
+			c.openPopup()
+			e.Handled = true
+		}
+		// Space while open is a no-op here (a literal-space type-ahead matches
+		// nothing); left unconsumed.
 	default:
-		// Type-ahead: a printable key selects the next item matching the typed
-		// prefix, whether the list is open or closed — the standard dropdown
-		// convention. See typeAhead.feed.
+		// Type-ahead: a printable key jumps to the next item matching the typed
+		// prefix. While OPEN it moves the preview highlight (active), consistent
+		// with the arrow keys — only Enter commits; while CLOSED there is no
+		// cursor, so it commits the selection directly (the standard dropdown
+		// convention). See typeAhead.feed.
 		if e.Rune != 0 && e.Mods&(input.ModCtrl|input.ModAlt) == 0 {
-			if next, ok := c.ta.feed(e.Time, e.Rune, len(c.items), c.selected, func(i int) string { return c.items[i] }); ok {
-				c.selectUser(next)
+			cur := c.selected
+			if c.open {
+				cur = c.active
+			}
+			if next, ok := c.ta.feed(e.Time, e.Rune, len(c.items), cur, func(i int) string { return c.items[i] }); ok {
+				if c.open {
+					c.active = next
+				} else {
+					c.selectUser(next)
+				}
 				e.Handled = true
 			}
 		}
@@ -518,9 +560,14 @@ type comboRow struct {
 
 	click ClickBehavior
 
-	label    *TextBlock
-	index    int
-	selected bool
+	label *TextBlock
+	index int
+	// active returns the ComboBox's current keyboard-highlight index; the row
+	// draws highlighted when its own index matches (or it is hovered). A
+	// closure rather than a static bool so Up/Down can move the highlight
+	// through an already-built popup without rebuilding it — the row reads the
+	// live value each frame, exactly as it reads hover.
+	active func() int
 
 	onSelect func(index int)
 
@@ -531,10 +578,10 @@ type comboRow struct {
 // newComboRow returns a comboRow for item at index, initially marked
 // selected per the caller's snapshot of the combo's current selection.
 // onSelect (may be nil) fires with index on a successful click.
-func newComboRow(face *text.Face, item string, index int, selected bool, colors theme.ColorTokens, metrics theme.MetricTokens, onSelect func(int)) *comboRow {
+func newComboRow(face *text.Face, item string, index int, active func() int, colors theme.ColorTokens, metrics theme.MetricTokens, onSelect func(int)) *comboRow {
 	row := &comboRow{
 		index:    index,
-		selected: selected,
+		active:   active,
 		onSelect: onSelect,
 		colors:   colors,
 		metrics:  metrics,
@@ -610,7 +657,7 @@ func (row *comboRow) Children() []core.Widget {
 // (showing the popup card's own WindowWell through) with WindowText label
 // color.
 func (row *comboRow) Render(r render.Renderer) {
-	highlighted := row.selected || row.click.Hover()
+	highlighted := (row.active != nil && row.index == row.active()) || row.click.Hover()
 
 	labelColor := row.colors.WindowText
 	if highlighted {

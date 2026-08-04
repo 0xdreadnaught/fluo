@@ -8,7 +8,20 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
-## [0.20.0] - 2026-08-04
+## [0.20.1] - 2026-08-04
+
+### Added
+
+- **`ComboBox` open-state keyboard navigation.** While the dropdown is open,
+  Up/Down move a keyboard highlight (a preview cursor) through the rows and Enter
+  commits the highlighted row (selecting it, firing `OnChanged`, and closing);
+  Escape closes without committing, leaving the selection untouched. The cursor
+  is distinct from the selection: arrow keys never fire `OnChanged` or mutate the
+  selection — only Enter (or a click) commits. Type-ahead, while open, moves the
+  same highlight for consistency (it still commits directly while closed). The
+  popup row highlight became dynamic (it reads the live cursor each frame, the
+  same way it already reads hover), so no popup rebuild is needed as the
+  highlight moves. No public API change; no golden change.
 
 ### Added
 

@@ -309,7 +309,7 @@ func TestComboRowHoverTracksEnterLeave(t *testing.T) {
 	colors := theme.Active().Color
 	metrics := theme.Active().Metric
 
-	row := newComboRow(nil, "Red", 0, false, colors, metrics, nil)
+	row := newComboRow(nil, "Red", 0, func() int { return -1 }, colors, metrics, nil)
 	row.SetWidth(100)
 	row.SetHeight(24)
 	core.MeasureWidget(row, render.Size{W: 100, H: 24})
@@ -327,5 +327,89 @@ func TestComboRowHoverTracksEnterLeave(t *testing.T) {
 	row.OnPointer(&input.PointerEvent{Action: input.Leave})
 	if row.click.Hover() {
 		t.Fatal("Hover() = true after Leave, want false")
+	}
+}
+
+// --- open-state keyboard nav (v0.20.1 enrichment) -----------------------
+
+// TestComboBoxOpenStateKeyboardNav: while open, Up/Down move a preview
+// highlight (active) without committing; Enter commits it and closes, firing
+// OnChanged exactly once.
+func TestComboBoxOpenStateKeyboardNav(t *testing.T) {
+	combo, _, r := newTestCombo(t, []string{"a", "b", "c"})
+	var changed []int
+	combo.OnChanged(func(i int) { changed = append(changed, i) })
+	r.Focus(combo)
+
+	r.KeyDown(input.KeyDown, 0, 0) // closed -> open (active = selected = -1)
+	if !combo.open {
+		t.Fatal("Down while closed did not open the popup")
+	}
+	r.KeyDown(input.KeyDown, 0, 0) // active -1 -> 0
+	r.KeyDown(input.KeyDown, 0, 0) // active 0 -> 1
+	if combo.active != 1 {
+		t.Fatalf("active after nav = %d, want 1", combo.active)
+	}
+	if len(changed) != 0 {
+		t.Fatalf("OnChanged fired during arrow nav = %v, want none (commit only on Enter)", changed)
+	}
+	if combo.SelectedIndex() != -1 {
+		t.Fatalf("selection changed during nav = %d, want -1 (untouched until commit)", combo.SelectedIndex())
+	}
+
+	r.KeyDown(input.KeyEnter, 0, 0) // commit active (1), close
+	if combo.open {
+		t.Fatal("Enter did not close the popup")
+	}
+	if combo.SelectedIndex() != 1 {
+		t.Fatalf("SelectedIndex after Enter = %d, want 1", combo.SelectedIndex())
+	}
+	if len(changed) != 1 || changed[0] != 1 {
+		t.Fatalf("OnChanged after commit = %v, want [1]", changed)
+	}
+}
+
+// TestComboBoxEscWhileOpenLeavesSelectionUnchanged: Esc closes without
+// committing the highlight.
+func TestComboBoxEscWhileOpenLeavesSelectionUnchanged(t *testing.T) {
+	combo, _, r := newTestCombo(t, []string{"a", "b", "c"})
+	combo.SetSelectedIndex(2)
+	var changed []int
+	combo.OnChanged(func(i int) { changed = append(changed, i) })
+	r.Focus(combo)
+
+	r.KeyDown(input.KeyDown, 0, 0)   // open (active = selected = 2)
+	r.KeyDown(input.KeyUp, 0, 0)     // active 2 -> 1 (preview only)
+	r.KeyDown(input.KeyEscape, 0, 0) // close WITHOUT commit
+
+	if combo.open {
+		t.Fatal("Esc did not close the popup")
+	}
+	if combo.SelectedIndex() != 2 {
+		t.Fatalf("selection after Esc = %d, want 2 (unchanged — highlight was never committed)", combo.SelectedIndex())
+	}
+	if len(changed) != 0 {
+		t.Fatalf("OnChanged fired = %v, want none", changed)
+	}
+}
+
+// TestComboBoxOpenStateClampsAtEnds: the highlight clamps at both ends.
+func TestComboBoxOpenStateClampsAtEnds(t *testing.T) {
+	combo, _, r := newTestCombo(t, []string{"a", "b"})
+	r.Focus(combo)
+
+	r.KeyDown(input.KeyDown, 0, 0) // open, active = -1
+	r.KeyDown(input.KeyUp, 0, 0)   // -1 -> 0
+	if combo.active != 0 {
+		t.Fatalf("Up from empty = %d, want 0", combo.active)
+	}
+	r.KeyDown(input.KeyUp, 0, 0) // clamp at top
+	if combo.active != 0 {
+		t.Fatalf("Up at top = %d, want 0 (clamped)", combo.active)
+	}
+	r.KeyDown(input.KeyDown, 0, 0) // 0 -> 1
+	r.KeyDown(input.KeyDown, 0, 0) // clamp at bottom
+	if combo.active != 1 {
+		t.Fatalf("Down at bottom = %d, want 1 (clamped)", combo.active)
 	}
 }
