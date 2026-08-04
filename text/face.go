@@ -240,6 +240,34 @@ func (fa *Face) glyphAdvance(w float32, prevFont *Font, prev sfnt.GlyphIndex, ha
 	return w
 }
 
+// tabColumns is how many space-advances a horizontal tab expands to: a U+0009
+// advances the pen to the next multiple of tabColumns columns rather than
+// drawing a (usually missing) glyph for it. 4 is the conventional code-editor
+// default.
+const tabColumns = 4
+
+// spaceAdvance is the advance width of a space in this face (logical px) — the
+// column unit tab stops are measured in.
+func (fa *Face) spaceAdvance() float32 {
+	f, gi := fa.resolveGlyph(' ')
+	return f.advance(gi, fa.SizePx)
+}
+
+// tabStop returns the pen position of the next tab stop strictly past `local`,
+// where `local` is the pen measured from the START of the line (logical px). A
+// horizontal tab advances the pen here instead of resolving a glyph, so tabbed
+// indentation renders as aligned whitespace, not a run of missing-glyph boxes.
+// Every rune-walk that positions text — measureUncached, PrefixWidths, Draw —
+// uses this with a line-relative pen so caret positions and drawn glyphs stay
+// in agreement (Draw subtracts its line origin before calling in).
+func (fa *Face) tabStop(local float32) float32 {
+	tw := fa.spaceAdvance() * tabColumns
+	if tw <= 0 {
+		return local
+	}
+	return (float32(math.Floor(float64(local/tw))) + 1) * tw
+}
+
 // PrefixWidths returns the pen width at every rune boundary of runes:
 // len(runes)+1 values, [0] always 0 and [i] the width of the first i
 // runes — so PrefixWidths(runes)[i] is exactly what Measure reports for
@@ -262,6 +290,12 @@ func (fa *Face) PrefixWidths(runes []rune) []float32 {
 	var prev sfnt.GlyphIndex
 	hasPrev := false
 	for i, r := range runes {
+		if r == '\t' {
+			w = fa.tabStop(w)
+			widths[i+1] = w
+			prevFont, prev, hasPrev = nil, 0, false
+			continue
+		}
 		srcFont, gi := fa.resolveGlyph(r)
 		w = fa.glyphAdvance(w, prevFont, prev, hasPrev, srcFont, gi)
 		prevFont, prev, hasPrev = srcFont, gi, true
@@ -330,6 +364,11 @@ func (fa *Face) measureUncached(s string) render.Size {
 	var prev sfnt.GlyphIndex
 	hasPrev := false
 	for _, r := range s {
+		if r == '\t' {
+			w = fa.tabStop(w)
+			prevFont, prev, hasPrev = nil, 0, false
+			continue
+		}
 		srcFont, gi := fa.resolveGlyph(r)
 		w = fa.glyphAdvance(w, prevFont, prev, hasPrev, srcFont, gi)
 		prevFont, prev, hasPrev = srcFont, gi, true
@@ -401,6 +440,13 @@ func (fa *Face) Draw(r render.Renderer, at render.Point, s string, c render.Colo
 	var prev sfnt.GlyphIndex
 	hasPrev := false
 	for _, ch := range s {
+		if ch == '\t' {
+			// Advance to the next tab stop (line-relative pen = penX-at.X);
+			// no glyph is drawn. Breaks the kern chain (nothing to kern to).
+			penX = at.X + fa.tabStop(penX-at.X)
+			prevFont, prev, hasPrev = nil, 0, false
+			continue
+		}
 		srcFont, gi := fa.resolveGlyph(ch)
 		// Kern to the previous glyph BEFORE positioning this one (the pen
 		// must include the kern when the glyph's draw origin is computed

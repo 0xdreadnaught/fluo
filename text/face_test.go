@@ -721,3 +721,44 @@ func TestFacePrefixWidthsMatchMeasurePrefixes(t *testing.T) {
 		check(t, fb, "Hi 中文 fluo")
 	})
 }
+
+// TestFaceTabStops verifies horizontal tabs expand to aligned tab stops
+// (multiples of tabColumns space-advances) consistently across Measure and
+// PrefixWidths, so drawn glyphs and caret positions agree on tabbed text.
+func TestFaceTabStops(t *testing.T) {
+	f, err := Load(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fa := NewFace(f, 14)
+	sp := fa.Measure(" ").W
+	tab := sp * tabColumns
+	const eps = 0.01
+
+	// A leading tab lands exactly on the first tab stop.
+	if got := fa.Measure("\t").W; got < tab-eps || got > tab+eps {
+		t.Fatalf(`Measure("\t").W = %v, want %v (one tab stop)`, got, tab)
+	}
+	// A char then a tab jumps to the SAME first stop (tab absorbs the partial
+	// column), not char-width + a full tab.
+	if got := fa.Measure("x\t").W; got < tab-eps || got > tab+eps {
+		t.Fatalf(`Measure("x\t").W = %v, want %v (tab rounds up to the stop)`, got, tab)
+	}
+	// Two tabs land on the second stop.
+	if got := fa.Measure("\t\t").W; got < 2*tab-eps || got > 2*tab+eps {
+		t.Fatalf(`Measure("\t\t").W = %v, want %v`, got, 2*tab)
+	}
+	// PrefixWidths must agree with Measure at every boundary of a tabbed string.
+	s := "ab\tc\t\td"
+	runes := []rune(s)
+	pw := fa.PrefixWidths(runes)
+	if len(pw) != len(runes)+1 {
+		t.Fatalf("PrefixWidths len = %d, want %d", len(pw), len(runes)+1)
+	}
+	for i := 0; i <= len(runes); i++ {
+		want := fa.Measure(string(runes[:i])).W
+		if pw[i] < want-eps || pw[i] > want+eps {
+			t.Fatalf("PrefixWidths[%d] = %v, Measure(prefix) = %v (disagree on tabbed text)", i, pw[i], want)
+		}
+	}
+}

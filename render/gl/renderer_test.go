@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-gl/gl/v3.3-core/gl"
 	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/gofont/gomono"
 
 	"github.com/0xdreadnaught/fluo/bind"
 	"github.com/0xdreadnaught/fluo/controls"
@@ -804,6 +805,36 @@ func TestTextBoxSourceEditor(t *testing.T) {
 		tb.SetCaret(0) // hscroll pinned at the start so the long line shows from column 0
 
 		frame := render.Rect{X: 0, Y: 0, W: 240, H: 200}
+		r.FillRect(frame, th.Color.ButtonFace)
+
+		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(tb, frame)
+		core.RenderWidget(tb, r)
+	})
+}
+
+// TestTextBoxTabs is the tab-rendering golden: tab-indented code in a mono
+// multi-line box must show ALIGNED WHITESPACE at tab stops, not a run of
+// missing-glyph boxes (U+0009 has no glyph). Nested indentation (1, 2, 3 tabs)
+// must step out evenly.
+func TestTextBoxTabs(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "textbox_tabs", 260, 150, func(r *glr.Renderer) {
+		f, err := text.Load(gomono.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tb := controls.NewTextBox(face).SetMultiline(true).SetLineNumbers(true)
+		tb.SetText("func main() {\n\tif ok {\n\t\tfor i := range xs {\n\t\t\trun(i)\n\t\t}\n\t}\n}")
+		tb.OnFocusChanged(true)
+		tb.SetCaret(0)
+
+		frame := render.Rect{X: 0, Y: 0, W: 260, H: 150}
 		r.FillRect(frame, th.Color.ButtonFace)
 
 		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
