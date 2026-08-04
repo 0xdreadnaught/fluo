@@ -4525,3 +4525,74 @@ func TestTextBoxVerticalTrackHLaneAware(t *testing.T) {
 		t.Fatalf("thumb bottom %v overshoots track bottom %v", thumb.Y+thumb.H, track.Y+track.H)
 	}
 }
+
+// --- v0.16.2 needScrollToCaret edge-case audit (relay #3059) ---
+
+// TestNeedScrollAuditEmptyBox: an empty multi-line box doesn't panic and has
+// nothing to scroll.
+func TestNeedScrollAuditEmptyBox(t *testing.T) {
+	tb := NewTextBox(buttonFace(t)).SetMultiline(true)
+	tb.SetText("")
+	core.MeasureWidget(tb, render.Size{W: 200, H: 50})
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50})
+	if tb.vscroll != 0 {
+		t.Fatalf("empty box vscroll = %v, want 0", tb.vscroll)
+	}
+	if tb.wheelScrollV(scrollWheelStep) {
+		t.Fatal("empty box reported wheel movement (nothing to scroll)")
+	}
+}
+
+// TestNeedScrollAuditSingleLineFollowsCaret: single-line hscroll still follows
+// the caret (caret-visibility path intact for the h-axis).
+func TestNeedScrollAuditSingleLineFollowsCaret(t *testing.T) {
+	tb := NewTextBox(buttonFace(t))
+	tb.SetText("a very long single line of text that overflows the narrow box for sure")
+	tb.SetWidth(120)
+	tb.SetHeight(24)
+	core.MeasureWidget(tb, render.Size{W: 120, H: 24})
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 120, H: 24})
+	if tb.hscroll <= 0 {
+		t.Fatalf("single-line hscroll = %v, want > 0 (SetText caret-at-EOF revealed)", tb.hscroll)
+	}
+	tb.SetCaret(0)
+	core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 120, H: 24})
+	if tb.hscroll != 0 {
+		t.Fatalf("single-line hscroll = %v after caret-to-start, want 0", tb.hscroll)
+	}
+}
+
+// TestNeedScrollAuditEOFRevealed: SetText parks the caret at EOF; the caret is
+// revealed (box scrolled to the last line) on the arrange after the set.
+func TestNeedScrollAuditEOFRevealed(t *testing.T) {
+	tb := newOverflowingMultilineTextBox(t) // SetText -> caret at EOF, then arranged
+	if tb.vscroll <= 0 {
+		t.Fatalf("vscroll = %v, want > 0 (SetText caret-at-EOF should be revealed)", tb.vscroll)
+	}
+}
+
+// TestNeedScrollAuditManualThenCaretMove: a manual scroll persists across a
+// no-caret re-arrange (the (A) fix), and a subsequent caret MOVE re-reveals the
+// caret (the caret-visibility path still works after manual scrolling).
+func TestNeedScrollAuditManualThenCaretMove(t *testing.T) {
+	tb := newOverflowingMultilineTextBox(t)
+	arrange := func() { core.ArrangeWidget(tb, render.Rect{X: 0, Y: 0, W: 200, H: 50}) }
+	tb.SetCaret(0)
+	arrange()
+	if tb.vscroll != 0 {
+		t.Fatalf("setup vscroll = %v, want 0", tb.vscroll)
+	}
+	// Manual wheel down; a no-caret re-arrange must NOT reset it.
+	tb.wheelScrollV(scrollWheelStep * 2)
+	scrolled := tb.vscroll
+	arrange()
+	if tb.vscroll < scrolled-0.01 {
+		t.Fatalf("manual scroll lost on no-caret re-arrange: %v -> %v", scrolled, tb.vscroll)
+	}
+	// A caret move to the END re-reveals the caret (scrolls to reveal it).
+	tb.SetCaret(len([]rune(tb.Text())))
+	arrange()
+	if tb.vscroll <= scrolled {
+		t.Fatalf("caret move to EOF did not re-reveal the caret (vscroll %v <= %v)", tb.vscroll, scrolled)
+	}
+}
