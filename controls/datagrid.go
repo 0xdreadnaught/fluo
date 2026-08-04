@@ -507,7 +507,14 @@ func (g *DataGrid) Render(r render.Renderer) {
 	// needs a real crop, to keep scrolled header cells from bleeding past
 	// the grid's own left/right edges (see the doc comment above).
 	bw := g.metrics.BevelWidth
-	headerClip := render.Rect{X: g.Bounds().X + bw, Y: g.Bounds().Y, W: g.Bounds().W - 2*bw, H: g.Bounds().H}
+	// Right edge stops at the body viewport's right (inset minus the vertical
+	// scrollbar gutter, g.gutter), NOT the full inset: the header spans the
+	// whole inset width (g.header.W), so a Px-overflow column would otherwise
+	// paint into the reserved gutter strip above the scrollbar — which the body
+	// keeps clear and no thumb covers up there. Only the X axis is cropped
+	// tightly; the vertical extent stays the full bounds to avoid GL-scissor
+	// rounding truncating a boundary row of the header's own bevel (see above).
+	headerClip := render.Rect{X: g.Bounds().X + bw, Y: g.Bounds().Y, W: g.Bounds().W - 2*bw - g.gutter, H: g.Bounds().H}
 	if headerClip.W < 0 {
 		headerClip.W = 0
 	}
