@@ -8,6 +8,31 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-03
+
+### Added
+
+- **Horizontal scrollbar for word-wrap-OFF multi-line `TextBox`.** A box whose
+  widest line overflows the content width now shows a horizontal scrollbar in a
+  reserved bottom lane, mirroring the vertical scrollbar's right lane. Both bars
+  are reserved lanes like the line-number gutter: text/selection/caret clip to
+  the content area minus BOTH lanes (with a dead corner where they meet), so
+  nothing ever paints behind a bar. The lanes resolve jointly (each can trigger
+  the other). The thumb spans the whole document's widest line and drags
+  independent of the caret. Shift+Wheel scrolls horizontally (as before).
+- **Horizontal tabs render as tab stops.** `U+0009` now advances the pen to the
+  next tab stop (a multiple of 4 space-advances) instead of drawing a
+  missing-glyph box, so tab-indented code shows aligned whitespace. Applied
+  consistently across measure, draw, caret positioning, and hit-testing.
+- **`cmd/fluo-editor`** — a standalone code-editor demo (mono `TextBox` with line
+  numbers, wrap-off horizontal scroll, tab-to-indent, wheel, live Ln/Col status)
+  for developing editor features.
+
+### Changed
+
+- `SetText`'s doc now warns that a bulk multi-line load leaves the caret at the
+  end and opens scrolled to the last line; call `SetCaret(0)` to open at the top.
+
 ## [0.15.11] - 2026-08-03
 
 ### Fixed
