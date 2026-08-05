@@ -868,13 +868,24 @@ func focusableList(w core.Widget) []core.Widget {
 		return nil
 	}
 	var out []core.Widget
-	if f, ok := w.(Focusable); ok && f.AcceptsFocus() {
+	if f, ok := w.(Focusable); ok && f.AcceptsFocus() && tabStops(w) {
 		out = append(out, w)
 	}
 	for _, c := range w.Children() {
 		out = append(out, focusableList(c)...)
 	}
 	return out
+}
+
+// tabStops reports whether w participates in the Tab cycle: true unless it opts
+// out via the TabStop interface (see it). This gates focusableList (the Tab
+// order) only — press-to-focus (FocusFromPath) consults AcceptsFocus directly,
+// so a TabStop() == false widget is still click-focusable.
+func tabStops(w core.Widget) bool {
+	if ts, ok := w.(TabStop); ok {
+		return ts.TabStop()
+	}
+	return true
 }
 
 // focusables returns the tab order FocusNext/FocusPrev cycle: the whole

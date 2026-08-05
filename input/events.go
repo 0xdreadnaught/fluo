@@ -190,6 +190,18 @@ type Focusable interface {
 	AcceptsFocus() bool
 }
 
+// TabStop is an optional interface a Focusable widget may implement to opt OUT
+// of the Tab-navigation cycle while STAYING click-focusable. A widget whose
+// TabStop() returns false still accepts focus on a press (see FocusFromPath) and
+// via Focus(), but FocusNext/FocusPrev skip it — for content that must be
+// focusable to be interacted with (a selectable read-only transcript message)
+// yet should not clutter the Tab order (a 50-message transcript would otherwise
+// be 50 unwanted Tab stops). A Focusable that does not implement TabStop is a
+// Tab stop, exactly as before.
+type TabStop interface {
+	TabStop() bool
+}
+
 // CursorShaper is an optional interface for widgets that define a custom cursor.
 type CursorShaper interface {
 	Cursor() Cursor

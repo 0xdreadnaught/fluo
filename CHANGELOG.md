@@ -8,7 +8,27 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
-## [0.22.1] - 2026-08-05
+## [0.23.0] - 2026-08-05
+
+### Added
+
+- **Text selection + copy in `TextView`.** The read-only transcript is now
+  selectable: click-drag selects a rune range (highlighted), `Ctrl+C` copies it
+  to the clipboard, `Ctrl+A` selects all — so a user can copy model output,
+  generated code, or IDs out of the copilot transcript. Still read-only: no
+  caret, no editing, no IME — selection and copy only. The selection survives
+  `Append` (streaming never shifts earlier rune indices, so a mid-stream
+  selection stays valid) and clears on `SetText`. Reuses the shared colored-run
+  highlight path (`selLo`/`selHi`) and the router clipboard. Also adds
+  `TextView.Select(start,end)` for a programmatic selection. New golden:
+  `textview_selected.png`; the unselected `textview.png` is byte-identical.
+- **`input.TabStop`** — an optional interface a `Focusable` widget can implement
+  to opt OUT of the Tab-navigation cycle while staying click-focusable
+  (`FocusNext`/`FocusPrev` skip it; press-to-focus and `Focus()` still work).
+  `TextView` uses it so a many-message transcript doesn't turn Tab into a maze —
+  Tab flows past the messages to the real controls, while a click still focuses a
+  message to select/copy it. Additive: a `Focusable` that doesn't implement it is
+  a Tab stop exactly as before.
 
 ### Added
 

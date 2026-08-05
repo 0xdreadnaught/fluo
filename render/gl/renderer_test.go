@@ -641,6 +641,35 @@ func TestTextView(t *testing.T) {
 	})
 }
 
+// TestTextViewSelected is the v0.23.0 golden: a read-only TextView with a
+// selected rune range — the Highlight band under the selection with the selected
+// runes drawn HighlightText, the rest in the default color. No caret (read-only:
+// select + copy only).
+func TestTextViewSelected(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "textview_selected", 200, 40, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tv := controls.NewTextView(face)
+		tv.SetText("copy node_id=42 out")
+		tv.Select(5, 15) // "node_id=42"
+
+		frame := render.Rect{X: 0, Y: 0, W: 200, H: 40}
+		r.FillRect(frame, th.Color.ButtonFace)
+
+		core.MeasureWidget(tv, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(tv, frame)
+		core.RenderWidget(tv, r)
+	})
+}
+
 // TestTextBoxPreedit is the Task 6 Phase B golden: a focused TextBox with
 // committed text "Hello " and an IME composition in progress — preedit
 // "world" spliced in at the caret, with the composition's own caret sitting

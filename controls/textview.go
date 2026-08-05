@@ -2,6 +2,7 @@ package controls
 
 import (
 	"github.com/0xdreadnaught/fluo/core"
+	"github.com/0xdreadnaught/fluo/input"
 	"github.com/0xdreadnaught/fluo/render"
 	"github.com/0xdreadnaught/fluo/text"
 	"github.com/0xdreadnaught/fluo/theme"
@@ -28,6 +29,17 @@ type TextView struct {
 	spans []ColorSpan
 	color render.Color // default text color
 
+	// Selection (read-only: select + copy, never edit). anchor/caret are rune
+	// indices; the selection is [min,max). They are NOT a caret — nothing is
+	// ever drawn at them and no editing keys move them; they only mark a
+	// selected range for the Highlight band and Ctrl+C. focused/dragging track
+	// interaction. See OnPointer/OnKey.
+	anchor, caret int
+	focused       bool
+	dragging      bool
+
+	colors theme.ColorTokens
+
 	// Wrapped-row cache. rows[i] is the rune range [start,end) drawn on visual
 	// row i. wrapWidth is the width they were wrapped to (-1 == none yet).
 	// wrappedUpTo is the rune index rows are complete up to; Append rewinds it
@@ -43,9 +55,11 @@ type textViewRow struct{ start, end int }
 // valid — it then measures/draws nothing, matching TextBlock's convention). The
 // default text color is the theme's WindowText; override with SetColor.
 func NewTextView(face *text.Face) *TextView {
+	th := theme.Active()
 	return &TextView{
 		face:      face,
-		color:     theme.Active().Color.WindowText,
+		color:     th.Color.WindowText,
+		colors:    th.Color,
 		wrapWidth: -1,
 	}
 }
@@ -54,6 +68,7 @@ func NewTextView(face *text.Face) *TextView {
 // and measure (the wrapped height changes).
 func (v *TextView) SetText(s string) *TextView {
 	v.runes = []rune(s)
+	v.anchor, v.caret = 0, 0 // a fresh document has no selection
 	v.invalidateWrapFrom(0)
 	v.InvalidateMeasure()
 	return v
@@ -216,8 +231,11 @@ func (v *TextView) MeasureContent(available render.Size) render.Size {
 }
 
 // Render draws each wrapped row via the shared colored-run primitive
-// (drawColoredRuns): the default color outside spans, span colors inside. No
-// selection (read-only), so the selection color is unused.
+// (drawColoredRuns): the default color outside spans, span colors inside, and —
+// where a selection intersects the row — a Highlight band under it with the
+// selected runes recolored HighlightText. Still no caret (read-only). With no
+// selection AND no spans a row is one plain face.Draw, so an unselected TextView
+// renders byte-identically to before selection existed.
 func (v *TextView) Render(r render.Renderer) {
 	if v.face == nil || len(v.runes) == 0 {
 		return
@@ -225,16 +243,168 @@ func (v *TextView) Render(r render.Renderer) {
 	b := v.Bounds()
 	v.ensureWrapped(b.W)
 	lh := v.lineHeight()
+	selStart, selEnd := v.Selection()
 
 	for i, row := range v.rows {
 		if row.start >= row.end {
 			continue // blank line: nothing to draw, but it still took vertical space
 		}
 		y := b.Y + float32(i)*lh
-		line := v.runes[row.start:row.end]
 		rowStart := row.start
-		drawColoredRuns(r, v.face, line, rowStart, 0, 0, y, v.color, v.color, v.spans, func(col int) float32 {
+		line := v.runes[rowStart:row.end]
+		xAt := func(col int) float32 {
 			return b.X + v.face.Measure(string(v.runes[rowStart:rowStart+col])).W
-		})
+		}
+
+		// The selection intersected with this row, in LOCAL columns.
+		selLo := clampInt(selStart, rowStart, row.end) - rowStart
+		selHi := clampInt(selEnd, rowStart, row.end) - rowStart
+		if selLo < selHi {
+			r.FillRect(render.Rect{X: xAt(selLo), Y: y, W: xAt(selHi) - xAt(selLo), H: lh}, v.colors.Highlight)
+		}
+		drawColoredRuns(r, v.face, line, rowStart, selLo, selHi, y, v.color, v.colors.HighlightText, v.spans, xAt)
 	}
+}
+
+// AcceptsFocus makes the TextView click-focusable so it can receive Ctrl+C to
+// copy a selection. It stays READ-ONLY — focus only enables selection + copy,
+// never a caret, editing, or IME.
+func (v *TextView) AcceptsFocus() bool { return true }
+
+// TabStop returns false: a TextView accepts focus on CLICK but is NOT in the Tab
+// cycle (see input.TabStop). A transcript is many TextViews; putting each in the
+// Tab order would make Tab a maze, so Tab flows past them to the real controls
+// while a click still focuses a message to select/copy it.
+func (v *TextView) TabStop() bool { return false }
+
+// Selection returns the selected rune range [start,end) (start<=end), or an
+// empty range at 0 when nothing is selected.
+func (v *TextView) Selection() (start, end int) {
+	if v.anchor <= v.caret {
+		return v.anchor, v.caret
+	}
+	return v.caret, v.anchor
+}
+
+// Select sets the selected rune range programmatically (each endpoint clamped
+// to the buffer) and returns v — for a search hit, a select-all, or restoring a
+// selection. It only marks the range; it moves no focus and copies nothing.
+func (v *TextView) Select(start, end int) *TextView {
+	v.anchor = v.clampRune(start)
+	v.caret = v.clampRune(end)
+	return v
+}
+
+// SelectedText returns the currently selected text (empty if none).
+func (v *TextView) SelectedText() string {
+	s, e := v.Selection()
+	if s == e {
+		return ""
+	}
+	return string(v.runes[s:e])
+}
+
+func (v *TextView) clampRune(i int) int { return clampInt(i, 0, len(v.runes)) }
+
+// runeAtPoint maps an absolute pointer position to the nearest rune index,
+// across the wrapped rows: the row from the y offset, the column from the x
+// offset within that row.
+func (v *TextView) runeAtPoint(p render.Point) int {
+	b := v.Bounds()
+	v.ensureWrapped(b.W)
+	if len(v.rows) == 0 {
+		return 0
+	}
+	lh := v.lineHeight()
+	row := 0
+	if lh > 0 {
+		row = int((p.Y - b.Y) / lh)
+	}
+	if row < 0 {
+		row = 0
+	}
+	if row >= len(v.rows) {
+		row = len(v.rows) - 1
+	}
+	rr := v.rows[row]
+	col := columnAtX(v.face, v.runes[rr.start:rr.end], p.X-b.X)
+	return rr.start + col
+}
+
+// columnAtX returns the caret-style column (0..len) in runes nearest x (x is
+// relative to the run's left edge). Mirrors TextBox's own hit-test.
+func columnAtX(face *text.Face, runes []rune, x float32) int {
+	n := len(runes)
+	if face == nil {
+		if x < 0 {
+			return 0
+		}
+		return n
+	}
+	widths := face.PrefixWidths(runes)
+	for i := 0; i < n; i++ {
+		if x < (widths[i]+widths[i+1])/2 {
+			return i
+		}
+	}
+	return n
+}
+
+// OnPointer implements click-drag selection: press sets the anchor at the hit
+// rune and captures the pointer; drag extends the caret end; release ends the
+// drag. A press with no drag collapses the selection (anchor==caret). Read-only
+// throughout — this only moves the selection range, never a caret.
+func (v *TextView) OnPointer(e *input.PointerEvent) {
+	switch e.Action {
+	case input.Press:
+		i := v.clampRune(v.runeAtPoint(e.Pos))
+		v.anchor, v.caret = i, i
+		v.dragging = true
+		e.Router.Capture(v)
+		e.Handled = true
+	case input.Move:
+		if v.dragging && e.Router.Captured() == core.Widget(v) {
+			v.caret = v.clampRune(v.runeAtPoint(e.Pos))
+			e.Handled = true
+		}
+	case input.Release:
+		if v.dragging {
+			v.dragging = false
+			e.Router.Release()
+			e.Handled = true
+		}
+	}
+}
+
+// OnKey implements the read-only keyboard: Ctrl+C copies the selection, Ctrl+A
+// selects all. No other key does anything (never edits). Inert unless focused.
+func (v *TextView) OnKey(e *input.KeyEvent) {
+	if !v.focused || e.Action != input.Press || e.Mods&input.ModCtrl == 0 {
+		return
+	}
+	switch e.Key {
+	case input.KeyC:
+		v.copySelection(e.Router)
+		e.Handled = true
+	case input.KeyA:
+		v.anchor, v.caret = 0, len(v.runes)
+		e.Handled = true
+	}
+}
+
+// OnFocusChanged tracks focus. Losing focus keeps the selection (so a copy that
+// moved focus to a menu still has something to copy) but disables the keyboard
+// path until re-focused.
+func (v *TextView) OnFocusChanged(f bool) { v.focused = f }
+
+func (v *TextView) copySelection(r *input.Router) {
+	if r == nil {
+		return
+	}
+	clip := r.Clipboard()
+	s, e := v.Selection()
+	if clip == nil || s == e {
+		return
+	}
+	clip.Set(string(v.runes[s:e]))
 }
