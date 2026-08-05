@@ -234,6 +234,12 @@ func (h *OverlayHost) SetRouter(r *input.Router) {
 	h.router = r
 }
 
+// Router returns the router wired via SetRouter, or nil if none — so an owner
+// like MenuBar can release its own focus when its last popup closes.
+func (h *OverlayHost) Router() *input.Router {
+	return h.router
+}
+
 // SetTimers wires q as the driver for ShowToast's auto-dismiss timers (see
 // its doc comment). Passing nil detaches any previously wired queue; toasts
 // shown from then on simply have no auto-dismiss (see ShowToast). SetTimers

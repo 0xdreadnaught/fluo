@@ -651,3 +651,37 @@ func TestMenuItemsClearOnEmptyIsSafe(t *testing.T) {
 		t.Fatalf("Clear() on an empty menu left %d entries, want 0", len(mi.entries))
 	}
 }
+
+// TestMenuBarReleasesFocusOnClose is the v0.21.1 regression: the bar takes
+// router focus when a menu opens (so its OnKey handles Esc/arrows) but must
+// RELEASE it when the last menu closes, else a shortcut pressed right after
+// closing a menu is swallowed by the now-idle bar.
+func TestMenuBarReleasesFocusOnClose(t *testing.T) {
+	bar, _, r, _ := newTestMenuBar(t)
+
+	clickAt(r, rectCenter(bar.cellRect(0))) // open File -> focuses the bar
+	if r.Focused() != core.Widget(bar) {
+		t.Fatal("bar not focused after opening a menu (precondition)")
+	}
+
+	r.KeyDown(input.KeyEscape, 0, 0) // close the menu
+	if r.Focused() != nil {
+		t.Fatalf("Focused() after menu close = %v, want nil (bar must release focus on final close)", r.Focused())
+	}
+}
+
+// TestMenuBarKeepsFocusAcrossHoverSwitch: a hover-switch closes one menu and
+// opens another; focus must PERSIST so the switched-to menu's keyboard nav
+// still works (only a genuine final close releases it).
+func TestMenuBarKeepsFocusAcrossHoverSwitch(t *testing.T) {
+	bar, _, r, _ := newTestMenuBar(t)
+
+	clickAt(r, rectCenter(bar.cellRect(0)))       // open File, focus bar
+	r.PointerMove(rectCenter(bar.cellRect(1)), 0) // hover-switch to Edit
+	if bar.openIdx != 1 {
+		t.Fatalf("openIdx after hover = %d, want 1 (switch precondition)", bar.openIdx)
+	}
+	if r.Focused() != core.Widget(bar) {
+		t.Fatalf("Focused() after hover-switch = %v, want bar (focus must persist across a switch)", r.Focused())
+	}
+}

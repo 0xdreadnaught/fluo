@@ -657,6 +657,13 @@ type MenuBar struct {
 	hoverIdx int // -1 == no cell hovered
 	openIdx  int // -1 == no menu open
 
+	// switching is true only for the brief window inside openMenu while it
+	// closes the previously-open menu before opening the new one (a hover- or
+	// press-driven switch). A closing menu's onDismiss consults it so a switch
+	// does NOT release the bar's focus (the switched-to menu still needs it),
+	// while a genuine final close (Esc, item click, light-dismiss) does.
+	switching bool
+
 	// popup is the currently open TOP-LEVEL popup widget (nil when none is
 	// open), kept only so a future explicit-close path could reference it —
 	// closing today always goes through OverlayHost.CloseAllPopups rather
@@ -819,7 +826,12 @@ func (m *MenuBar) openMenu(idx int) {
 	if host == nil {
 		return
 	}
+	// Closing the previously-open menu here is a SWITCH, not a final close, so
+	// mark it: the old menu's onDismiss (fired synchronously by CloseAllPopups)
+	// must keep the bar focused for the menu we are about to open.
+	m.switching = true
 	host.CloseAllPopups()
+	m.switching = false
 
 	entry := m.entries[idx]
 	closeAll := func() { host.CloseAllPopups() }
@@ -830,14 +842,24 @@ func (m *MenuBar) openMenu(idx int) {
 
 	anchor := m.cellRect(idx)
 	// Pass the MenuBar as the popup's OWNER (not the public ShowPopup, which
-	// leaves owner nil). Two payoffs: OverlayHost's ownerLive sweep auto-closes
-	// the menu if the bar leaves the live tree, and — the point here — the
-	// owner is what OverlayHost forwards an outside-popup hover to, so moving
-	// onto a sibling title while this menu is open reaches OnPointer and
-	// switches menus (see OnPointer's Move case).
+	// leaves owner nil). Three payoffs: OverlayHost's ownerLive sweep auto-closes
+	// the menu if the bar leaves the live tree; the owner is what OverlayHost
+	// forwards an outside-popup hover to, so moving onto a sibling title while
+	// this menu is open reaches OnPointer and switches menus (see OnPointer's
+	// Move case); and onDismiss below can release the bar's own focus.
 	host.showPopup(popup, anchor, func() {
 		m.openIdx = -1
 		m.popup = nil
+		// Release the focus the bar took when this menu opened — but ONLY on a
+		// genuine final close, not a switch (switching), and only if the bar
+		// still holds it (an item's action may have moved focus itself). A
+		// light-dismiss press re-homes focus via OverlayHost's own O5 path
+		// AFTER this runs, so clearing here doesn't fight it.
+		if !m.switching {
+			if r := host.Router(); r != nil && r.Focused() == core.Widget(m) {
+				r.Focus(nil)
+			}
+		}
 	}, true, false, m)
 }
 

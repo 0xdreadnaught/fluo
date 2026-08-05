@@ -8,6 +8,26 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-08-05
+
+### Fixed
+
+- **`MenuBar` releases router focus when its last menu closes.** Opening a menu
+  focuses the bar (so its `OnKey` handles Esc / arrow-nav / type-ahead while a
+  menu is open), but the bar never released that focus on close — so a keyboard
+  shortcut pressed right after a menu closed was swallowed by the now-idle bar
+  instead of reaching its intended target. The bar now releases its own focus
+  when the last menu closes for good, while keeping it across a hover- or
+  press-driven switch (the switched-to menu still needs it) and only when the
+  bar still holds it (an item action that moved focus itself is left alone). No
+  golden change.
+
+### Added
+
+- **`OverlayHost.Router()`** — accessor for the router wired via `SetRouter`, so
+  a popup owner can manage its own focus on close (used by the `MenuBar` fix
+  above).
+
 ## [0.21.0] - 2026-08-04
 
 ### Added
