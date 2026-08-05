@@ -2,6 +2,7 @@ package controls
 
 import (
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -258,8 +259,26 @@ type TextBox struct {
 	preeditCaret int
 	composing    bool
 
+	// colorSpans are presentation-only per-range text colors (see SetColorSpans
+	// / ColorSpan): normalized to clamped, Start-sorted order at set time and
+	// consulted only by the draw path (drawColoredLine / colorAtLocal). They
+	// never touch content, caret, selection, measure, wrap, or scroll — a
+	// syntax highlighter drives them and re-sets them on OnChanged. nil (the
+	// default) means the whole text draws in one color, exactly as before.
+	colorSpans []ColorSpan
+
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
+}
+
+// ColorSpan colors the runes in the half-open range [Start, End) of a TextBox's
+// buffer (rune indices) in Color — the unit a syntax highlighter emits (see
+// SetColorSpans). Spans are presentation only: they never change the text,
+// caret, layout, or hit-testing. Within a text selection the selection's own
+// HighlightText color wins over a span so selected text stays legible.
+type ColorSpan struct {
+	Start, End int
+	Color      render.Color
 }
 
 // NewTextBox returns an enabled, empty, unfocused TextBox drawing text with
@@ -281,6 +300,51 @@ func NewTextBox(face *text.Face) *TextBox {
 // Text returns the current text content.
 func (t *TextBox) Text() string {
 	return string(t.runes)
+}
+
+// SetColorSpans replaces the presentation-only per-range text colors (see
+// ColorSpan) and returns t for chaining. Spans are COPIED and normalized: each
+// is clamped to the current buffer and dropped if empty, then the set is
+// Start-sorted. Spans should not overlap; if they do, the earlier-starting one
+// wins. Passing nil or an empty slice clears coloring, restoring single-color
+// drawing.
+//
+// PRESENTATION ONLY: this changes no text, caret, selection, measure, wrap, or
+// scroll state, so a syntax highlighter can call it every frame without
+// disturbing the box (this is what closes the scroll-side-effect concern by
+// construction, not by luck). Spans are rune indices into the CURRENT buffer
+// and are NOT shifted on edit — a highlighter re-tokenizes and calls this again
+// on OnChanged; a one-frame-stale span between a keystroke and the re-tokenize
+// only briefly mis-colors, never misplaces. Redraw rides fluo's per-frame
+// render (like hover), so no invalidation is issued — and issuing none is
+// precisely what keeps it free of layout/scroll side effects.
+func (t *TextBox) SetColorSpans(spans []ColorSpan) *TextBox {
+	if len(spans) == 0 {
+		t.colorSpans = nil
+		return t
+	}
+	n := len(t.runes)
+	out := make([]ColorSpan, 0, len(spans))
+	for _, sp := range spans {
+		sp.Start = clampInt(sp.Start, 0, n)
+		sp.End = clampInt(sp.End, 0, n)
+		if sp.End <= sp.Start {
+			continue // empty or inverted after clamping: nothing to color
+		}
+		out = append(out, sp)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Start < out[j].Start })
+	t.colorSpans = out
+	return t
+}
+
+// ColorSpans returns a COPY of the current normalized color spans (see
+// SetColorSpans), or nil if none are set.
+func (t *TextBox) ColorSpans() []ColorSpan {
+	if len(t.colorSpans) == 0 {
+		return nil
+	}
+	return append([]ColorSpan(nil), t.colorSpans...)
 }
 
 // SetText replaces the text content, resets the caret to the end, and
@@ -2878,11 +2942,13 @@ func (t *TextBox) Render(r render.Renderer) {
 	}
 
 	if s, color := t.displayText(); t.face != nil && s != "" {
+		selLo, selHi := 0, 0
 		if hasSel {
-			t.drawTextWithSelection(r, []rune(s), start, end, textX, textY, color)
-		} else {
-			t.face.Draw(r, render.Point{X: textX, Y: textY}, s, color)
+			selLo, selHi = start, end
 		}
+		t.drawColoredLine(r, []rune(s), 0, selLo, selHi, textY, color, func(col int) float32 {
+			return textX + t.xOf(col)
+		})
 	}
 
 	if t.caretShown() {
@@ -2891,24 +2957,82 @@ func (t *TextBox) Render(r render.Renderer) {
 	}
 }
 
-// drawTextWithSelection draws runes in three pieces — before [start,end),
-// inside it (recolored to HighlightText over the Highlight selection band),
-// and after — so the selected glyphs read correctly over the band instead of
-// the whole run drawing uniformly in color. textX/textY is the same
-// unselected-run origin Render itself would have used; each piece's x
-// offset derives from t.xOf, matching how selX0/selX1 above were computed.
-func (t *TextBox) drawTextWithSelection(r render.Renderer, runes []rune, start, end int, textX, textY float32, color render.Color) {
-	if pre := string(runes[:start]); pre != "" {
-		t.face.Draw(r, render.Point{X: textX, Y: textY}, pre, color)
+// drawColoredLine draws one visual line's runes as a sequence of color runs,
+// cutting the line at the union of the selection edges and every ColorSpan edge
+// that falls inside it, and drawing each sub-run via face.Draw at the x that
+// xAt(col) yields, in the color colorAtLocal resolves. It is the single draw
+// primitive all three text paths share (single-line Render, multiline unwrapped
+// renderMultiline, multiline wrapped renderMultilineWrapped): each passes the
+// line's LOCAL runes, the line's first-rune BUFFER index lineLo (so spans map
+// from absolute to local columns), the selection in LOCAL columns [selLo,selHi),
+// the baseline y, the default color, and its own column->x function (built from
+// xOf / xOfInLine / xOfInRow, all of which already fold in hscroll via the base
+// textX the caller closes over and return 0 at col 0).
+//
+// With NO spans AND no selection it emits exactly ONE face.Draw of the whole
+// line — byte-identical (kerning included) to the pre-colored-runs fast path,
+// so an un-colored box renders unchanged. With a selection but no spans the cut
+// set is {selLo,selHi}, reproducing the old pre/sel/post selection split
+// (default, HighlightText, default) at the same x's — also unchanged. Spans
+// only add more cut points; the kerning lost across a cut is the same loss
+// today's selection split already accepts, and only colored boxes ever see it.
+func (t *TextBox) drawColoredLine(r render.Renderer, runes []rune, lineLo, selLo, selHi int, y float32, defaultColor render.Color, xAt func(col int) float32) {
+	n := len(runes)
+	if t.face == nil || n == 0 {
+		return
 	}
-	if sel := string(runes[start:end]); sel != "" {
-		x := textX + t.xOf(start)
-		t.face.Draw(r, render.Point{X: x, Y: textY}, sel, t.colors.HighlightText)
+	// Fast path: nothing splits the line -> one face.Draw, identical to before.
+	if len(t.colorSpans) == 0 && selLo >= selHi {
+		t.face.Draw(r, render.Point{X: xAt(0), Y: y}, string(runes), defaultColor)
+		return
 	}
-	if post := string(runes[end:]); post != "" {
-		x := textX + t.xOf(end)
-		t.face.Draw(r, render.Point{X: x, Y: textY}, post, color)
+
+	cuts := []int{0, n}
+	if selLo < selHi {
+		if selLo > 0 && selLo < n {
+			cuts = append(cuts, selLo)
+		}
+		if selHi > 0 && selHi < n {
+			cuts = append(cuts, selHi)
+		}
 	}
+	for _, sp := range t.colorSpans {
+		if s := sp.Start - lineLo; s > 0 && s < n {
+			cuts = append(cuts, s)
+		}
+		if e := sp.End - lineLo; e > 0 && e < n {
+			cuts = append(cuts, e)
+		}
+	}
+	sort.Ints(cuts)
+
+	segStart := 0
+	for _, c := range cuts {
+		if c <= segStart { // skip the leading 0 and any duplicate cut
+			continue
+		}
+		col := t.colorAtLocal(lineLo, segStart, selLo, selHi, defaultColor)
+		t.face.Draw(r, render.Point{X: xAt(segStart), Y: y}, string(runes[segStart:c]), col)
+		segStart = c
+	}
+}
+
+// colorAtLocal resolves the color of the rune at LOCAL column col in a line
+// whose first rune is buffer index lineLo. Selection wins first (the whole
+// [selLo,selHi) range draws HighlightText so selected code stays legible over
+// the band), then the first covering ColorSpan (spans are Start-sorted and
+// meant to be non-overlapping — see SetColorSpans), else defaultColor.
+func (t *TextBox) colorAtLocal(lineLo, col, selLo, selHi int, defaultColor render.Color) render.Color {
+	if col >= selLo && col < selHi {
+		return t.colors.HighlightText
+	}
+	abs := lineLo + col
+	for _, sp := range t.colorSpans {
+		if abs >= sp.Start && abs < sp.End {
+			return sp.Color
+		}
+	}
+	return defaultColor
 }
 
 // renderComposing is Render's single-line body while an IME composition is
@@ -3072,11 +3196,10 @@ func (t *TextBox) renderMultiline(r render.Renderer, bounds render.Rect) {
 		}
 
 		if t.face != nil && line != "" {
-			if hasSel {
-				t.drawLineWithSelection(r, []rune(line), selStart-lo, selEnd-lo, textX, lineY, color)
-			} else {
-				t.face.Draw(r, render.Point{X: textX, Y: lineY}, line, color)
-			}
+			i := i
+			t.drawColoredLine(r, []rune(line), lo, selStart-lo, selEnd-lo, lineY, color, func(col int) float32 {
+				return textX + t.xOfInLine(i, col)
+			})
 		}
 	}
 
@@ -3121,11 +3244,10 @@ func (t *TextBox) renderMultilineWrapped(r render.Renderer, bounds render.Rect, 
 		}
 
 		if line := string(t.runes[lo:hi]); t.face != nil && line != "" {
-			if hasSel {
-				t.drawLineWithSelection(r, []rune(line), selStart-lo, selEnd-lo, textX, rowY, color)
-			} else {
-				t.face.Draw(r, render.Point{X: textX, Y: rowY}, line, color)
-			}
+			i := i
+			t.drawColoredLine(r, []rune(line), lo, selStart-lo, selEnd-lo, rowY, color, func(col int) float32 {
+				return textX + t.xOfInRow(i, col)
+			})
 		}
 	}
 
@@ -3277,27 +3399,6 @@ func (t *TextBox) renderComposingMultiline(r render.Renderer, bounds render.Rect
 			cx := preeditX + t.preeditMeasure(t.preeditCaret)
 			r.FillRect(render.Rect{X: cx, Y: lineY, W: caretWidth, H: lh}, t.colors.WindowText)
 		}
-	}
-}
-
-// drawLineWithSelection is renderMultiline's per-line analogue of
-// drawTextWithSelection: runes is one line's runes (no '\n'), start/end are
-// LINE-RELATIVE rune offsets into it (already intersected with the line's
-// own range by the caller), and lineX/lineY is that line's own draw origin
-// — the same three-piece before/inside/after split, with each piece's x
-// offset measured from the start of THIS line (via face.Measure) rather
-// than the whole buffer (unlike xOf, which drawTextWithSelection uses).
-func (t *TextBox) drawLineWithSelection(r render.Renderer, runes []rune, start, end int, lineX, lineY float32, color render.Color) {
-	if pre := string(runes[:start]); pre != "" {
-		t.face.Draw(r, render.Point{X: lineX, Y: lineY}, pre, color)
-	}
-	if sel := string(runes[start:end]); sel != "" {
-		x := lineX + t.face.Measure(string(runes[:start])).W
-		t.face.Draw(r, render.Point{X: x, Y: lineY}, sel, t.colors.HighlightText)
-	}
-	if post := string(runes[end:]); post != "" {
-		x := lineX + t.face.Measure(string(runes[:end])).W
-		t.face.Draw(r, render.Point{X: x, Y: lineY}, post, color)
 	}
 }
 

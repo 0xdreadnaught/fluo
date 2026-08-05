@@ -570,6 +570,47 @@ func TestTextBox(t *testing.T) {
 	})
 }
 
+// TestTextBoxColorSpans is the v0.21.0 golden: a multiline TextBox with
+// per-range ColorSpans standing in for syntax highlighting — keywords in blue,
+// the function name in green, the number in teal — over the default text color,
+// unfocused (no caret, no selection). It exercises the colored-run draw path
+// (drawColoredLine) across two logical lines and proves spans map by absolute
+// buffer index to the right runs.
+func TestTextBoxColorSpans(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "textbox_colorspans", 220, 60, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		blue := render.RGB(0, 0, 200)
+		green := render.RGB(0, 128, 0)
+		teal := render.RGB(0, 128, 128)
+
+		tb := controls.NewTextBox(face).SetMultiline(true)
+		tb.SetText("def foo():\n    return 42")
+		//          def[0,3) foo[4,7)      return[15,21) 42[22,24)
+		tb.SetColorSpans([]controls.ColorSpan{
+			{Start: 0, End: 3, Color: blue},
+			{Start: 4, End: 7, Color: green},
+			{Start: 15, End: 21, Color: blue},
+			{Start: 22, End: 24, Color: teal},
+		})
+
+		frame := render.Rect{X: 0, Y: 0, W: 220, H: 60}
+		r.FillRect(frame, th.Color.ButtonFace)
+
+		core.MeasureWidget(tb, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(tb, frame)
+		core.RenderWidget(tb, r)
+	})
+}
+
 // TestTextBoxPreedit is the Task 6 Phase B golden: a focused TextBox with
 // committed text "Hello " and an IME composition in progress — preedit
 // "world" spliced in at the caret, with the composition's own caret sitting

@@ -49,6 +49,14 @@ type recordRenderer struct {
 	glyphQuads int                // total glyph quads across all DrawGlyphs calls
 	glyphCalls int                // number of DrawGlyphs calls
 	glyphs     []render.GlyphQuad // every emitted glyph quad, in order
+	glyphRuns  []glyphRun         // one entry per DrawGlyphs call: quad count + color
+}
+
+// glyphRun records one DrawGlyphs call's glyph count and color — enough to
+// assert colored-run segmentation without a GPU (see TextBox color-span tests).
+type glyphRun struct {
+	n     int
+	color render.Color
 }
 
 // filledRect pins one recorded FillRect call.
@@ -81,6 +89,7 @@ func (r *recordRenderer) DrawGlyphs(quads []render.GlyphQuad, tex render.Texture
 	r.glyphQuads += len(quads)
 	r.glyphCalls++
 	r.glyphs = append(r.glyphs, quads...)
+	r.glyphRuns = append(r.glyphRuns, glyphRun{n: len(quads), color: c})
 }
 func (r *recordRenderer) Scale() float32 { return 1 }
 func (r *recordRenderer) PushClip(rect render.Rect) {

@@ -8,7 +8,24 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
-## [0.20.2] - 2026-08-04
+## [0.21.0] - 2026-08-04
+
+### Added
+
+- **Per-range text color in `TextBox` (`ColorSpan` / `SetColorSpans`)** — the
+  foundation for syntax highlighting. `SetColorSpans([]ColorSpan)` gives the box
+  a set of `{Start, End, Color}` rune-index ranges; each range renders in its
+  color over the default text color, and a syntax highlighter (or any tokenizer)
+  drives them. `ColorSpans()` returns the normalized set. Spans are
+  **presentation-only**: they change no text, caret, selection, measure, wrap, or
+  scroll state, so a highlighter can re-set them every frame (e.g. re-tokenizing
+  on `OnChanged`) without disturbing the box. Within a selection, the selection's
+  `HighlightText` color wins so selected code stays legible. Spans are not shifted
+  on edit — the owner re-tokenizes and re-sets them (a one-frame-stale span only
+  briefly mis-colors, never misplaces). All three text paths (single-line,
+  multiline, word-wrapped) share one colored-run draw primitive; with no spans it
+  is byte-identical to the previous single-color draw, so **every existing box
+  renders unchanged (zero golden change)**. New golden: `textbox_colorspans.png`.
 
 ### Fixed
 
