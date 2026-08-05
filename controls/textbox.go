@@ -2,7 +2,6 @@ package controls
 
 import (
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -319,22 +318,7 @@ func (t *TextBox) Text() string {
 // render (like hover), so no invalidation is issued — and issuing none is
 // precisely what keeps it free of layout/scroll side effects.
 func (t *TextBox) SetColorSpans(spans []ColorSpan) *TextBox {
-	if len(spans) == 0 {
-		t.colorSpans = nil
-		return t
-	}
-	n := len(t.runes)
-	out := make([]ColorSpan, 0, len(spans))
-	for _, sp := range spans {
-		sp.Start = clampInt(sp.Start, 0, n)
-		sp.End = clampInt(sp.End, 0, n)
-		if sp.End <= sp.Start {
-			continue // empty or inverted after clamping: nothing to color
-		}
-		out = append(out, sp)
-	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Start < out[j].Start })
-	t.colorSpans = out
+	t.colorSpans = normalizeColorSpans(spans, len(t.runes))
 	return t
 }
 
@@ -2977,62 +2961,7 @@ func (t *TextBox) Render(r render.Renderer) {
 // only add more cut points; the kerning lost across a cut is the same loss
 // today's selection split already accepts, and only colored boxes ever see it.
 func (t *TextBox) drawColoredLine(r render.Renderer, runes []rune, lineLo, selLo, selHi int, y float32, defaultColor render.Color, xAt func(col int) float32) {
-	n := len(runes)
-	if t.face == nil || n == 0 {
-		return
-	}
-	// Fast path: nothing splits the line -> one face.Draw, identical to before.
-	if len(t.colorSpans) == 0 && selLo >= selHi {
-		t.face.Draw(r, render.Point{X: xAt(0), Y: y}, string(runes), defaultColor)
-		return
-	}
-
-	cuts := []int{0, n}
-	if selLo < selHi {
-		if selLo > 0 && selLo < n {
-			cuts = append(cuts, selLo)
-		}
-		if selHi > 0 && selHi < n {
-			cuts = append(cuts, selHi)
-		}
-	}
-	for _, sp := range t.colorSpans {
-		if s := sp.Start - lineLo; s > 0 && s < n {
-			cuts = append(cuts, s)
-		}
-		if e := sp.End - lineLo; e > 0 && e < n {
-			cuts = append(cuts, e)
-		}
-	}
-	sort.Ints(cuts)
-
-	segStart := 0
-	for _, c := range cuts {
-		if c <= segStart { // skip the leading 0 and any duplicate cut
-			continue
-		}
-		col := t.colorAtLocal(lineLo, segStart, selLo, selHi, defaultColor)
-		t.face.Draw(r, render.Point{X: xAt(segStart), Y: y}, string(runes[segStart:c]), col)
-		segStart = c
-	}
-}
-
-// colorAtLocal resolves the color of the rune at LOCAL column col in a line
-// whose first rune is buffer index lineLo. Selection wins first (the whole
-// [selLo,selHi) range draws HighlightText so selected code stays legible over
-// the band), then the first covering ColorSpan (spans are Start-sorted and
-// meant to be non-overlapping — see SetColorSpans), else defaultColor.
-func (t *TextBox) colorAtLocal(lineLo, col, selLo, selHi int, defaultColor render.Color) render.Color {
-	if col >= selLo && col < selHi {
-		return t.colors.HighlightText
-	}
-	abs := lineLo + col
-	for _, sp := range t.colorSpans {
-		if abs >= sp.Start && abs < sp.End {
-			return sp.Color
-		}
-	}
-	return defaultColor
+	drawColoredRuns(r, t.face, runes, lineLo, selLo, selHi, y, defaultColor, t.colors.HighlightText, t.colorSpans, xAt)
 }
 
 // renderComposing is Render's single-line body while an IME composition is

@@ -8,6 +8,28 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-08-05
+
+### Added
+
+- **`controls.TextView`** — a read-only, word-wrapping, colorable text display,
+  the wrapping read-only counterpart `TextBlock` never became (it carries none of
+  `TextBox`'s editable semantics: no caret, no click-to-position, no IME). Built
+  for cheap streaming append: `Append(string)` re-wraps only from the last cached
+  row, not the whole buffer — because greedy word-wrap is stable under append,
+  earlier row breaks never move — so a long streamed response of many small
+  deltas doesn't stutter. `SetText`/`Append`/`SetColor`/`SetColorSpans` (reusing
+  the `ColorSpan` type) / `Text`/`ColorSpans`. Wraps to its arranged width; grows
+  its measured height as content is appended. The copilot chat-transcript
+  primitive. Text selection and markdown are out of scope for now (selection is a
+  tracked fast-follow). New golden: `textview.png`.
+
+### Changed
+
+- The colored-run drawing shared by `TextBox` (and now `TextView`) is extracted
+  into one internal `drawColoredRuns` helper plus a shared span normalizer — a
+  pure refactor: every existing `TextBox` golden is byte-identical.
+
 ## [0.21.1] - 2026-08-05
 
 ### Fixed

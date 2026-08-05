@@ -611,6 +611,36 @@ func TestTextBoxColorSpans(t *testing.T) {
 	})
 }
 
+// TestTextView is the v0.22.0 golden: a read-only, word-wrapping TextView (the
+// copilot-transcript primitive) showing a sample model line that wraps across
+// rows, with a ColorSpan accenting a tool-call fragment — proving wrap + shared
+// colored-run drawing on the read-only widget.
+func TestTextView(t *testing.T) {
+	theme.SetActive(theme.Light())
+	defer theme.SetActive(nil)
+	th := theme.Active()
+
+	testFrame(t, "textview", 200, 80, func(r *glr.Renderer) {
+		f, err := text.Load(goregular.TTF)
+		if err != nil {
+			t.Fatal(err)
+		}
+		face := text.NewFace(f, th.Type.BodySize)
+
+		tv := controls.NewTextView(face)
+		tv.SetText("The model suggests calling add_node(Foo) to extend the graph.")
+		//          add_node(Foo) is [27,40)
+		tv.SetColorSpans([]controls.ColorSpan{{Start: 27, End: 40, Color: render.RGB(0, 0, 200)}})
+
+		frame := render.Rect{X: 0, Y: 0, W: 200, H: 80}
+		r.FillRect(frame, th.Color.ButtonFace)
+
+		core.MeasureWidget(tv, render.Size{W: frame.W, H: frame.H})
+		core.ArrangeWidget(tv, frame)
+		core.RenderWidget(tv, r)
+	})
+}
+
 // TestTextBoxPreedit is the Task 6 Phase B golden: a focused TextBox with
 // committed text "Hello " and an IME composition in progress — preedit
 // "world" spliced in at the caret, with the composition's own caret sitting
