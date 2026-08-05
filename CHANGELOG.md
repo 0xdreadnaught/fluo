@@ -8,7 +8,18 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
-## [0.23.0] - 2026-08-05
+## [0.23.1] - 2026-08-05
+
+### Fixed
+
+- **A focused `TextBox`/`TextView` no longer swallows `Ctrl+Shift+C` (and
+  `Ctrl+Shift+X/V/A`).** Their `Ctrl` shortcuts matched on the Ctrl modifier
+  alone, so `Ctrl+Shift+C` was consumed as a plain copy (`Handled=true`) and
+  never reached a host binding — a global `Ctrl+Shift+C` was dead whenever a text
+  field or transcript message was focused. The clipboard/select letters (C, X, V,
+  A) now bubble when Shift is held. Surgical, per-case: `Ctrl+Shift+Z` (redo) and
+  `Ctrl+Shift+`arrows (extend selection) are intentional and unchanged. No golden
+  change.
 
 ### Added
 

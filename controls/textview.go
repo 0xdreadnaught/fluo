@@ -379,7 +379,11 @@ func (v *TextView) OnPointer(e *input.PointerEvent) {
 // OnKey implements the read-only keyboard: Ctrl+C copies the selection, Ctrl+A
 // selects all. No other key does anything (never edits). Inert unless focused.
 func (v *TextView) OnKey(e *input.KeyEvent) {
-	if !v.focused || e.Action != input.Press || e.Mods&input.ModCtrl == 0 {
+	// Require Ctrl and NOT Shift: Ctrl+C / Ctrl+A are ours, but Ctrl+Shift+C
+	// (and any Ctrl+Shift combo) must bubble to a host binding rather than be
+	// swallowed as a copy while a transcript message is focused. TextView has
+	// no intentional Ctrl+Shift shortcut, so excluding Shift outright is safe.
+	if !v.focused || e.Action != input.Press || e.Mods&input.ModCtrl == 0 || e.Mods&input.ModShift != 0 {
 		return
 	}
 	switch e.Key {

@@ -3432,18 +3432,34 @@ func (t *TextBox) OnKey(e *input.KeyEvent) {
 	if e.Mods&input.ModCtrl != 0 {
 		switch e.Key {
 		case input.KeyA:
+			// Ctrl+Shift+A (and Ctrl+Shift+C/X/V below) is NOT this widget's
+			// shortcut — bubble it so a host binding (e.g. Ctrl+Shift+C) still
+			// fires while a text field is focused. Only Ctrl+Shift+Z (redo) and
+			// Ctrl+Shift+arrows (extend selection) deliberately use Shift.
+			if shift {
+				return
+			}
 			t.Select(0, len(t.runes))
 			e.Handled = true
 			return
 		case input.KeyC:
+			if shift {
+				return
+			}
 			t.copySelection(e.Router)
 			e.Handled = true
 			return
 		case input.KeyX:
+			if shift {
+				return
+			}
 			t.cutSelection(e.Router)
 			e.Handled = true
 			return
 		case input.KeyV:
+			if shift {
+				return
+			}
 			t.pasteClipboard(e.Router)
 			e.Handled = true
 			return
