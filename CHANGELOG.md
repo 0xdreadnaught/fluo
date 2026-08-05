@@ -8,7 +8,17 @@ once it reaches 1.0.
 
 ## [Unreleased]
 
-## [0.22.0] - 2026-08-05
+## [0.22.1] - 2026-08-05
+
+### Added
+
+- **`ScrollViewer.ScrollToBottom()`** — scrolls to the very bottom of the content
+  on the next arrange, resolved against the content height as of that pass, so it
+  lands at the true bottom even when the content just grew (a chat transcript
+  after appending a message, a log after a new line). Unlike `ScrollTo(bigY)`
+  there is no magic number and no dependence on the caller knowing the extent; it
+  sticks for exactly one arrange. (The vertical method is `ScrollTo(y)`, not
+  `ScrollToY`; `ScrollToX(x)` is horizontal.) No golden change.
 
 ### Added
 

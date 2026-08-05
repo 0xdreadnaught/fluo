@@ -68,6 +68,12 @@ type ScrollViewer struct {
 	rawOffset, offset   float32
 	rawOffsetX, offsetX float32
 
+	// scrollBottomPending, set by ScrollToBottom, makes the next ArrangeContent
+	// pin the vertical offset to the bottom of the CURRENT content (resolved
+	// against that pass's childH) and then clear itself — so a scroll-to-bottom
+	// issued right after the content grew lands at the true new bottom.
+	scrollBottomPending bool
+
 	// viewport is the viewport rect as of the last ArrangeContent call —
 	// bounds inset by the always-on vertical gutter (right) and the
 	// conditional horizontal gutter (bottom), covering both axes' thumb
@@ -143,6 +149,18 @@ func (s *ScrollViewer) OffsetX() float32 {
 // truth for clamping), so OffsetY may not reflect y until layout runs again.
 func (s *ScrollViewer) ScrollTo(y float32) *ScrollViewer {
 	s.rawOffset = y
+	s.InvalidateArrange()
+	return s
+}
+
+// ScrollToBottom requests scrolling to the very bottom of the content on the
+// next arrange, resolved against the content height AS OF THAT PASS — so it
+// lands at the true bottom even when the content just grew (a chat transcript
+// after appending a message, a log after a new line). Unlike ScrollTo(bigY),
+// there is no magic number and no dependence on the caller knowing the extent;
+// it sticks for exactly one arrange. Returns s for chaining.
+func (s *ScrollViewer) ScrollToBottom() *ScrollViewer {
+	s.scrollBottomPending = true
 	s.InvalidateArrange()
 	return s
 }
@@ -275,6 +293,14 @@ func (s *ScrollViewer) ArrangeContent(bounds render.Rect) {
 		viewport.H = 0
 	}
 
+	if s.scrollBottomPending {
+		// Pin to the bottom of the CURRENT content: childH is >= the max offset
+		// (childH - viewport.H), so the clamp below lands exactly at the max.
+		// Consumed here so a ScrollToBottom applies for one pass, resolved
+		// against this pass's freshly-measured childH.
+		s.rawOffset = childH
+		s.scrollBottomPending = false
+	}
 	offset := clampScrollOffset(s.rawOffset, childH, viewport.H)
 	offsetX := clampScrollOffset(s.rawOffsetX, childW, viewport.W)
 

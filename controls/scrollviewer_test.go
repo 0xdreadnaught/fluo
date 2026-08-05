@@ -539,3 +539,31 @@ func TestScrollViewerSetChildNilClears(t *testing.T) {
 		t.Fatalf("re-attached Children = %d, want 1 (old child was not detached)", got)
 	}
 }
+
+// TestScrollViewerScrollToBottom: ScrollToBottom pins to the content bottom on
+// the next arrange -- the same offset an over-large ScrollTo clamps to -- and
+// then clears itself (a following arrange stays put, doesn't re-pin).
+func TestScrollViewerScrollToBottom(t *testing.T) {
+	s := NewScrollViewer().SetChild(NewFixed(80, 200, render.RGB(1, 2, 3)))
+	s.ScrollToBottom()
+	layoutScrollViewer(s, 10, 20, 100, 50)
+
+	ref := NewScrollViewer().SetChild(NewFixed(80, 200, render.RGB(1, 2, 3)))
+	ref.ScrollTo(1e9)
+	layoutScrollViewer(ref, 10, 20, 100, 50)
+
+	if s.OffsetY() != ref.OffsetY() {
+		t.Fatalf("ScrollToBottom OffsetY = %v, want the same bottom as ScrollTo(1e9) = %v", s.OffsetY(), ref.OffsetY())
+	}
+	if s.OffsetY() <= 0 {
+		t.Fatalf("ScrollToBottom OffsetY = %v, want > 0 (content taller than viewport scrolls to a real bottom)", s.OffsetY())
+	}
+
+	// The pending flag is one-shot: a re-arrange with no new request stays at
+	// the bottom rather than snapping anywhere else.
+	at := s.OffsetY()
+	layoutScrollViewer(s, 10, 20, 100, 50)
+	if s.OffsetY() != at {
+		t.Fatalf("OffsetY after a second arrange = %v, want stable at %v (ScrollToBottom must be one-shot)", s.OffsetY(), at)
+	}
+}
