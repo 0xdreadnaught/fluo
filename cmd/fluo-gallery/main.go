@@ -35,11 +35,10 @@
 // alongside the OverlayHost root so main's build() can keep a live
 // reference for that per-frame check. The content pane is a plain classic
 // Border filled with th.Color.ButtonFace behind the page content. The
-// Controls page's four Button-family widgets (Click me,
-// Accent, Toggle, Add) opt into SetAnimated(true) + SetTimers(tq) so their
-// fill cross-fades instead of snapping between rest/hover/pressed — the
-// other Controls-page widgets (CheckBox/RadioButton/ToggleSwitch) have no
-// SetAnimated of their own to opt into (see anim/controls.animation.go).
+// Controls page's interactive widgets — Button, ToggleButton, CheckBox,
+// RadioButton, ToggleSwitch, Slider — all opt into SetAnimated(true) +
+// SetTimers(tq) so their fill cross-fades instead of snapping between
+// rest/hover/pressed states.
 //
 // Phase 7 turns the nav sidebar into a real page switcher: the three static
 // "Layout"/"Panels"/"Text" TextBlocks are replaced by a ListView of page
@@ -282,12 +281,16 @@ func buildControlsSection(th *theme.Theme, body *text.Face, host *controls.Overl
 
 	// Row 2: CheckBox, RadioButton "A"+"B" in a RadioGroup, ToggleSwitch.
 	checkBox := controls.NewCheckBox(body, "Enable")
+	checkBox.SetAnimated(true).SetTimers(tq)
 
 	radioA := controls.NewRadioButton(body, "A")
+	radioA.SetAnimated(true).SetTimers(tq)
 	radioB := controls.NewRadioButton(body, "B")
+	radioB.SetAnimated(true).SetTimers(tq)
 	controls.NewRadioGroup().Add(radioA).Add(radioB)
 
 	toggleSwitch := controls.NewToggleSwitch()
+	toggleSwitch.SetAnimated(true).SetTimers(tq)
 
 	row2 := controls.NewStackPanel(controls.Horizontal).SetGap(th.Metric.PaddingM).
 		Add(checkBox, radioA, radioB, toggleSwitch)
@@ -317,6 +320,7 @@ func buildControlsSection(th *theme.Theme, body *text.Face, host *controls.Overl
 	// SetValue seeding needed here.
 	progressBar := controls.NewProgressBar()
 	slider := controls.NewSlider()
+	slider.SetAnimated(true).SetTimers(tq)
 
 	*cancels = append(*cancels,
 		bind.Value(sliderProp, slider),
@@ -360,8 +364,11 @@ func buildControlsSection(th *theme.Theme, body *text.Face, host *controls.Overl
 	// pill and circular buttons, a vertical slider, vertical and solid
 	// progress bars, and a horizontally scrollable strip.
 	pillButton := controls.NewButton(body, "Pill").SetShape(controls.ShapePill)
+	pillButton.SetAnimated(true).SetTimers(tq)
 	circleButton := controls.NewButton(body, "+").SetShape(controls.ShapeCircle)
+	circleButton.SetAnimated(true).SetTimers(tq)
 	vSlider := controls.NewSlider().SetOrientation(controls.Vertical).SetValue(0.4)
+	vSlider.SetAnimated(true).SetTimers(tq)
 	vProgress := controls.NewProgressBar().SetOrientation(controls.Vertical).SetValue(0.6)
 	solidProgress := controls.NewProgressBar().SetSolid(true).SetValue(0.45)
 
@@ -708,8 +715,11 @@ func main() {
 	// (e.g. `FLUO_THEME=light go run ./cmd/fluo-gallery`), not a supported
 	// runtime API — the real toggle is the T key.
 	initial := theme.Dark()
-	if os.Getenv("FLUO_THEME") == "light" {
+	switch os.Getenv("FLUO_THEME") {
+	case "light":
 		initial = theme.Light()
+	case "modern-dark":
+		initial = theme.ModernDark()
 	}
 	theme.SetActive(initial)
 
@@ -795,8 +805,13 @@ func main() {
 		}
 		if togglePending {
 			togglePending = false
-			next := theme.Light()
-			if theme.Active().Name == "classic-light" {
+			var next *theme.Theme
+			switch theme.Active().Name {
+			case "classic-dark":
+				next = theme.ModernDark()
+			case "modern-dark":
+				next = theme.Light()
+			default:
 				next = theme.Dark()
 			}
 			theme.SetActive(next)

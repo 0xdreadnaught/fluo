@@ -5,6 +5,7 @@ import (
 	"github.com/0xdreadnaught/fluo/input"
 	"github.com/0xdreadnaught/fluo/render"
 	"github.com/0xdreadnaught/fluo/theme"
+	"github.com/0xdreadnaught/fluo/timers"
 )
 
 // Fixed geometry for Slider, per the Phase 5 Task 7 visuals spec (superseded
@@ -75,6 +76,10 @@ type Slider struct {
 
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
+
+	animated   bool
+	timerQueue *timers.Queue
+	thumbAnim  *colorAnim
 }
 
 // NewSlider returns an enabled, Horizontal Slider ranging over [0, 1] with
@@ -169,6 +174,28 @@ func (s *Slider) OnChanged(fn func(float32)) *Slider {
 func (s *Slider) SetEnabled(v bool) *Slider {
 	s.enabled = v
 	return s
+}
+
+func (s *Slider) SetAnimated(v bool) *Slider {
+	s.animated = v
+	return s
+}
+
+func (s *Slider) SetTimers(q *timers.Queue) *Slider {
+	s.timerQueue = q
+	return s
+}
+
+func (s *Slider) animatedThumb(fill render.Color) render.Color {
+	if !s.animated || s.timerQueue == nil {
+		return fill
+	}
+	if s.thumbAnim == nil {
+		s.thumbAnim = newColorAnim(fill)
+	} else {
+		s.thumbAnim.SetTarget(s.timerQueue, fill)
+	}
+	return s.thumbAnim.Current()
 }
 
 // proportion reports how far Value sits between Min and Max, as a value in
@@ -290,7 +317,15 @@ func (s *Slider) Render(r render.Renderer) {
 		trackY := bounds.Y + (bounds.H-sliderTrackHeight)/2
 		track = render.Rect{X: bounds.X, Y: trackY, W: bounds.W, H: sliderTrackHeight}
 	}
-	drawSunken(r, track, c.ButtonFace, c)
+
+	flat := s.metrics.BevelWidth == 0
+	trackRadius := sliderTrackHeight / 2
+
+	if flat {
+		r.FillRoundedRect(track, trackRadius, c.ButtonShadow)
+	} else {
+		drawSunken(r, track, c.ButtonFace, c)
+	}
 
 	thumbPos := s.thumbCenter()
 
@@ -300,12 +335,18 @@ func (s *Slider) Render(r render.Renderer) {
 	} else {
 		filled = render.Rect{X: bounds.X, Y: track.Y, W: thumbPos - bounds.X, H: sliderTrackHeight}
 	}
-	r.FillRect(filled, c.Highlight)
+	if flat {
+		r.FillRoundedRect(filled, trackRadius, c.Highlight)
+	} else {
+		r.FillRect(filled, c.Highlight)
+	}
 
 	thumbFace := c.ButtonFace
 	if s.hover {
 		thumbFace = c.ButtonLight
 	}
+	thumbFace = s.animatedThumb(thumbFace)
+
 	var thumb render.Rect
 	if s.orientation == Vertical {
 		thumb = render.Rect{
@@ -318,13 +359,21 @@ func (s *Slider) Render(r render.Renderer) {
 			W: sliderThumbSize, H: sliderThumbSize,
 		}
 	}
-	drawRaised(r, thumb, thumbFace, c)
+	if flat {
+		r.FillRoundedRect(thumb, sliderThumbRadius, thumbFace)
+	} else {
+		drawRaised(r, thumb, thumbFace, c)
+	}
 }
 
-// RenderOverlay draws the focus ring while focused, per the global focus
-// constraint shared by every focusable control in this package.
 func (s *Slider) RenderOverlay(r render.Renderer) {
 	if !s.focused {
+		return
+	}
+	if s.metrics.BevelWidth == 0 {
+		bounds := s.Bounds()
+		r.StrokeRoundedRect(bounds.Inset(render.Uniform(-s.metrics.FocusStrokeWidth)),
+			s.metrics.ControlCornerRadius, s.metrics.FocusStrokeWidth, s.colors.Highlight)
 		return
 	}
 	drawFocusRing(r, s.Bounds(), s.colors)

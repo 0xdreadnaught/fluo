@@ -306,64 +306,63 @@ func drawOuterBorder(r render.Renderer, rect render.Rect, c render.Color) {
 	r.FillRect(render.Rect{X: rect.Right() - 1, Y: rect.Y, W: 1, H: rect.H}, c)
 }
 
-// Render paints the button's classic chiseled chrome (raised at rest/hover,
-// sunken while pressed or — for a checked ToggleButton — while toggled on)
-// via the shared bevel helpers, plus the label's color/position for the
+// Render paints the button chrome plus the label color/position for the
 // current state; children (the label) render separately via
 // core.RenderWidget, immediately after this method returns (see
 // core.RenderWidget's documented parent-then-children order), so any extra
 // glyphs painted here (the disabled engrave highlight) land BENEATH the
 // label's own subsequent draw.
 //
-// Chrome: normal = drawRaised(ButtonFace); hover (not pressed/sunken) =
-// drawRaised(ButtonLight); pressed, or a checked ToggleButton (see isToggle),
-// = drawSunken(ButtonFace) plus a +1,+1 label nudge (the classic press
-// squish). A plain Button with SetAccent(true) ("default button", never true
-// for a ToggleButton's isToggle chrome) additionally gets a 1px
-// ButtonDarkShadow border just outside its raised bevel.
+// Two rendering paths are selected by BevelWidth:
 //
-// Label: WindowText normally; disabled draws a classic engrave — the same
-// glyphs once in ButtonHighlight offset +1,+1 (painted here, first) then
-// again in GrayText at the nominal (possibly press-nudged) position (painted
-// by the label's own Render, which runs next).
+// Classic (BevelWidth > 0): the four-tone raised/sunken bevel. Normal =
+// drawRaised(ButtonFace); hover = drawRaised(ButtonLight); pressed or
+// checked ToggleButton = drawSunken(ButtonFace) + 1px label nudge. Accent
+// ("default button") adds a 1px ButtonDarkShadow outer border.
+//
+// Flat (BevelWidth == 0): rounded rect fill at ControlCornerRadius with a
+// 1px ButtonShadow border. Normal = ButtonFace; hover = ButtonLight;
+// pressed = ButtonShadow. Accent fills with Highlight and labels in
+// HighlightText. No press nudge, no engrave on disabled.
+//
+// Both paths feed their target fill through animatedFill for cross-fade
+// when SetAnimated(true) + SetTimers are wired.
 func (b *Button) Render(r render.Renderer) {
 	c := b.colors
 	bounds := b.Bounds()
 
 	sunken := b.click.Pressed() || (b.isToggle && b.accent)
 
+	if b.metrics.BevelWidth == 0 {
+		b.renderFlat(r, c, bounds, sunken)
+		return
+	}
+
 	if b.shape == ShapeRect {
 		switch {
 		case sunken:
 			drawSunken(r, bounds, c.ButtonFace, c)
 		case b.click.Hover():
-			drawRaised(r, bounds, c.ButtonLight, c)
+			drawRaised(r, bounds, b.animatedFill(c.ButtonLight), c)
 		default:
-			drawRaised(r, bounds, c.ButtonFace, c)
+			drawRaised(r, bounds, b.animatedFill(c.ButtonFace), c)
 		}
 
 		if b.accent && !b.isToggle {
 			drawOuterBorder(r, bounds.Inflate(1), c.ButtonDarkShadow)
 		}
 	} else {
-		// Pill/circle: the same rest/hover/pressed states as the rect path,
-		// but painted via the rounded bevel helpers (see bevel.go) at the
-		// shape's radius instead of drawRaised/drawSunken's square edges.
 		radius := b.shapeRadius(bounds)
 		switch {
 		case sunken:
 			drawSunkenRounded(r, bounds, radius, c.ButtonFace, c)
 		case b.click.Hover():
-			drawRaisedRounded(r, bounds, radius, c.ButtonLight, c)
+			drawRaisedRounded(r, bounds, radius, b.animatedFill(c.ButtonLight), c)
 		default:
-			drawRaisedRounded(r, bounds, radius, c.ButtonFace, c)
+			drawRaisedRounded(r, bounds, radius, b.animatedFill(c.ButtonFace), c)
 		}
 
 		if b.accent && !b.isToggle {
-			// bounds.Inflate(1) grows W/H by 2 (1px each side), so the
-			// matching concentric radius for the same shape formula is
-			// radius+1 (e.g. a pill's (H+2)/2 == H/2+1) — no separate
-			// recomputation needed.
 			r.StrokeRoundedRect(bounds.Inflate(1), radius+1, 1, c.ButtonDarkShadow)
 		}
 	}
@@ -388,23 +387,78 @@ func (b *Button) Render(r render.Renderer) {
 	}
 }
 
-// RenderOverlay draws the focus ring while focused, inset a few px from the
-// button's bounds so it sits within the raised/sunken bevel rather than
-// overlapping it. ShapeRect draws the classic square drawFocusRect; pill/
-// circle instead draw a rounded ring — StrokeRoundedRect on bounds inset 1px
-// at radius-1 (floored at 0), matching how the rounded chrome itself insets
-// (see Render) — so the ring's corners follow the button's own curve
-// instead of cutting across it.
+// renderFlat paints the modern flat button chrome: a rounded-rect fill at
+// ControlCornerRadius (or the shape's own radius for pill/circle) with a
+// subtle 1px border, no bevel, no press nudge.
+func (b *Button) renderFlat(r render.Renderer, c theme.ColorTokens, bounds render.Rect, sunken bool) {
+	radius := b.metrics.ControlCornerRadius
+	if b.shape != ShapeRect {
+		radius = b.shapeRadius(bounds)
+	}
+
+	accentFill := b.accent && !b.isToggle
+
+	var fill render.Color
+	switch {
+	case sunken:
+		if accentFill {
+			fill = c.ButtonShadow
+		} else {
+			fill = c.ButtonShadow
+		}
+	case b.click.Hover():
+		if accentFill {
+			fill = c.Highlight
+		} else {
+			fill = c.ButtonLight
+		}
+	default:
+		if accentFill {
+			fill = c.Highlight
+		} else {
+			fill = c.ButtonFace
+		}
+	}
+
+	fill = b.animatedFill(fill)
+	r.FillRoundedRect(bounds, radius, fill)
+
+	if !accentFill {
+		r.StrokeRoundedRect(bounds, radius, b.metrics.StrokeWidth, c.ButtonShadow)
+	}
+
+	core.ArrangeWidget(b.label, b.labelRect)
+
+	if !b.enabled {
+		b.label.SetColor(c.GrayText)
+	} else if accentFill {
+		b.label.SetColor(c.HighlightText)
+	} else {
+		b.label.SetColor(c.WindowText)
+	}
+}
+
+// RenderOverlay draws the focus ring while focused. Classic mode insets
+// the ring a few px inside the bevel; flat mode draws a rounded
+// StrokeRoundedRect at ControlCornerRadius. Pill/circle always use a
+// rounded ring at the shape's own radius.
 func (b *Button) RenderOverlay(r render.Renderer) {
 	if !b.focused {
 		return
 	}
+
+	bounds := b.Bounds()
+
 	if b.shape == ShapeRect {
-		drawFocusRing(r, b.Bounds().Inset(render.Uniform(3)), b.colors)
+		if b.metrics.BevelWidth == 0 {
+			radius := b.metrics.ControlCornerRadius
+			r.StrokeRoundedRect(bounds.Inset(render.Uniform(1)), radius, b.metrics.FocusStrokeWidth, b.colors.Highlight)
+		} else {
+			drawFocusRing(r, bounds.Inset(render.Uniform(3)), b.colors)
+		}
 		return
 	}
 
-	bounds := b.Bounds()
 	radius := b.shapeRadius(bounds) - 1
 	if radius < 0 {
 		radius = 0

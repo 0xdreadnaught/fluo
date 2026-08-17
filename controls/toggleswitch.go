@@ -5,6 +5,7 @@ import (
 	"github.com/0xdreadnaught/fluo/input"
 	"github.com/0xdreadnaught/fluo/render"
 	"github.com/0xdreadnaught/fluo/theme"
+	"github.com/0xdreadnaught/fluo/timers"
 )
 
 // Fixed track/knob metrics for ToggleSwitch, per the Phase 5 Task 4 visuals
@@ -41,6 +42,10 @@ type ToggleSwitch struct {
 
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
+
+	animated   bool
+	timerQueue *timers.Queue
+	fillAnim   *colorAnim
 }
 
 // NewToggleSwitch returns an off (unchecked), enabled ToggleSwitch.
@@ -93,6 +98,28 @@ func (s *ToggleSwitch) SetEnabled(v bool) *ToggleSwitch {
 	return s
 }
 
+func (s *ToggleSwitch) SetAnimated(v bool) *ToggleSwitch {
+	s.animated = v
+	return s
+}
+
+func (s *ToggleSwitch) SetTimers(q *timers.Queue) *ToggleSwitch {
+	s.timerQueue = q
+	return s
+}
+
+func (s *ToggleSwitch) animatedFill(fill render.Color) render.Color {
+	if !s.animated || s.timerQueue == nil {
+		return fill
+	}
+	if s.fillAnim == nil {
+		s.fillAnim = newColorAnim(fill)
+	} else {
+		s.fillAnim.SetTarget(s.timerQueue, fill)
+	}
+	return s.fillAnim.Current()
+}
+
 // MeasureContent always returns the fixed 40x20 pill size: ToggleSwitch has
 // no label and no other content to size around.
 func (s *ToggleSwitch) MeasureContent(available render.Size) render.Size {
@@ -105,13 +132,14 @@ func (s *ToggleSwitch) ArrangeContent(bounds render.Rect) {}
 // Children returns nil: ToggleSwitch is a leaf widget.
 func (s *ToggleSwitch) Children() []core.Widget { return nil }
 
-// Render paints the 40x20 track as a classic sunken well (ButtonFace fill,
-// or Highlight when on) and the knob as a small raised square sliding to the
-// left (off) or right (on) inset position — reusing the existing knob-
-// position math, only the draw calls changed.
 func (s *ToggleSwitch) Render(r render.Renderer) {
 	bounds := s.Bounds()
 	c := s.colors
+
+	if s.metrics.BevelWidth == 0 {
+		s.renderFlat(r, bounds)
+		return
+	}
 
 	trackFill := c.ButtonFace
 	if s.checked {
@@ -127,10 +155,44 @@ func (s *ToggleSwitch) Render(r render.Renderer) {
 	drawRaised(r, render.Rect{X: thumbX, Y: thumbY, W: thumbSize, H: thumbSize}, c.ButtonFace, c)
 }
 
-// RenderOverlay draws the classic focus rectangle around the track while
-// focused.
+func (s *ToggleSwitch) renderFlat(r render.Renderer, bounds render.Rect) {
+	c := s.colors
+	trackRadius := bounds.H / 2
+
+	trackFill := c.ButtonShadow
+	if s.checked {
+		trackFill = c.Highlight
+	}
+	r.FillRoundedRect(bounds, trackRadius, trackFill)
+
+	var knobFill render.Color
+	if s.checked {
+		knobFill = c.HighlightText
+	} else if s.click.Hover() {
+		knobFill = c.WindowText
+	} else {
+		knobFill = c.GrayText
+	}
+	knobFill = s.animatedFill(knobFill)
+
+	thumbX := bounds.X + thumbInset
+	if s.checked {
+		thumbX = bounds.Right() - thumbInset - thumbSize
+	}
+	thumbY := bounds.Y + (bounds.H-thumbSize)/2
+	thumbRadius := thumbSize / 2
+	r.FillRoundedRect(render.Rect{X: thumbX, Y: thumbY, W: thumbSize, H: thumbSize}, thumbRadius, knobFill)
+}
+
 func (s *ToggleSwitch) RenderOverlay(r render.Renderer) {
 	if !s.focused {
+		return
+	}
+	if s.metrics.BevelWidth == 0 {
+		bounds := s.Bounds()
+		radius := bounds.H / 2
+		r.StrokeRoundedRect(bounds.Inset(render.Uniform(-s.metrics.FocusStrokeWidth)),
+			radius, s.metrics.FocusStrokeWidth, s.colors.Highlight)
 		return
 	}
 	drawFocusRing(r, s.Bounds(), s.colors)

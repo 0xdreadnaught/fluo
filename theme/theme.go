@@ -81,7 +81,7 @@ type TypeTokens struct {
 
 // Theme represents a complete color, metric, and typography design system.
 type Theme struct {
-	Name   string // "classic-light" | "classic-dark"
+	Name   string // "classic-light" | "classic-dark" | "modern-dark"
 	Color  ColorTokens
 	Metric MetricTokens
 	Type   TypeTokens

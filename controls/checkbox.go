@@ -6,6 +6,7 @@ import (
 	"github.com/0xdreadnaught/fluo/render"
 	"github.com/0xdreadnaught/fluo/text"
 	"github.com/0xdreadnaught/fluo/theme"
+	"github.com/0xdreadnaught/fluo/timers"
 )
 
 // glyphBoxSize is the fixed edge length of the CheckBox/RadioButton glyph
@@ -119,6 +120,10 @@ type CheckBox struct {
 
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
+
+	animated   bool
+	timerQueue *timers.Queue
+	fillAnim   *colorAnim
 }
 
 // NewCheckBox returns an unchecked, enabled CheckBox showing label (may be
@@ -184,6 +189,28 @@ func (c *CheckBox) Label() *TextBlock {
 	return c.label
 }
 
+func (c *CheckBox) SetAnimated(v bool) *CheckBox {
+	c.animated = v
+	return c
+}
+
+func (c *CheckBox) SetTimers(q *timers.Queue) *CheckBox {
+	c.timerQueue = q
+	return c
+}
+
+func (c *CheckBox) animatedFill(fill render.Color) render.Color {
+	if !c.animated || c.timerQueue == nil {
+		return fill
+	}
+	if c.fillAnim == nil {
+		c.fillAnim = newColorAnim(fill)
+	} else {
+		c.fillAnim.SetTarget(c.timerQueue, fill)
+	}
+	return c.fillAnim.Current()
+}
+
 // MeasureContent measures the glyph box plus optional label.
 func (c *CheckBox) MeasureContent(available render.Size) render.Size {
 	return glyphMeasure(c.label, available, c.metrics.PaddingM)
@@ -200,11 +227,12 @@ func (c *CheckBox) Children() []core.Widget {
 	return []core.Widget{c.label}
 }
 
-// Render paints the 18x18 box as a classic sunken well (WindowWell fill —
-// unaffected by hover/pressed, per the classic-checkbox spec) and, when
-// checked, the checkmark (glyph or fallback square, per c.checkGlyph).
 func (c *CheckBox) Render(r render.Renderer) {
-	drawSunken(r, c.box, c.colors.WindowWell, c.colors)
+	if c.metrics.BevelWidth == 0 {
+		c.renderFlat(r)
+	} else {
+		drawSunken(r, c.box, c.colors.WindowWell, c.colors)
+	}
 	if c.checked {
 		c.drawCheckmark(r)
 	}
@@ -214,6 +242,20 @@ func (c *CheckBox) Render(r render.Renderer) {
 	} else {
 		c.label.SetColor(c.colors.GrayText)
 	}
+}
+
+func (c *CheckBox) renderFlat(r render.Renderer) {
+	radius := c.metrics.ControlCornerRadius
+	col := c.colors
+
+	fill := col.WindowWell
+	if c.click.Hover() {
+		fill = col.ButtonShadow
+	}
+	fill = c.animatedFill(fill)
+
+	r.FillRoundedRect(c.box, radius, fill)
+	r.StrokeRoundedRect(c.box, radius, c.metrics.StrokeWidth, col.ButtonShadow)
 }
 
 // drawCheckmark draws the U+2713 glyph centered in the box (if c.checkGlyph)
@@ -236,10 +278,14 @@ func (c *CheckBox) drawCheckmark(r render.Renderer) {
 	r.FillRect(inner, glyphColor)
 }
 
-// RenderOverlay draws the classic focus rectangle around the glyph box
-// while focused.
 func (c *CheckBox) RenderOverlay(r render.Renderer) {
 	if !c.focused {
+		return
+	}
+	if c.metrics.BevelWidth == 0 {
+		radius := c.metrics.ControlCornerRadius
+		r.StrokeRoundedRect(c.box.Inset(render.Uniform(-c.metrics.FocusStrokeWidth)),
+			radius, c.metrics.FocusStrokeWidth, c.colors.Highlight)
 		return
 	}
 	drawFocusRing(r, c.box, c.colors)
@@ -311,6 +357,10 @@ type RadioButton struct {
 
 	colors  theme.ColorTokens
 	metrics theme.MetricTokens
+
+	animated   bool
+	timerQueue *timers.Queue
+	fillAnim   *colorAnim
 }
 
 // NewRadioButton returns an unchecked, enabled, ungrouped RadioButton
@@ -402,6 +452,28 @@ func (rb *RadioButton) Label() *TextBlock {
 	return rb.label
 }
 
+func (rb *RadioButton) SetAnimated(v bool) *RadioButton {
+	rb.animated = v
+	return rb
+}
+
+func (rb *RadioButton) SetTimers(q *timers.Queue) *RadioButton {
+	rb.timerQueue = q
+	return rb
+}
+
+func (rb *RadioButton) animatedFill(fill render.Color) render.Color {
+	if !rb.animated || rb.timerQueue == nil {
+		return fill
+	}
+	if rb.fillAnim == nil {
+		rb.fillAnim = newColorAnim(fill)
+	} else {
+		rb.fillAnim.SetTarget(rb.timerQueue, fill)
+	}
+	return rb.fillAnim.Current()
+}
+
 // MeasureContent measures the glyph circle plus optional label.
 func (rb *RadioButton) MeasureContent(available render.Size) render.Size {
 	return glyphMeasure(rb.label, available, rb.metrics.PaddingM)
@@ -418,16 +490,17 @@ func (rb *RadioButton) Children() []core.Widget {
 	return []core.Widget{rb.label}
 }
 
-// Render paints the 18x18 circle as a classic sunken-looking well — fill
-// WindowWell, a 1px ButtonShadow ring — the spec's approved approximation of
-// a full bevel on a round glyph (RadioButton is the one exception to the
-// family's square corners). When checked, an inner WindowText dot (9x9,
-// centered) marks the selection.
 func (rb *RadioButton) Render(r render.Renderer) {
 	c := rb.colors
 	radius := rb.box.W / 2
 
-	r.FillRoundedRect(rb.box, radius, c.WindowWell)
+	fill := c.WindowWell
+	if rb.metrics.BevelWidth == 0 && rb.click.Hover() {
+		fill = c.ButtonShadow
+	}
+	fill = rb.animatedFill(fill)
+
+	r.FillRoundedRect(rb.box, radius, fill)
 	r.StrokeRoundedRect(rb.box, radius, rb.metrics.StrokeWidth, c.ButtonShadow)
 
 	if rb.checked {
@@ -437,10 +510,14 @@ func (rb *RadioButton) Render(r render.Renderer) {
 	}
 }
 
-// RenderOverlay draws the classic focus rectangle around the glyph circle
-// while focused.
 func (rb *RadioButton) RenderOverlay(r render.Renderer) {
 	if !rb.focused {
+		return
+	}
+	if rb.metrics.BevelWidth == 0 {
+		radius := rb.box.W / 2
+		r.StrokeRoundedRect(rb.box.Inset(render.Uniform(-rb.metrics.FocusStrokeWidth)),
+			radius, rb.metrics.FocusStrokeWidth, rb.colors.Highlight)
 		return
 	}
 	drawFocusRing(r, rb.box, rb.colors)
