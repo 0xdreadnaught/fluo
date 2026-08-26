@@ -2,8 +2,9 @@
 
 fluo is a retained-mode GUI library for Go. It renders through its own OpenGL
 backend behind a small `Renderer` interface, lays out with a WPF-style two-pass
-Measure/Arrange model, and ships a classic Windows-2000 four-tone bevel look
-driven entirely by theme tokens.
+Measure/Arrange model, and ships three theme presets — a contemporary ModernDark
+palette (flat, rounded, animated), plus classic Light and Dark — all driven
+entirely by design tokens.
 
 **Module:** `github.com/0xdreadnaught/fluo`
 **Requires:** Go 1.23, a working cgo toolchain, and OpenGL 3.3 (via go-gl/glfw).

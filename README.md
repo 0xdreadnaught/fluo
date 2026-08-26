@@ -1,15 +1,16 @@
 # fluo
 
-A retained-mode GUI toolkit for Go with its own OpenGL renderer and a classic
-Windows-2000 look. fluo gives a Go program a themed widget tree — layout, input
-routing, and data binding — over a thin OpenGL 3.3 backend. No browser engine,
-no native OS toolkit underneath.
+A retained-mode GUI toolkit for Go with its own OpenGL renderer. fluo gives a
+Go program a themed widget tree — layout, input routing, and data binding — over
+a thin OpenGL 3.3 backend. No browser engine, no native OS toolkit underneath.
 
 Controls draw themselves from swappable design tokens, so restyling an app is a
-data change. Each package stands on its own, so you can pull in just the
-renderer or the whole stack.
+data change — switch from the contemporary **ModernDark** palette (flat surfaces,
+rounded corners, hover cross-fade animations) to the classic Windows-2000 bevel
+look by changing one line. Each package stands on its own, so you can pull in
+just the renderer or the whole stack.
 
-![The fluo gallery — menus, tabs, a list view, and the classic four-tone chrome](docs/gallery.png)
+![The fluo gallery — menus, tabs, a list view, and the modern dark theme](docs/gallery.png)
 
 ## Features
 
@@ -22,12 +23,16 @@ renderer or the whole stack.
   wrap, a line-number gutter, Tab-to-indent with block indent/outdent,
   word-wise motion, double-click-word and triple-click-line selection, and
   IME input.
-- Classic Windows-2000 chrome: four-tone raised and sunken bevels, square
-  corners, gradient title bars. The classic themes don't reach for soft
-  effects, but the primitives are there — `DrawShadow`, `DrawBackdropBlur`,
-  and an `AcrylicSurface` control built on them.
-- Light and dark themes, both driven entirely by design tokens. Roll your own
-  by copying one and changing a few colors.
+- Three built-in themes — **ModernDark** (flat surfaces, rounded corners,
+  GitHub-Dark-inspired palette), **Dark**, and **Light** — all driven entirely
+  by design tokens. The gallery cycles through them with the **T** key.
+  Roll your own by copying one and changing a few colors.
+- Modern controls support animated hover/press cross-fades via
+  `SetAnimated(true)` for smooth visual feedback.
+- Classic Windows-2000 chrome is still available: four-tone raised and sunken
+  bevels, square corners, gradient title bars. The rendering primitives
+  (`DrawShadow`, `DrawBackdropBlur`, `AcrylicSurface`) are there for either
+  style.
 - One- and two-way data binding between typed properties and controls, plus
   observable-list collection binding.
 - Virtualized list and data-grid views for large data sets.
@@ -87,7 +92,7 @@ fluo is layered bottom to top; each layer depends only on the ones below it.
 | `text`             | Font loading and glyph rasterization                                |
 | `core`             | Widget/Element layout engine (Measure/Arrange/Render) and `Property[T]` |
 | `input`            | Hit-testing, event bubbling, capture, focus                         |
-| `theme`            | Color, metric, and typography tokens (`Light()`, `Dark()`)          |
+| `theme`            | Color, metric, and typography tokens (`ModernDark()`, `Light()`, `Dark()`) |
 | `controls`         | The built-in widget set                                             |
 | `bind`             | One- and two-way binding                                            |
 | `anim`, `timers`   | Tween animation and the frame-tick timer service                    |
@@ -110,7 +115,7 @@ binding, theming, and the renderer — live in [`docs/wiki`](docs/wiki.md).
 
 ## Status
 
-v0.15.1. Every layer is implemented, tested (headless layout and binding tests
+v0.23.1. Every layer is implemented, tested (headless layout and binding tests
 plus GL golden images that auto-skip without a GPU), and exercised together by
 the gallery. Known gaps:
 
